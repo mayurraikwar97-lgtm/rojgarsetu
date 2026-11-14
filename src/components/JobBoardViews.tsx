@@ -1,0 +1,889 @@
+import React, { useMemo, useState } from 'react';
+import { Briefcase, CheckCircle2, MapPin, PlusCircle, Search, Users } from 'lucide-react';
+import { EMPLOYMENT_CATEGORIES } from '../data/categories';
+import { getDistrictCoordinates, INDIA_STATES_DISTRICTS } from '../data/indiaLocations';
+import { useAuth } from '../contexts/AuthContext';
+import { useLanguage } from '../i18n/LanguageContext';
+import { applyToJob, createJobPosting } from '../lib/firestoreService';
+import type {
+  JobPosting,
+  JobWorkType,
+  PageRoute,
+  PublicWorkerProfile,
+  WageUnit,
+} from '../types/domain';
+
+interface FindWorkViewProps {
+  jobs: JobPosting[];
+  initialCategory?: string;
+  onNavigate: (route: PageRoute) => void;
+}
+
+export const FindWorkView: React.FC<FindWorkViewProps> = ({
+  jobs,
+  initialCategory = '',
+  onNavigate,
+}) => {
+  const { lang, t } = useLanguage();
+  const { user, workerProfile, signInWithGoogle } = useAuth();
+
+  const [search, setSearch] = useState(initialCategory);
+  const [stateFilter, setStateFilter] = useState('');
+  const [workTypeFilter, setWorkTypeFilter] = useState('');
+  const [womenOnly, setWomenOnly] = useState(false);
+  const [pwdOnly, setPwdOnly] = useState(false);
+
+  const [applyingJob, setApplyingJob] = useState<JobPosting | null>(null);
+  const [proposedWage, setProposedWage] = useState<number>(0);
+  const [applyNote, setApplyNote] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [appliedJobIds, setAppliedJobIds] = useState<string[]>([]);
+  const [errorMsg, setErrorMsg] = useState('');
+
+  const filteredJobs = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return jobs
+      .filter((j) => j.status === 'open')
+      .filter((j) => !stateFilter || j.state === stateFilter)
+      .filter((j) => !workTypeFilter || j.workType === workTypeFilter)
+      .filter((j) => !womenOnly || j.isWomenFriendly)
+      .filter((j) => !pwdOnly || j.isAccessible)
+      .filter(
+        (j) =>
+          !q ||
+          j.title.toLowerCase().includes(q) ||
+          j.category.toLowerCase().includes(q) ||
+          j.district.toLowerCase().includes(q) ||
+          j.employerName.toLowerCase().includes(q) ||
+          j.requiredSkills.some((s) => s.toLowerCase().includes(q))
+      );
+  }, [jobs, search, stateFilter, workTypeFilter, womenOnly, pwdOnly]);
+
+  const handleOpenApply = (job: JobPosting) => {
+    setErrorMsg('');
+    setApplyingJob(job);
+    setProposedWage(job.offeredWage);
+    setApplyNote('');
+  };
+
+  const handleSubmitApplication = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!applyingJob || !user || !workerProfile) return;
+    setSubmitting(true);
+    setErrorMsg('');
+    try {
+      await applyToJob({
+        jobId: applyingJob.id,
+        jobTitle: applyingJob.title,
+        employerUid: applyingJob.employerUid,
+        workerUid: user.uid,
+        workerRegistrationId: workerProfile.registrationId,
+        workerName: workerProfile.displayName,
+        workerPrimarySkill: workerProfile.primarySkill,
+        proposedWage: Number(proposedWage) || applyingJob.offeredWage,
+        note: applyNote.trim().slice(0, 600),
+      });
+      setAppliedJobIds((prev) => [...prev, applyingJob.id]);
+      setApplyingJob(null);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to submit application.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
+        <div>
+          <h1 className="font-display text-2xl sm:text-3xl font-bold text-[#0B3B75]">
+            {t.nav.findWork}
+          </h1>
+          <p className="mt-1 text-sm text-slate-600">{t.brand.supporting}</p>
+        </div>
+        {!workerProfile && (
+          <button
+            type="button"
+            onClick={() => onNavigate('register-worker')}
+            className="px-4 py-2 rounded-md bg-[#0B3B75] text-white text-xs font-bold hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
+          >
+            {t.hero.ctaWorker}
+          </button>
+        )}
+      </div>
+
+      {/* Filters */}
+      <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-8 space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="relative">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+            <input
+              type="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={t.jobs.searchPlaceholder}
+              className="w-full pl-9 pr-3 py-2 bg-white border border-slate-300 rounded-md text-sm"
+            />
+          </div>
+          <select
+            value={stateFilter}
+            onChange={(e) => setStateFilter(e.target.value)}
+            className="px-3 py-2 bg-white border border-slate-300 rounded-md text-sm"
+          >
+            <option value="">{t.mapSection.allStates}</option>
+            {INDIA_STATES_DISTRICTS.map((st) => (
+              <option key={st.name} value={st.name}>
+                {st.name}
+              </option>
+            ))}
+          </select>
+          <select
+            value={workTypeFilter}
+            onChange={(e) => setWorkTypeFilter(e.target.value)}
+            className="px-3 py-2 bg-white border border-slate-300 rounded-md text-sm"
+          >
+            <option value="">All Work Types</option>
+            <option value="full_time">Full-time</option>
+            <option value="part_time">Part-time</option>
+            <option value="daily_wage">Daily Wage</option>
+            <option value="contract">Contract</option>
+            <option value="temporary">Temporary</option>
+            <option value="urgent">Urgent</option>
+            <option value="bulk">Bulk Recruitment</option>
+          </select>
+        </div>
+
+        <div className="flex flex-wrap gap-6 text-xs font-medium text-slate-700">
+          <label className="inline-flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={womenOnly}
+              onChange={(e) => setWomenOnly(e.target.checked)}
+              className="rounded border-slate-300"
+            />
+            <span>{t.jobs.womenFriendly}</span>
+          </label>
+          <label className="inline-flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={pwdOnly}
+              onChange={(e) => setPwdOnly(e.target.checked)}
+              className="rounded border-slate-300"
+            />
+            <span>{t.jobs.accessibleWork}</span>
+          </label>
+        </div>
+      </div>
+
+      {filteredJobs.length === 0 ? (
+        <div className="bg-white border border-slate-200 rounded-lg p-12 text-center space-y-3">
+          <Briefcase className="w-8 h-8 text-slate-300 mx-auto" />
+          <p className="text-sm text-slate-600 max-w-md mx-auto">{t.jobs.noJobs}</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          {filteredJobs.map((job) => {
+            const isApplied = appliedJobIds.includes(job.id);
+            const catItem = EMPLOYMENT_CATEGORIES.find((c) => c.en === job.category);
+            const catTitle = catItem
+              ? lang === 'hi'
+                ? catItem.hi
+                : lang === 'mr'
+                ? catItem.mr
+                : catItem.en
+              : job.category;
+
+            return (
+              <div key={job.id} className="bg-white border border-slate-200 rounded-lg p-6 flex flex-col justify-between gap-4">
+                <div className="space-y-2.5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <p className="text-xs text-slate-500">
+                        {catTitle} · {job.workType.replace('_', ' ')}
+                      </p>
+                      <h2 className="font-display text-lg font-bold text-[#0B3B75] mt-0.5">
+                        {job.title}
+                      </h2>
+                    </div>
+                    <div className="text-right shrink-0">
+                      <div className="font-mono-tabular text-base font-bold text-[#15803D]">
+                        ₹{job.offeredWage.toLocaleString('en-IN')}
+                      </div>
+                      <div className="text-[11px] text-slate-500">/ {job.wageUnit}</div>
+                    </div>
+                  </div>
+
+                  <p className="text-sm text-slate-600 leading-relaxed">{job.description}</p>
+
+                  <div className="text-xs text-slate-600 space-y-1 pt-1">
+                    <div className="flex items-center gap-1.5">
+                      <MapPin className="w-3.5 h-3.5 text-slate-400" />
+                      <span>
+                        {job.workLocationLabel}, {job.cityOrVillage}, {job.district}, {job.state}
+                      </span>
+                    </div>
+                    <p className="font-mono-tabular">
+                      {job.workersRequired} {t.jobs.workersUnit} · {job.paymentTerms}
+                    </p>
+                    <p className="text-slate-500">
+                      Skills: {job.requiredSkills.join(', ')}
+                      {job.isWomenFriendly ? ' · Women-friendly' : ''}
+                      {job.isAccessible ? ' · Accessible (PwD)' : ''}
+                    </p>
+                  </div>
+                </div>
+
+                <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-3">
+                  <span className="text-xs text-slate-500 font-medium">{job.employerName}</span>
+
+                  {isApplied ? (
+                    <span className="inline-flex items-center gap-1 text-xs font-semibold text-[#15803D]">
+                      <CheckCircle2 className="w-4 h-4" />
+                      {t.jobs.appliedLabel}
+                    </span>
+                  ) : !user ? (
+                    <button
+                      type="button"
+                      onClick={signInWithGoogle}
+                      className="px-4 py-2 rounded-md bg-[#0B3B75] text-white text-xs font-semibold hover:bg-slate-800 cursor-pointer"
+                    >
+                      {t.nav.signIn}
+                    </button>
+                  ) : !workerProfile ? (
+                    <button
+                      type="button"
+                      onClick={() => onNavigate('register-worker')}
+                      className="px-4 py-2 rounded-md border border-[#0B3B75] text-[#0B3B75] text-xs font-semibold hover:bg-slate-50 cursor-pointer"
+                    >
+                      {t.hero.ctaWorker}
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => handleOpenApply(job)}
+                      className="px-4 py-2 rounded-md bg-[#0B3B75] text-white text-xs font-semibold hover:bg-slate-800 cursor-pointer"
+                    >
+                      {t.jobs.applyBtn}
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Application Modal */}
+      {applyingJob && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
+          <form
+            onSubmit={handleSubmitApplication}
+            className="w-full max-w-md bg-white border border-slate-200 rounded-lg p-6 space-y-4 shadow-xl"
+          >
+            <h3 className="font-display text-lg font-bold text-[#0B3B75]">
+              {applyingJob.title}
+            </h3>
+            <p className="text-xs text-slate-600">
+              {applyingJob.employerName} · Offered ₹{applyingJob.offeredWage} / {applyingJob.wageUnit}
+            </p>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                {t.jobs.proposedWageLabel}
+              </label>
+              <input
+                type="number"
+                min={0}
+                disabled={!applyingJob.biddingEnabled}
+                value={proposedWage}
+                onChange={(e) => setProposedWage(Number(e.target.value))}
+                className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm font-mono-tabular disabled:bg-slate-100"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                {t.jobs.noteLabel}
+              </label>
+              <textarea
+                rows={3}
+                value={applyNote}
+                onChange={(e) => setApplyNote(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
+              />
+            </div>
+
+            {errorMsg && <p className="text-xs text-red-700">{errorMsg}</p>}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setApplyingJob(null)}
+                className="px-4 py-2 rounded-md border border-slate-300 text-xs font-semibold text-slate-700 cursor-pointer"
+              >
+                {t.common.cancel}
+              </button>
+              <button
+                type="submit"
+                disabled={submitting}
+                className="px-4 py-2 rounded-md bg-[#0B3B75] text-white text-xs font-semibold hover:bg-slate-800 cursor-pointer"
+              >
+                {submitting ? t.common.loading : t.jobs.submitApplication}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+    </div>
+  );
+};
+
+interface FindWorkersViewProps {
+  workers: PublicWorkerProfile[];
+  onNavigate: (route: PageRoute) => void;
+}
+
+export const FindWorkersView: React.FC<FindWorkersViewProps> = ({ workers, onNavigate }) => {
+  const { t } = useLanguage();
+  const [search, setSearch] = useState('');
+  const [stateFilter, setStateFilter] = useState('');
+  const [availFilter, setAvailFilter] = useState('');
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return workers
+      .filter((w) => w.verificationStatus !== 'suspended')
+      .filter((w) => !stateFilter || w.state === stateFilter)
+      .filter((w) => !availFilter || w.availabilityStatus === availFilter)
+      .filter(
+        (w) =>
+          !q ||
+          w.displayName.toLowerCase().includes(q) ||
+          w.primarySkill.toLowerCase().includes(q) ||
+          w.district.toLowerCase().includes(q) ||
+          w.skills.some((s) => s.toLowerCase().includes(q))
+      );
+  }, [workers, search, stateFilter, availFilter]);
+
+  return (
+    <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
+        <div>
+          <h1 className="font-display text-2xl sm:text-3xl font-bold text-[#0B3B75]">
+            {t.nav.findWorkers}
+          </h1>
+          <p className="mt-1 text-sm text-slate-600">{t.forEmployers.subheading}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => onNavigate('post-job')}
+          className="inline-flex items-center gap-1.5 px-4 py-2 rounded-md bg-[#0B3B75] text-white text-xs font-bold hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
+        >
+          <PlusCircle className="w-4 h-4" />
+          {t.jobs.postTitle}
+        </button>
+      </div>
+
+      <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-8 grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="relative">
+          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search by skill, district, or worker name..."
+            className="w-full pl-9 pr-3 py-2 bg-white border border-slate-300 rounded-md text-sm"
+          />
+        </div>
+        <select
+          value={stateFilter}
+          onChange={(e) => setStateFilter(e.target.value)}
+          className="px-3 py-2 bg-white border border-slate-300 rounded-md text-sm"
+        >
+          <option value="">{t.mapSection.allStates}</option>
+          {INDIA_STATES_DISTRICTS.map((st) => (
+            <option key={st.name} value={st.name}>
+              {st.name}
+            </option>
+          ))}
+        </select>
+        <select
+          value={availFilter}
+          onChange={(e) => setAvailFilter(e.target.value)}
+          className="px-3 py-2 bg-white border border-slate-300 rounded-md text-sm"
+        >
+          <option value="">All Availability</option>
+          <option value="available">Available Immediately</option>
+          <option value="busy">Currently Engaged</option>
+        </select>
+      </div>
+
+      {filtered.length === 0 ? (
+        <div className="bg-white border border-slate-200 rounded-lg p-12 text-center space-y-3">
+          <Users className="w-8 h-8 text-slate-300 mx-auto" />
+          <p className="text-sm text-slate-600">{t.common.noRecords}</p>
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+          {filtered.map((w) => (
+            <div key={w.id} className="bg-white border border-slate-200 rounded-lg p-5 space-y-3">
+              <div className="flex items-start justify-between gap-2">
+                <div>
+                  <p className="text-xs font-mono-tabular text-slate-500">{w.registrationId}</p>
+                  <h2 className="font-display text-base font-bold text-[#0B3B75]">{w.displayName}</h2>
+                </div>
+                <span className="text-xs font-semibold text-[#15803D]">
+                  {w.verificationStatus === 'verified' ? t.common.verified : t.common.pending}
+                </span>
+              </div>
+              <p className="text-xs font-semibold text-[#C25E00]">{w.primarySkill}</p>
+              <p className="text-xs text-slate-600">
+                Skills: {w.skills.join(' · ')}
+              </p>
+              <div className="text-xs text-slate-600 space-y-1 pt-2 border-t border-slate-100">
+                <p>
+                  {w.cityOrVillage}, {w.district}, {w.state}
+                </p>
+                <p className="font-mono-tabular">
+                  Exp: {w.experienceYears} yrs · Expected: ₹{w.expectedWage.toLocaleString('en-IN')} / {w.wageUnit}
+                </p>
+                <p className="text-slate-500">Languages: {w.languagesKnown.join(', ')}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+};
+
+interface PostJobViewProps {
+  onNavigate: (route: PageRoute) => void;
+}
+
+export const PostJobView: React.FC<PostJobViewProps> = ({ onNavigate }) => {
+  const { lang, t } = useLanguage();
+  const { user, employerProfile, signInWithGoogle } = useAuth();
+
+  const [title, setTitle] = useState('');
+  const [category, setCategory] = useState(EMPLOYMENT_CATEGORIES[0].en);
+  const [description, setDescription] = useState('');
+  const [workersRequired, setWorkersRequired] = useState(1);
+  const [skillsInput, setSkillsInput] = useState('Masonry, Site Support');
+  const [stateName, setStateName] = useState(employerProfile?.state || 'Chhattisgarh');
+  const [districtName, setDistrictName] = useState(employerProfile?.district || 'Raipur');
+  const [cityOrVillage, setCityOrVillage] = useState('');
+  const [workLocationLabel, setWorkLocationLabel] = useState('');
+  const [jobDate, setJobDate] = useState('');
+  const [startTime, setStartTime] = useState('09:00');
+  const [duration, setDuration] = useState('15 days');
+  const [workType, setWorkType] = useState<JobWorkType>('daily_wage');
+  const [offeredWage, setOfferedWage] = useState(650);
+  const [wageUnit, setWageUnit] = useState<WageUnit>('daily');
+  const [paymentTerms, setPaymentTerms] = useState('Weekly bank/UPI settlement');
+  const [contactPreference, setContactPreference] = useState<'platform_message' | 'phone_after_confirm'>('phone_after_confirm');
+  const [isWomenFriendly, setIsWomenFriendly] = useState(false);
+  const [isAccessible, setIsAccessible] = useState(false);
+  const [biddingEnabled, setBiddingEnabled] = useState(true);
+
+  const [saving, setSaving] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
+  const [createdJobId, setCreatedJobId] = useState('');
+
+  const stateObj = INDIA_STATES_DISTRICTS.find((s) => s.name === stateName);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setErrorMsg('');
+    if (!user || !employerProfile) return;
+
+    const coords = getDistrictCoordinates(stateName, districtName);
+    const reqSkills = skillsInput
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 15);
+    if (reqSkills.length === 0) reqSkills.push(category);
+
+    setSaving(true);
+    try {
+      const id = await createJobPosting({
+        employerUid: user.uid,
+        employerName: employerProfile.businessName,
+        title: title.trim().slice(0, 140),
+        category,
+        description: description.trim().slice(0, 2000),
+        workersRequired: Number(workersRequired) || 1,
+        requiredSkills: reqSkills,
+        state: stateName,
+        district: districtName,
+        cityOrVillage: cityOrVillage.trim().slice(0, 100),
+        workLocationLabel: workLocationLabel.trim().slice(0, 160),
+        lat: coords.lat,
+        lng: coords.lng,
+        jobDate,
+        startTime,
+        duration: duration.trim().slice(0, 60),
+        workType,
+        offeredWage: Number(offeredWage) || 0,
+        wageUnit,
+        paymentTerms: paymentTerms.trim().slice(0, 200),
+        contactPreference,
+        isWomenFriendly,
+        isAccessible,
+        biddingEnabled,
+      });
+      setCreatedJobId(id);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to publish job.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+      <div className="mb-8">
+        <h1 className="font-display text-2xl sm:text-3xl font-bold text-[#0B3B75]">
+          {t.jobs.postTitle}
+        </h1>
+        <p className="mt-1 text-sm text-slate-600">{t.jobs.postSubtitle}</p>
+      </div>
+
+      {!user ? (
+        <div className="bg-slate-50 border border-slate-200 rounded-lg p-6 flex items-center justify-between gap-4">
+          <p className="text-sm text-slate-700">{t.common.signInRequired}</p>
+          <button
+            type="button"
+            onClick={signInWithGoogle}
+            className="px-4 py-2 rounded-md bg-[#0B3B75] text-white text-xs font-semibold cursor-pointer"
+          >
+            {t.nav.signIn}
+          </button>
+        </div>
+      ) : !employerProfile ? (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <p className="text-sm text-amber-950">
+            Please complete Employer Registration before publishing a job requirement.
+          </p>
+          <button
+            type="button"
+            onClick={() => onNavigate('register-employer')}
+            className="px-4 py-2 rounded-md bg-[#0B3B75] text-white text-xs font-semibold whitespace-nowrap cursor-pointer"
+          >
+            {t.nav.employerReg}
+          </button>
+        </div>
+      ) : (
+        <>
+          {createdJobId && (
+            <div className="mb-6 bg-green-50 border border-green-200 rounded-lg p-4 flex items-center justify-between gap-4">
+              <p className="text-sm font-semibold text-green-950">
+                Job published successfully (ID: <span className="font-mono-tabular">{createdJobId}</span>).
+              </p>
+              <button
+                type="button"
+                onClick={() => onNavigate('employer-dashboard')}
+                className="px-4 py-2 rounded-md bg-[#15803D] text-white text-xs font-semibold cursor-pointer"
+              >
+                {t.nav.employerDashboard}
+              </button>
+            </div>
+          )}
+
+          <form onSubmit={handleSubmit} className="bg-white border border-slate-200 rounded-lg p-6 sm:p-8 space-y-5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  {t.jobs.jobTitle} *
+                </label>
+                <input
+                  type="text"
+                  required
+                  minLength={3}
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  {t.jobs.category} *
+                </label>
+                <select
+                  value={category}
+                  onChange={(e) => setCategory(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
+                >
+                  {EMPLOYMENT_CATEGORIES.map((c) => (
+                    <option key={c.id} value={c.en}>
+                      {lang === 'hi' ? c.hi : lang === 'mr' ? c.mr : c.en}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                {t.jobs.description} *
+              </label>
+              <textarea
+                required
+                minLength={10}
+                rows={3}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  {t.jobs.workersRequired} *
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={5000}
+                  value={workersRequired}
+                  onChange={(e) => setWorkersRequired(Number(e.target.value))}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm font-mono-tabular"
+                />
+              </div>
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  {t.jobs.requiredSkills} *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={skillsInput}
+                  onChange={(e) => setSkillsInput(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-5">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  {t.workerForm.state} *
+                </label>
+                <select
+                  value={stateName}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setStateName(val);
+                    const st = INDIA_STATES_DISTRICTS.find((s) => s.name === val);
+                    setDistrictName(st?.districts[0]?.name || '');
+                  }}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
+                >
+                  {INDIA_STATES_DISTRICTS.map((st) => (
+                    <option key={st.name} value={st.name}>
+                      {st.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  {t.workerForm.district} *
+                </label>
+                <select
+                  value={districtName}
+                  onChange={(e) => setDistrictName(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
+                >
+                  {stateObj?.districts.map((d) => (
+                    <option key={d.name} value={d.name}>
+                      {d.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  {t.workerForm.cityVillage} *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={cityOrVillage}
+                  onChange={(e) => setCityOrVillage(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  {t.jobs.workLocationLabel} *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={workLocationLabel}
+                  onChange={(e) => setWorkLocationLabel(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-5">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  {t.jobs.jobDate}
+                </label>
+                <input
+                  type="date"
+                  value={jobDate}
+                  onChange={(e) => setJobDate(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  {t.jobs.startTime}
+                </label>
+                <input
+                  type="time"
+                  value={startTime}
+                  onChange={(e) => setStartTime(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  {t.jobs.duration}
+                </label>
+                <input
+                  type="text"
+                  value={duration}
+                  onChange={(e) => setDuration(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  {t.jobs.workType}
+                </label>
+                <select
+                  value={workType}
+                  onChange={(e) => setWorkType(e.target.value as JobWorkType)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
+                >
+                  <option value="daily_wage">Daily Wage</option>
+                  <option value="full_time">Full-time</option>
+                  <option value="part_time">Part-time</option>
+                  <option value="contract">Contract</option>
+                  <option value="temporary">Temporary</option>
+                  <option value="urgent">Urgent Requirement</option>
+                  <option value="bulk">Bulk Workforce</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-5">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  {t.jobs.offeredWage} *
+                </label>
+                <input
+                  type="number"
+                  min={0}
+                  value={offeredWage}
+                  onChange={(e) => setOfferedWage(Number(e.target.value))}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm font-mono-tabular"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  {t.workerForm.wageUnit}
+                </label>
+                <select
+                  value={wageUnit}
+                  onChange={(e) => setWageUnit(e.target.value as WageUnit)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
+                >
+                  <option value="daily">Daily</option>
+                  <option value="monthly">Monthly</option>
+                  <option value="hourly">Hourly</option>
+                  <option value="contract">Contract</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  {t.jobs.paymentTerms}
+                </label>
+                <input
+                  type="text"
+                  value={paymentTerms}
+                  onChange={(e) => setPaymentTerms(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  {t.jobs.contactPref}
+                </label>
+                <select
+                  value={contactPreference}
+                  onChange={(e) => setContactPreference(e.target.value as typeof contactPreference)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
+                >
+                  <option value="phone_after_confirm">Phone after confirmation</option>
+                  <option value="platform_message">Platform updates only</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="space-y-2 pt-2 border-t border-slate-200 text-sm text-slate-700">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={isWomenFriendly}
+                  onChange={(e) => setIsWomenFriendly(e.target.checked)}
+                />
+                <span>{t.jobs.womenFriendly}</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={isAccessible}
+                  onChange={(e) => setIsAccessible(e.target.checked)}
+                />
+                <span>{t.jobs.accessibleWork}</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={biddingEnabled}
+                  onChange={(e) => setBiddingEnabled(e.target.checked)}
+                />
+                <span>{t.jobs.allowQuotes}</span>
+              </label>
+            </div>
+
+            {errorMsg && (
+              <div className="p-3 rounded-md bg-red-50 border border-red-200 text-sm text-red-800">
+                {errorMsg}
+              </div>
+            )}
+
+            <div className="flex justify-end">
+              <button
+                type="submit"
+                disabled={saving}
+                className="px-6 py-3 rounded-md bg-[#0B3B75] text-white text-sm font-bold hover:bg-slate-800 cursor-pointer"
+              >
+                {saving ? t.common.loading : t.jobs.publishBtn}
+              </button>
+            </div>
+          </form>
+        </>
+      )}
+    </div>
+  );
+};

@@ -1,0 +1,467 @@
+{
+  "entities": {
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "Authenticated user account and assigned platform role.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "maxLength": 200 },
+        "displayName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "role": { "type": "string", "enum": ["worker", "employer", "admin"] },
+        "preferredLanguage": { "type": "string", "enum": ["en", "hi", "mr"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "displayName", "role", "preferredLanguage", "createdAt", "updatedAt"]
+    },
+    "AdminMember": {
+      "title": "AdminMember",
+      "description": "Authorized platform administrator record.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "format": "email", "maxLength": 200 },
+        "grantedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "grantedAt"]
+    },
+    "PublicWorkerProfile": {
+      "title": "PublicWorkerProfile",
+      "description": "Public non-PII worker capability profile for job discovery.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "registrationId": { "type": "string", "minLength": 5, "maxLength": 40, "pattern": "^RS-W-[A-Z0-9\\-]+$" },
+        "displayName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "primarySkill": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "skills": { "type": "array", "description": "Bounded list of up to 15 skill identifiers." },
+        "experienceYears": { "type": "number" },
+        "expectedWage": { "type": "number" },
+        "wageUnit": { "type": "string", "enum": ["daily", "monthly", "hourly", "contract"] },
+        "preferredWorkType": { "type": "string", "enum": ["full_time", "part_time", "daily_wage", "contract"] },
+        "availabilityStatus": { "type": "string", "enum": ["available", "busy", "offline"] },
+        "state": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "district": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "cityOrVillage": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "approxLat": { "type": "number" },
+        "approxLng": { "type": "number" },
+        "languagesKnown": { "type": "array", "description": "Bounded list of up to 10 languages." },
+        "gender": { "type": "string", "enum": ["female", "male", "other", "prefer_not_to_say"] },
+        "education": { "type": "string", "maxLength": 100 },
+        "verificationStatus": { "type": "string", "enum": ["pending", "verified", "suspended"] },
+        "isWomenEnterprise": { "type": "boolean" },
+        "completedJobsCount": { "type": "number" },
+        "ratingAvg": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerUid", "registrationId", "displayName", "primarySkill", "skills",
+        "experienceYears", "expectedWage", "wageUnit", "preferredWorkType",
+        "availabilityStatus", "state", "district", "cityOrVillage",
+        "approxLat", "approxLng", "languagesKnown", "verificationStatus",
+        "completedJobsCount", "ratingAvg", "createdAt", "updatedAt"
+      ]
+    },
+    "WorkerPrivateInfo": {
+      "title": "WorkerPrivateInfo",
+      "description": "Isolated PII and consent records for a registered worker.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "fullName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "mobile": { "type": "string", "minLength": 10, "maxLength": 20 },
+        "mobileVerified": { "type": "boolean" },
+        "email": { "type": "string", "maxLength": 200 },
+        "ageConfirmed": { "type": "boolean" },
+        "preferredWorkLocation": { "type": "string", "maxLength": 160 },
+        "liveLocationConsent": { "type": "boolean" },
+        "privacyConsent": { "type": "boolean" },
+        "idVerificationStatus": { "type": "string", "enum": ["not_submitted", "voluntary_pending", "verified"] },
+        "certificateNotes": { "type": "string", "maxLength": 500 },
+        "photoUrl": { "type": "string", "maxLength": 1000 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerUid", "fullName", "mobile", "mobileVerified", "ageConfirmed",
+        "liveLocationConsent", "privacyConsent", "idVerificationStatus",
+        "createdAt", "updatedAt"
+      ]
+    },
+    "PublicEmployerProfile": {
+      "title": "PublicEmployerProfile",
+      "description": "Public non-PII employer profile for workforce discovery.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "registrationId": { "type": "string", "minLength": 5, "maxLength": 40, "pattern": "^RS-E-[A-Z0-9\\-]+$" },
+        "businessName": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "businessType": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "industryCategory": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "state": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "district": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "requiredCategories": { "type": "array", "description": "Bounded list of up to 15 categories." },
+        "verificationStatus": { "type": "string", "enum": ["pending", "verified", "suspended"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerUid", "registrationId", "businessName", "businessType",
+        "industryCategory", "state", "district", "requiredCategories",
+        "verificationStatus", "createdAt", "updatedAt"
+      ]
+    },
+    "EmployerPrivateInfo": {
+      "title": "EmployerPrivateInfo",
+      "description": "Isolated PII and compliance records for a registered employer.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "contactPerson": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "mobile": { "type": "string", "minLength": 10, "maxLength": 20 },
+        "mobileVerified": { "type": "boolean" },
+        "email": { "type": "string", "maxLength": 200 },
+        "businessAddress": { "type": "string", "minLength": 4, "maxLength": 300 },
+        "gstNumber": { "type": "string", "maxLength": 30 },
+        "establishmentDetails": { "type": "string", "maxLength": 600 },
+        "workforceNotes": { "type": "string", "maxLength": 600 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerUid", "contactPerson", "mobile", "mobileVerified",
+        "email", "businessAddress", "createdAt", "updatedAt"
+      ]
+    },
+    "JobPosting": {
+      "title": "JobPosting",
+      "description": "Employment opportunity posted by a verified or registered employer.",
+      "type": "object",
+      "properties": {
+        "employerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "employerName": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "title": { "type": "string", "minLength": 3, "maxLength": 140 },
+        "category": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "description": { "type": "string", "minLength": 10, "maxLength": 2000 },
+        "workersRequired": { "type": "number" },
+        "requiredSkills": { "type": "array", "description": "Bounded list of up to 15 skills." },
+        "state": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "district": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "cityOrVillage": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "workLocationLabel": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "lat": { "type": "number" },
+        "lng": { "type": "number" },
+        "jobDate": { "type": "string", "maxLength": 30 },
+        "startTime": { "type": "string", "maxLength": 30 },
+        "duration": { "type": "string", "maxLength": 60 },
+        "workType": { "type": "string", "enum": ["full_time", "part_time", "daily_wage", "contract", "temporary", "urgent", "bulk"] },
+        "offeredWage": { "type": "number" },
+        "wageUnit": { "type": "string", "enum": ["daily", "monthly", "hourly", "contract"] },
+        "paymentTerms": { "type": "string", "maxLength": 200 },
+        "contactPreference": { "type": "string", "enum": ["platform_message", "phone_after_confirm"] },
+        "isWomenFriendly": { "type": "boolean" },
+        "isAccessible": { "type": "boolean" },
+        "biddingEnabled": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["open", "in_progress", "completed", "cancelled", "flagged"] },
+        "applicationsCount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "employerUid", "employerName", "title", "category", "description",
+        "workersRequired", "requiredSkills", "state", "district", "cityOrVillage",
+        "workLocationLabel", "lat", "lng", "workType", "offeredWage", "wageUnit",
+        "paymentTerms", "contactPreference", "isWomenFriendly", "isAccessible",
+        "biddingEnabled", "status", "applicationsCount", "createdAt", "updatedAt"
+      ]
+    },
+    "JobApplication": {
+      "title": "JobApplication",
+      "description": "Worker application, quotation, or employer work booking record.",
+      "type": "object",
+      "properties": {
+        "jobId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "jobTitle": { "type": "string", "minLength": 2, "maxLength": 140 },
+        "employerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workerRegistrationId": { "type": "string", "minLength": 5, "maxLength": 40 },
+        "workerName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "workerPrimarySkill": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "proposedWage": { "type": "number" },
+        "note": { "type": "string", "maxLength": 600 },
+        "status": { "type": "string", "enum": ["applied", "invited", "accepted", "declined", "work_completed"] },
+        "liveTrackingAuthorized": { "type": "boolean" },
+        "workerRating": { "type": "number" },
+        "employerFeedback": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "jobId", "jobTitle", "employerUid", "workerUid", "workerRegistrationId",
+        "workerName", "workerPrimarySkill", "proposedWage", "status",
+        "liveTrackingAuthorized", "createdAt", "updatedAt"
+      ]
+    },
+    "PartnershipEnquiry": {
+      "title": "PartnershipEnquiry",
+      "description": "Government and institutional collaboration enquiry submission.",
+      "type": "object",
+      "properties": {
+        "submitterUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "organisationName": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "departmentOrInstitution": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "contactPerson": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "designation": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "email": { "type": "string", "format": "email", "maxLength": 200 },
+        "phone": { "type": "string", "minLength": 8, "maxLength": 20 },
+        "state": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "district": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "partnershipInterest": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "message": { "type": "string", "minLength": 5, "maxLength": 2000 },
+        "attachmentName": { "type": "string", "maxLength": 200 },
+        "status": { "type": "string", "enum": ["received", "under_review", "responded", "archived"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "submitterUid", "organisationName", "departmentOrInstitution",
+        "contactPerson", "designation", "email", "phone", "state",
+        "district", "partnershipInterest", "message", "status",
+        "createdAt", "updatedAt"
+      ]
+    },
+    "GrievanceReport": {
+      "title": "GrievanceReport",
+      "description": "Safety, non-payment, fraud, or harassment grievance report.",
+      "type": "object",
+      "properties": {
+        "reporterUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "category": { "type": "string", "enum": ["fraudulent_job", "non_payment", "harassment", "unsafe_workplace", "account_appeal", "other"] },
+        "targetReference": { "type": "string", "maxLength": 140 },
+        "subject": { "type": "string", "minLength": 3, "maxLength": 160 },
+        "description": { "type": "string", "minLength": 10, "maxLength": 2000 },
+        "status": { "type": "string", "enum": ["open", "under_review", "resolved", "dismissed"] },
+        "adminNotes": { "type": "string", "maxLength": 1000 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "reporterUid", "category", "subject", "description",
+        "status", "createdAt", "updatedAt"
+      ]
+    },
+    "PlatformAnnouncement": {
+      "title": "PlatformAnnouncement",
+      "description": "Multilingual portal banner or announcement managed by admins.",
+      "type": "object",
+      "properties": {
+        "titleEn": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "titleHi": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "titleMr": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "bodyEn": { "type": "string", "minLength": 2, "maxLength": 500 },
+        "bodyHi": { "type": "string", "minLength": 2, "maxLength": 500 },
+        "bodyMr": { "type": "string", "minLength": 2, "maxLength": 500 },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "titleEn", "titleHi", "titleMr", "bodyEn", "bodyHi", "bodyMr",
+        "active", "createdAt", "updatedAt"
+      ]
+    },
+    "AuditLog": {
+      "title": "AuditLog",
+      "description": "Administrative action audit log.",
+      "type": "object",
+      "properties": {
+        "adminUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "adminEmail": { "type": "string", "format": "email", "maxLength": 200 },
+        "action": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "targetCollection": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "targetId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "details": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["adminUid", "adminEmail", "action", "targetCollection", "targetId", "createdAt"]
+    },
+    "VehicleListing": {
+      "title": "VehicleListing",
+      "description": "Public non-PII Auto Rickshaw, Car, SUV, Pickup, or Tractor listing available for hire.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "registrationId": { "type": "string", "minLength": 5, "maxLength": 40, "pattern": "^RS-V-[A-Z0-9\\-]+$" },
+        "ownerDisplayName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "vehicleType": { "type": "string", "enum": ["bike_taxi", "auto_rickshaw", "car_sedan", "suv_innova", "trolley_cart", "mini_tempo", "pickup_tempo", "tractor"] },
+        "vehicleTitle": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "vehicleNumberMasked": { "type": "string", "minLength": 4, "maxLength": 20 },
+        "seatingOrCapacity": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "acAvailable": { "type": "boolean" },
+        "withDriver": { "type": "boolean" },
+        "ratePerKm": { "type": "number" },
+        "ratePerDay": { "type": "number" },
+        "minFare": { "type": "number" },
+        "availabilityStatus": { "type": "string", "enum": ["available", "busy", "offline"] },
+        "state": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "district": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "cityOrVillage": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "approxLat": { "type": "number" },
+        "approxLng": { "type": "number" },
+        "languagesKnown": { "type": "array", "description": "Bounded list of up to 10 languages." },
+        "serviceNotes": { "type": "string", "maxLength": 500 },
+        "verificationStatus": { "type": "string", "enum": ["pending", "verified", "suspended"] },
+        "completedTripsCount": { "type": "number" },
+        "ratingAvg": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerUid", "registrationId", "ownerDisplayName", "vehicleType", "vehicleTitle",
+        "vehicleNumberMasked", "seatingOrCapacity", "acAvailable", "withDriver",
+        "ratePerKm", "ratePerDay", "minFare", "availabilityStatus", "state", "district",
+        "cityOrVillage", "approxLat", "approxLng", "languagesKnown", "verificationStatus",
+        "completedTripsCount", "ratingAvg", "createdAt", "updatedAt"
+      ]
+    },
+    "VehiclePrivateInfo": {
+      "title": "VehiclePrivateInfo",
+      "description": "Isolated PII contact and RC verification notes for a vehicle owner.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "mobile": { "type": "string", "minLength": 10, "maxLength": 20 },
+        "mobileVerified": { "type": "boolean" },
+        "email": { "type": "string", "maxLength": 200 },
+        "rcOrLicenseNotes": { "type": "string", "maxLength": 500 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "ownerName", "mobile", "mobileVerified", "createdAt", "updatedAt"]
+    },
+    "VehicleBooking": {
+      "title": "VehicleBooking",
+      "description": "Auto rickshaw or car rental booking request between customer and vehicle owner.",
+      "type": "object",
+      "properties": {
+        "vehicleId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "vehicleTitle": { "type": "string", "minLength": 2, "maxLength": 140 },
+        "vehicleType": { "type": "string", "enum": ["bike_taxi", "auto_rickshaw", "car_sedan", "suv_innova", "trolley_cart", "mini_tempo", "pickup_tempo", "tractor"] },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "customerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "customerName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "pickupLocation": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "dropLocation": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "tripType": { "type": "string", "enum": ["one_way", "round_trip", "hourly", "full_day"] },
+        "travelDate": { "type": "string", "minLength": 4, "maxLength": 30 },
+        "travelTime": { "type": "string", "minLength": 2, "maxLength": 30 },
+        "passengersCount": { "type": "number" },
+        "offeredFare": { "type": "number" },
+        "note": { "type": "string", "maxLength": 600 },
+        "status": { "type": "string", "enum": ["requested", "accepted", "declined", "completed", "cancelled"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "vehicleId", "vehicleTitle", "vehicleType", "ownerUid", "customerUid",
+        "customerName", "pickupLocation", "dropLocation", "tripType", "travelDate",
+        "travelTime", "passengersCount", "offeredFare", "status", "createdAt", "updatedAt"
+      ]
+    },
+    "CustomerPreference": {
+      "title": "CustomerPreference",
+      "description": "Saved default location and frequent worker/transport order history pinned at top for repeat hirers.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "defaultState": { "type": "string", "maxLength": 80 },
+        "defaultDistrict": { "type": "string", "maxLength": 80 },
+        "defaultCityOrVillage": { "type": "string", "maxLength": 100 },
+        "defaultLat": { "type": "number" },
+        "defaultLng": { "type": "number" },
+        "savedAddressLabel": { "type": "string", "maxLength": 160 },
+        "frequentWorkerCategories": { "type": "array", "description": "Up to 10 most recent/frequent worker categories." },
+        "frequentVehicleTypes": { "type": "array", "description": "Up to 10 most recent/frequent local transport vehicle types." },
+        "totalHireOrders": { "type": "number" },
+        "totalTransportOrders": { "type": "number" },
+        "lastOrderTitle": { "type": "string", "maxLength": 160 },
+        "lastOrderCategory": { "type": "string", "maxLength": 80 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerUid", "frequentWorkerCategories", "frequentVehicleTypes",
+        "totalHireOrders", "totalTransportOrders", "createdAt", "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserAccount" },
+      "description": "Private user account records with role assignments."
+    },
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/AdminMember" },
+      "description": "Authorized administrator registry."
+    },
+    "/publicWorkers/{workerId}": {
+      "schema": { "$ref": "#/entities/PublicWorkerProfile" },
+      "description": "Public non-PII worker profiles for skill and location discovery."
+    },
+    "/workerPrivate/{workerId}": {
+      "schema": { "$ref": "#/entities/WorkerPrivateInfo" },
+      "description": "Strict PII isolation for worker mobile, email, and consent records."
+    },
+    "/publicEmployers/{employerId}": {
+      "schema": { "$ref": "#/entities/PublicEmployerProfile" },
+      "description": "Public non-PII employer and establishment profiles."
+    },
+    "/employerPrivate/{employerId}": {
+      "schema": { "$ref": "#/entities/EmployerPrivateInfo" },
+      "description": "Strict PII isolation for employer contact person, GST, and address."
+    },
+    "/jobs/{jobId}": {
+      "schema": { "$ref": "#/entities/JobPosting" },
+      "description": "Job opportunities posted by registered employers."
+    },
+    "/applications/{applicationId}": {
+      "schema": { "$ref": "#/entities/JobApplication" },
+      "description": "Applications, quotations, and work bookings linking workers and employers."
+    },
+    "/partnershipEnquiries/{enquiryId}": {
+      "schema": { "$ref": "#/entities/PartnershipEnquiry" },
+      "description": "Government and institutional partnership enquiries."
+    },
+    "/grievances/{grievanceId}": {
+      "schema": { "$ref": "#/entities/GrievanceReport" },
+      "description": "Trust, safety, and grievance reports."
+    },
+    "/announcements/{announcementId}": {
+      "schema": { "$ref": "#/entities/PlatformAnnouncement" },
+      "description": "Multilingual banners and announcements managed by administrators."
+    },
+    "/auditLogs/{logId}": {
+      "schema": { "$ref": "#/entities/AuditLog" },
+      "description": "Immutable administrative audit logs."
+    },
+    "/vehicleListings/{vehicleId}": {
+      "schema": { "$ref": "#/entities/VehicleListing" },
+      "description": "Public non-PII Auto & Car rental listings."
+    },
+    "/vehiclePrivate/{vehicleId}": {
+      "schema": { "$ref": "#/entities/VehiclePrivateInfo" },
+      "description": "Isolated PII contact and RC verification details for vehicle owners."
+    },
+    "/vehicleBookings/{bookingId}": {
+      "schema": { "$ref": "#/entities/VehicleBooking" },
+      "description": "Customer bookings for Bike Taxi, Auto Rickshaws, Cars, SUVs, Trolleys, Mini Tempos, Pickups, and Tractors."
+    },
+    "/customerPreferences/{userId}": {
+      "schema": { "$ref": "#/entities/CustomerPreference" },
+      "description": "Frequent hirer saved locations, repeated worker trades, and local transport preferences."
+    }
+  }
+}

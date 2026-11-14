@@ -1,0 +1,861 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Core Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(uid) {
+      return isVerifiedUser() && request.auth.uid == uid;
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        request.auth.token.email == 'mayurraikwar97@gmail.com'
+      );
+    }
+
+    function isValidTimestampOnCreate() {
+      return incoming().createdAt == request.time && incoming().updatedAt == request.time;
+    }
+
+    function isValidTimestampOnUpdate() {
+      return incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time;
+    }
+
+    // Entity Validators
+    function isValidUserAccount(data) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'role', 'preferredLanguage', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'role', 'preferredLanguage', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && data.role in ['worker', 'employer', 'admin']
+        && data.preferredLanguage in ['en', 'hi', 'mr']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdminMember(data) {
+      return data.keys().hasAll(['uid', 'email', 'grantedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'grantedAt'])
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && data.grantedAt is timestamp;
+    }
+
+    function isValidPublicWorker(data) {
+      return data.keys().hasAll([
+          'ownerUid', 'registrationId', 'displayName', 'primarySkill', 'skills',
+          'experienceYears', 'expectedWage', 'wageUnit', 'preferredWorkType',
+          'availabilityStatus', 'state', 'district', 'cityOrVillage',
+          'approxLat', 'approxLng', 'languagesKnown', 'verificationStatus',
+          'completedJobsCount', 'ratingAvg', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid', 'registrationId', 'displayName', 'primarySkill', 'skills',
+          'experienceYears', 'expectedWage', 'wageUnit', 'preferredWorkType',
+          'availabilityStatus', 'state', 'district', 'cityOrVillage',
+          'approxLat', 'approxLng', 'languagesKnown', 'gender', 'education',
+          'verificationStatus', 'isWomenEnterprise', 'completedJobsCount',
+          'ratingAvg', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerUid)
+        && data.registrationId is string && data.registrationId.size() >= 5 && data.registrationId.size() <= 40
+        && data.displayName is string && data.displayName.size() >= 2 && data.displayName.size() <= 120
+        && data.primarySkill is string && data.primarySkill.size() >= 2 && data.primarySkill.size() <= 80
+        && data.skills is list && data.skills.size() >= 1 && data.skills.size() <= 15 && data.skills[0] is string
+        && data.experienceYears is number && data.experienceYears >= 0 && data.experienceYears <= 70
+        && data.expectedWage is number && data.expectedWage >= 0 && data.expectedWage <= 500000
+        && data.wageUnit in ['daily', 'monthly', 'hourly', 'contract']
+        && data.preferredWorkType in ['full_time', 'part_time', 'daily_wage', 'contract']
+        && data.availabilityStatus in ['available', 'busy', 'offline']
+        && data.state is string && data.state.size() >= 2 && data.state.size() <= 80
+        && data.district is string && data.district.size() >= 2 && data.district.size() <= 80
+        && data.cityOrVillage is string && data.cityOrVillage.size() >= 2 && data.cityOrVillage.size() <= 100
+        && data.approxLat is number && data.approxLat >= -90 && data.approxLat <= 90
+        && data.approxLng is number && data.approxLng >= -180 && data.approxLng <= 180
+        && data.languagesKnown is list && data.languagesKnown.size() >= 1 && data.languagesKnown.size() <= 10 && data.languagesKnown[0] is string
+        && (!('gender' in data) || data.gender in ['female', 'male', 'other', 'prefer_not_to_say'])
+        && (!('education' in data) || (data.education is string && data.education.size() <= 100))
+        && data.verificationStatus in ['pending', 'verified', 'suspended']
+        && (!('isWomenEnterprise' in data) || data.isWomenEnterprise is bool)
+        && data.completedJobsCount is number && data.completedJobsCount >= 0 && data.completedJobsCount <= 100000
+        && data.ratingAvg is number && data.ratingAvg >= 0 && data.ratingAvg <= 5
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWorkerPrivate(data) {
+      return data.keys().hasAll([
+          'ownerUid', 'fullName', 'mobile', 'mobileVerified', 'ageConfirmed',
+          'liveLocationConsent', 'privacyConsent', 'idVerificationStatus',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid', 'fullName', 'mobile', 'mobileVerified', 'email', 'ageConfirmed',
+          'preferredWorkLocation', 'liveLocationConsent', 'privacyConsent',
+          'idVerificationStatus', 'certificateNotes', 'photoUrl', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerUid)
+        && data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 120
+        && data.mobile is string && data.mobile.size() >= 10 && data.mobile.size() <= 20
+        && data.mobileVerified is bool
+        && (!('email' in data) || (data.email is string && data.email.size() <= 200))
+        && data.ageConfirmed is bool
+        && (!('preferredWorkLocation' in data) || (data.preferredWorkLocation is string && data.preferredWorkLocation.size() <= 160))
+        && data.liveLocationConsent is bool
+        && data.privacyConsent is bool
+        && data.idVerificationStatus in ['not_submitted', 'voluntary_pending', 'verified']
+        && (!('certificateNotes' in data) || (data.certificateNotes is string && data.certificateNotes.size() <= 500))
+        && (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 1000))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPublicEmployer(data) {
+      return data.keys().hasAll([
+          'ownerUid', 'registrationId', 'businessName', 'businessType',
+          'industryCategory', 'state', 'district', 'requiredCategories',
+          'verificationStatus', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid', 'registrationId', 'businessName', 'businessType',
+          'industryCategory', 'state', 'district', 'requiredCategories',
+          'verificationStatus', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerUid)
+        && data.registrationId is string && data.registrationId.size() >= 5 && data.registrationId.size() <= 40
+        && data.businessName is string && data.businessName.size() >= 2 && data.businessName.size() <= 160
+        && data.businessType is string && data.businessType.size() >= 2 && data.businessType.size() <= 80
+        && data.industryCategory is string && data.industryCategory.size() >= 2 && data.industryCategory.size() <= 80
+        && data.state is string && data.state.size() >= 2 && data.state.size() <= 80
+        && data.district is string && data.district.size() >= 2 && data.district.size() <= 80
+        && data.requiredCategories is list && data.requiredCategories.size() >= 1 && data.requiredCategories.size() <= 15 && data.requiredCategories[0] is string
+        && data.verificationStatus in ['pending', 'verified', 'suspended']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidEmployerPrivate(data) {
+      return data.keys().hasAll([
+          'ownerUid', 'contactPerson', 'mobile', 'mobileVerified',
+          'email', 'businessAddress', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid', 'contactPerson', 'mobile', 'mobileVerified',
+          'email', 'businessAddress', 'gstNumber', 'establishmentDetails',
+          'workforceNotes', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerUid)
+        && data.contactPerson is string && data.contactPerson.size() >= 2 && data.contactPerson.size() <= 120
+        && data.mobile is string && data.mobile.size() >= 10 && data.mobile.size() <= 20
+        && data.mobileVerified is bool
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && data.businessAddress is string && data.businessAddress.size() >= 4 && data.businessAddress.size() <= 300
+        && (!('gstNumber' in data) || (data.gstNumber is string && data.gstNumber.size() <= 30))
+        && (!('establishmentDetails' in data) || (data.establishmentDetails is string && data.establishmentDetails.size() <= 600))
+        && (!('workforceNotes' in data) || (data.workforceNotes is string && data.workforceNotes.size() <= 600))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidJob(data) {
+      return data.keys().hasAll([
+          'employerUid', 'employerName', 'title', 'category', 'description',
+          'workersRequired', 'requiredSkills', 'state', 'district', 'cityOrVillage',
+          'workLocationLabel', 'lat', 'lng', 'workType', 'offeredWage', 'wageUnit',
+          'paymentTerms', 'contactPreference', 'isWomenFriendly', 'isAccessible',
+          'biddingEnabled', 'status', 'applicationsCount', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'employerUid', 'employerName', 'title', 'category', 'description',
+          'workersRequired', 'requiredSkills', 'state', 'district', 'cityOrVillage',
+          'workLocationLabel', 'lat', 'lng', 'jobDate', 'startTime', 'duration',
+          'workType', 'offeredWage', 'wageUnit', 'paymentTerms', 'contactPreference',
+          'isWomenFriendly', 'isAccessible', 'biddingEnabled', 'status',
+          'applicationsCount', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.employerUid)
+        && data.employerName is string && data.employerName.size() >= 2 && data.employerName.size() <= 160
+        && data.title is string && data.title.size() >= 3 && data.title.size() <= 140
+        && data.category is string && data.category.size() >= 2 && data.category.size() <= 80
+        && data.description is string && data.description.size() >= 10 && data.description.size() <= 2000
+        && data.workersRequired is number && data.workersRequired >= 1 && data.workersRequired <= 5000
+        && data.requiredSkills is list && data.requiredSkills.size() >= 1 && data.requiredSkills.size() <= 15 && data.requiredSkills[0] is string
+        && data.state is string && data.state.size() >= 2 && data.state.size() <= 80
+        && data.district is string && data.district.size() >= 2 && data.district.size() <= 80
+        && data.cityOrVillage is string && data.cityOrVillage.size() >= 2 && data.cityOrVillage.size() <= 100
+        && data.workLocationLabel is string && data.workLocationLabel.size() >= 2 && data.workLocationLabel.size() <= 160
+        && data.lat is number && data.lat >= -90 && data.lat <= 90
+        && data.lng is number && data.lng >= -180 && data.lng <= 180
+        && (!('jobDate' in data) || (data.jobDate is string && data.jobDate.size() <= 30))
+        && (!('startTime' in data) || (data.startTime is string && data.startTime.size() <= 30))
+        && (!('duration' in data) || (data.duration is string && data.duration.size() <= 60))
+        && data.workType in ['full_time', 'part_time', 'daily_wage', 'contract', 'temporary', 'urgent', 'bulk']
+        && data.offeredWage is number && data.offeredWage >= 0 && data.offeredWage <= 500000
+        && data.wageUnit in ['daily', 'monthly', 'hourly', 'contract']
+        && data.paymentTerms is string && data.paymentTerms.size() <= 200
+        && data.contactPreference in ['platform_message', 'phone_after_confirm']
+        && data.isWomenFriendly is bool
+        && data.isAccessible is bool
+        && data.biddingEnabled is bool
+        && data.status in ['open', 'in_progress', 'completed', 'cancelled', 'flagged']
+        && data.applicationsCount is number && data.applicationsCount >= 0 && data.applicationsCount <= 100000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidApplication(data) {
+      return data.keys().hasAll([
+          'jobId', 'jobTitle', 'employerUid', 'workerUid', 'workerRegistrationId',
+          'workerName', 'workerPrimarySkill', 'proposedWage', 'status',
+          'liveTrackingAuthorized', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'jobId', 'jobTitle', 'employerUid', 'workerUid', 'workerRegistrationId',
+          'workerName', 'workerPrimarySkill', 'proposedWage', 'note', 'status',
+          'liveTrackingAuthorized', 'workerRating', 'employerFeedback',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.jobId)
+        && data.jobTitle is string && data.jobTitle.size() >= 2 && data.jobTitle.size() <= 140
+        && isValidId(data.employerUid)
+        && isValidId(data.workerUid)
+        && data.workerRegistrationId is string && data.workerRegistrationId.size() >= 5 && data.workerRegistrationId.size() <= 40
+        && data.workerName is string && data.workerName.size() >= 2 && data.workerName.size() <= 120
+        && data.workerPrimarySkill is string && data.workerPrimarySkill.size() >= 2 && data.workerPrimarySkill.size() <= 80
+        && data.proposedWage is number && data.proposedWage >= 0 && data.proposedWage <= 500000
+        && (!('note' in data) || (data.note is string && data.note.size() <= 600))
+        && data.status in ['applied', 'invited', 'accepted', 'declined', 'work_completed']
+        && data.liveTrackingAuthorized is bool
+        && (!('workerRating' in data) || (data.workerRating is number && data.workerRating >= 1 && data.workerRating <= 5))
+        && (!('employerFeedback' in data) || (data.employerFeedback is string && data.employerFeedback.size() <= 500))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPartnershipEnquiry(data) {
+      return data.keys().hasAll([
+          'submitterUid', 'organisationName', 'departmentOrInstitution',
+          'contactPerson', 'designation', 'email', 'phone', 'state',
+          'district', 'partnershipInterest', 'message', 'status',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'submitterUid', 'organisationName', 'departmentOrInstitution',
+          'contactPerson', 'designation', 'email', 'phone', 'state',
+          'district', 'partnershipInterest', 'message', 'attachmentName',
+          'status', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.submitterUid)
+        && data.organisationName is string && data.organisationName.size() >= 2 && data.organisationName.size() <= 160
+        && data.departmentOrInstitution is string && data.departmentOrInstitution.size() >= 2 && data.departmentOrInstitution.size() <= 160
+        && data.contactPerson is string && data.contactPerson.size() >= 2 && data.contactPerson.size() <= 120
+        && data.designation is string && data.designation.size() >= 2 && data.designation.size() <= 120
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && data.phone is string && data.phone.size() >= 8 && data.phone.size() <= 20
+        && data.state is string && data.state.size() >= 2 && data.state.size() <= 80
+        && data.district is string && data.district.size() >= 2 && data.district.size() <= 80
+        && data.partnershipInterest is string && data.partnershipInterest.size() >= 2 && data.partnershipInterest.size() <= 120
+        && data.message is string && data.message.size() >= 5 && data.message.size() <= 2000
+        && (!('attachmentName' in data) || (data.attachmentName is string && data.attachmentName.size() <= 200))
+        && data.status in ['received', 'under_review', 'responded', 'archived']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidGrievance(data) {
+      return data.keys().hasAll([
+          'reporterUid', 'category', 'subject', 'description',
+          'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'reporterUid', 'category', 'targetReference', 'subject',
+          'description', 'status', 'adminNotes', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.reporterUid)
+        && data.category in ['fraudulent_job', 'non_payment', 'harassment', 'unsafe_workplace', 'account_appeal', 'other']
+        && (!('targetReference' in data) || (data.targetReference is string && data.targetReference.size() <= 140))
+        && data.subject is string && data.subject.size() >= 3 && data.subject.size() <= 160
+        && data.description is string && data.description.size() >= 10 && data.description.size() <= 2000
+        && data.status in ['open', 'under_review', 'resolved', 'dismissed']
+        && (!('adminNotes' in data) || (data.adminNotes is string && data.adminNotes.size() <= 1000))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAnnouncement(data) {
+      return data.keys().hasAll([
+          'titleEn', 'titleHi', 'titleMr', 'bodyEn', 'bodyHi', 'bodyMr',
+          'active', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'titleEn', 'titleHi', 'titleMr', 'bodyEn', 'bodyHi', 'bodyMr',
+          'active', 'createdAt', 'updatedAt'
+        ])
+        && data.titleEn is string && data.titleEn.size() >= 2 && data.titleEn.size() <= 160
+        && data.titleHi is string && data.titleHi.size() >= 2 && data.titleHi.size() <= 160
+        && data.titleMr is string && data.titleMr.size() >= 2 && data.titleMr.size() <= 160
+        && data.bodyEn is string && data.bodyEn.size() >= 2 && data.bodyEn.size() <= 500
+        && data.bodyHi is string && data.bodyHi.size() >= 2 && data.bodyHi.size() <= 500
+        && data.bodyMr is string && data.bodyMr.size() >= 2 && data.bodyMr.size() <= 500
+        && data.active is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAuditLog(data) {
+      return data.keys().hasAll(['adminUid', 'adminEmail', 'action', 'targetCollection', 'targetId', 'createdAt'])
+        && data.keys().hasOnly(['adminUid', 'adminEmail', 'action', 'targetCollection', 'targetId', 'details', 'createdAt'])
+        && isValidId(data.adminUid)
+        && data.adminEmail is string && data.adminEmail.size() >= 3 && data.adminEmail.size() <= 200
+        && data.action is string && data.action.size() >= 2 && data.action.size() <= 120
+        && data.targetCollection is string && data.targetCollection.size() >= 2 && data.targetCollection.size() <= 80
+        && data.targetId is string && data.targetId.size() >= 1 && data.targetId.size() <= 128
+        && (!('details' in data) || (data.details is string && data.details.size() <= 500))
+        && data.createdAt is timestamp;
+    }
+
+    function isValidVehicleListing(data) {
+      return data.keys().hasAll([
+          'ownerUid', 'registrationId', 'ownerDisplayName', 'vehicleType', 'vehicleTitle',
+          'vehicleNumberMasked', 'seatingOrCapacity', 'acAvailable', 'withDriver',
+          'ratePerKm', 'ratePerDay', 'minFare', 'availabilityStatus', 'state', 'district',
+          'cityOrVillage', 'approxLat', 'approxLng', 'languagesKnown', 'verificationStatus',
+          'completedTripsCount', 'ratingAvg', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid', 'registrationId', 'ownerDisplayName', 'vehicleType', 'vehicleTitle',
+          'vehicleNumberMasked', 'seatingOrCapacity', 'acAvailable', 'withDriver',
+          'ratePerKm', 'ratePerDay', 'minFare', 'availabilityStatus', 'state', 'district',
+          'cityOrVillage', 'approxLat', 'approxLng', 'languagesKnown', 'serviceNotes',
+          'verificationStatus', 'completedTripsCount', 'ratingAvg', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerUid)
+        && data.registrationId is string && data.registrationId.size() >= 5 && data.registrationId.size() <= 40
+        && data.ownerDisplayName is string && data.ownerDisplayName.size() >= 2 && data.ownerDisplayName.size() <= 120
+        && data.vehicleType in ['bike_taxi', 'auto_rickshaw', 'car_sedan', 'suv_innova', 'trolley_cart', 'mini_tempo', 'pickup_tempo', 'tractor']
+        && data.vehicleTitle is string && data.vehicleTitle.size() >= 2 && data.vehicleTitle.size() <= 120
+        && data.vehicleNumberMasked is string && data.vehicleNumberMasked.size() >= 4 && data.vehicleNumberMasked.size() <= 20
+        && data.seatingOrCapacity is string && data.seatingOrCapacity.size() >= 1 && data.seatingOrCapacity.size() <= 60
+        && data.acAvailable is bool
+        && data.withDriver is bool
+        && data.ratePerKm is number && data.ratePerKm >= 0 && data.ratePerKm <= 500
+        && data.ratePerDay is number && data.ratePerDay >= 0 && data.ratePerDay <= 50000
+        && data.minFare is number && data.minFare >= 0 && data.minFare <= 50000
+        && data.availabilityStatus in ['available', 'busy', 'offline']
+        && data.state is string && data.state.size() >= 2 && data.state.size() <= 80
+        && data.district is string && data.district.size() >= 2 && data.district.size() <= 80
+        && data.cityOrVillage is string && data.cityOrVillage.size() >= 2 && data.cityOrVillage.size() <= 100
+        && data.approxLat is number && data.approxLat >= -90 && data.approxLat <= 90
+        && data.approxLng is number && data.approxLng >= -180 && data.approxLng <= 180
+        && data.languagesKnown is list && data.languagesKnown.size() >= 1 && data.languagesKnown.size() <= 10 && data.languagesKnown[0] is string
+        && (!('serviceNotes' in data) || (data.serviceNotes is string && data.serviceNotes.size() <= 500))
+        && data.verificationStatus in ['pending', 'verified', 'suspended']
+        && data.completedTripsCount is number && data.completedTripsCount >= 0 && data.completedTripsCount <= 100000
+        && data.ratingAvg is number && data.ratingAvg >= 0 && data.ratingAvg <= 5
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidVehiclePrivate(data) {
+      return data.keys().hasAll([
+          'ownerUid', 'ownerName', 'mobile', 'mobileVerified', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid', 'ownerName', 'mobile', 'mobileVerified', 'email',
+          'rcOrLicenseNotes', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerUid)
+        && data.ownerName is string && data.ownerName.size() >= 2 && data.ownerName.size() <= 120
+        && data.mobile is string && data.mobile.size() >= 10 && data.mobile.size() <= 20
+        && data.mobileVerified is bool
+        && (!('email' in data) || (data.email is string && data.email.size() <= 200))
+        && (!('rcOrLicenseNotes' in data) || (data.rcOrLicenseNotes is string && data.rcOrLicenseNotes.size() <= 500))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidVehicleBooking(data) {
+      return data.keys().hasAll([
+          'vehicleId', 'vehicleTitle', 'vehicleType', 'ownerUid', 'customerUid',
+          'customerName', 'pickupLocation', 'dropLocation', 'tripType', 'travelDate',
+          'travelTime', 'passengersCount', 'offeredFare', 'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'vehicleId', 'vehicleTitle', 'vehicleType', 'ownerUid', 'customerUid',
+          'customerName', 'pickupLocation', 'dropLocation', 'tripType', 'travelDate',
+          'travelTime', 'passengersCount', 'offeredFare', 'note', 'status',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.vehicleId)
+        && data.vehicleTitle is string && data.vehicleTitle.size() >= 2 && data.vehicleTitle.size() <= 140
+        && data.vehicleType in ['bike_taxi', 'auto_rickshaw', 'car_sedan', 'suv_innova', 'trolley_cart', 'mini_tempo', 'pickup_tempo', 'tractor']
+        && isValidId(data.ownerUid)
+        && isValidId(data.customerUid)
+        && data.customerName is string && data.customerName.size() >= 2 && data.customerName.size() <= 120
+        && data.pickupLocation is string && data.pickupLocation.size() >= 2 && data.pickupLocation.size() <= 160
+        && data.dropLocation is string && data.dropLocation.size() >= 2 && data.dropLocation.size() <= 160
+        && data.tripType in ['one_way', 'round_trip', 'hourly', 'full_day']
+        && data.travelDate is string && data.travelDate.size() >= 4 && data.travelDate.size() <= 30
+        && data.travelTime is string && data.travelTime.size() >= 2 && data.travelTime.size() <= 30
+        && data.passengersCount is number && data.passengersCount >= 1 && data.passengersCount <= 100
+        && data.offeredFare is number && data.offeredFare >= 0 && data.offeredFare <= 500000
+        && (!('note' in data) || (data.note is string && data.note.size() <= 600))
+        && data.status in ['requested', 'accepted', 'declined', 'completed', 'cancelled']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCustomerPreference(data) {
+      return data.keys().hasAll([
+          'ownerUid', 'frequentWorkerCategories', 'frequentVehicleTypes',
+          'totalHireOrders', 'totalTransportOrders', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid', 'defaultState', 'defaultDistrict', 'defaultCityOrVillage',
+          'defaultLat', 'defaultLng', 'savedAddressLabel', 'frequentWorkerCategories',
+          'frequentVehicleTypes', 'totalHireOrders', 'totalTransportOrders',
+          'lastOrderTitle', 'lastOrderCategory', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerUid)
+        && (!('defaultState' in data) || (data.defaultState is string && data.defaultState.size() <= 80))
+        && (!('defaultDistrict' in data) || (data.defaultDistrict is string && data.defaultDistrict.size() <= 80))
+        && (!('defaultCityOrVillage' in data) || (data.defaultCityOrVillage is string && data.defaultCityOrVillage.size() <= 100))
+        && (!('defaultLat' in data) || (data.defaultLat is number && data.defaultLat >= -90 && data.defaultLat <= 90))
+        && (!('defaultLng' in data) || (data.defaultLng is number && data.defaultLng >= -180 && data.defaultLng <= 180))
+        && (!('savedAddressLabel' in data) || (data.savedAddressLabel is string && data.savedAddressLabel.size() <= 160))
+        && data.frequentWorkerCategories is list && data.frequentWorkerCategories.size() <= 10
+        && (data.frequentWorkerCategories.size() == 0 || data.frequentWorkerCategories[0] is string)
+        && data.frequentVehicleTypes is list && data.frequentVehicleTypes.size() <= 10
+        && (data.frequentVehicleTypes.size() == 0 || data.frequentVehicleTypes[0] is string)
+        && data.totalHireOrders is number && data.totalHireOrders >= 0 && data.totalHireOrders <= 100000
+        && data.totalTransportOrders is number && data.totalTransportOrders >= 0 && data.totalTransportOrders <= 100000
+        && (!('lastOrderTitle' in data) || (data.lastOrderTitle is string && data.lastOrderTitle.size() <= 160))
+        && (!('lastOrderCategory' in data) || (data.lastOrderCategory is string && data.lastOrderCategory.size() <= 80))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Collection Rules
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserAccount(incoming())
+        && incoming().uid == userId
+        && (incoming().role in ['worker', 'employer'] || isAdmin())
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(userId)
+        && isValidUserAccount(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().uid == existing().uid
+        && (
+          isAdmin() ||
+          (
+            isOwner(userId)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'preferredLanguage', 'role', 'updatedAt'])
+            && incoming().role in ['worker', 'employer']
+          )
+        );
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    match /admins/{adminId} {
+      allow get: if isValidId(adminId) && (isOwner(adminId) || isAdmin());
+      allow list: if isAdmin();
+      allow create, update: if isValidId(adminId) && isAdmin() && isValidAdminMember(incoming());
+      allow delete: if isValidId(adminId) && isAdmin();
+    }
+
+    match /publicWorkers/{workerId} {
+      allow get: if isValidId(workerId);
+      allow list: if true;
+      allow create: if isValidId(workerId)
+        && isOwner(workerId)
+        && isValidPublicWorker(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().verificationStatus == 'pending'
+        && incoming().completedJobsCount == 0
+        && incoming().ratingAvg == 0
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(workerId)
+        && isVerifiedUser()
+        && isValidPublicWorker(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().registrationId == existing().registrationId
+        && (
+          isAdmin() ||
+          (
+            isOwner(existing().ownerUid)
+            && existing().verificationStatus != 'suspended'
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'displayName', 'primarySkill', 'skills', 'experienceYears',
+              'expectedWage', 'wageUnit', 'preferredWorkType', 'availabilityStatus',
+              'state', 'district', 'cityOrVillage', 'approxLat', 'approxLng',
+              'languagesKnown', 'gender', 'education', 'isWomenEnterprise', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isValidId(workerId) && isAdmin();
+    }
+
+    match /workerPrivate/{workerId} {
+      allow get: if isValidId(workerId) && (isOwner(workerId) || isAdmin());
+      allow list: if isVerifiedUser() && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow create: if isValidId(workerId)
+        && isOwner(workerId)
+        && isValidWorkerPrivate(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().idVerificationStatus in ['not_submitted', 'voluntary_pending']
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(workerId)
+        && isVerifiedUser()
+        && isValidWorkerPrivate(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && (
+          isAdmin() ||
+          (
+            isOwner(existing().ownerUid)
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'fullName', 'mobile', 'mobileVerified', 'email', 'ageConfirmed',
+              'preferredWorkLocation', 'liveLocationConsent', 'privacyConsent',
+              'idVerificationStatus', 'certificateNotes', 'photoUrl', 'updatedAt'
+            ])
+            && incoming().idVerificationStatus in ['not_submitted', 'voluntary_pending']
+          )
+        );
+      allow delete: if isValidId(workerId) && isAdmin();
+    }
+
+    match /publicEmployers/{employerId} {
+      allow get: if isValidId(employerId);
+      allow list: if true;
+      allow create: if isValidId(employerId)
+        && isOwner(employerId)
+        && isValidPublicEmployer(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().verificationStatus == 'pending'
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(employerId)
+        && isVerifiedUser()
+        && isValidPublicEmployer(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().registrationId == existing().registrationId
+        && (
+          isAdmin() ||
+          (
+            isOwner(existing().ownerUid)
+            && existing().verificationStatus != 'suspended'
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'businessName', 'businessType', 'industryCategory',
+              'state', 'district', 'requiredCategories', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isValidId(employerId) && isAdmin();
+    }
+
+    match /employerPrivate/{employerId} {
+      allow get: if isValidId(employerId) && (isOwner(employerId) || isAdmin());
+      allow list: if isVerifiedUser() && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow create: if isValidId(employerId)
+        && isOwner(employerId)
+        && isValidEmployerPrivate(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(employerId)
+        && isVerifiedUser()
+        && isValidEmployerPrivate(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && (
+          isAdmin() ||
+          (
+            isOwner(existing().ownerUid)
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'contactPerson', 'mobile', 'mobileVerified', 'email',
+              'businessAddress', 'gstNumber', 'establishmentDetails',
+              'workforceNotes', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isValidId(employerId) && isAdmin();
+    }
+
+    match /jobs/{jobId} {
+      allow get: if isValidId(jobId);
+      allow list: if true;
+      allow create: if isValidId(jobId)
+        && isVerifiedUser()
+        && isValidJob(incoming())
+        && incoming().employerUid == request.auth.uid
+        && incoming().status == 'open'
+        && incoming().applicationsCount == 0
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(jobId)
+        && isVerifiedUser()
+        && isValidJob(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().employerUid == existing().employerUid
+        && (
+          isAdmin() ||
+          (
+            isOwner(existing().employerUid)
+            && !(existing().status in ['completed', 'cancelled'])
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'title', 'category', 'description', 'workersRequired',
+              'requiredSkills', 'state', 'district', 'cityOrVillage',
+              'workLocationLabel', 'lat', 'lng', 'jobDate', 'startTime',
+              'duration', 'workType', 'offeredWage', 'wageUnit',
+              'paymentTerms', 'contactPreference', 'isWomenFriendly',
+              'isAccessible', 'biddingEnabled', 'status', 'updatedAt'
+            ])
+          ) ||
+          (
+            existing().status == 'open'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['applicationsCount', 'updatedAt'])
+            && incoming().applicationsCount == existing().applicationsCount + 1
+          )
+        );
+      allow delete: if isValidId(jobId) && isAdmin();
+    }
+
+    match /applications/{applicationId} {
+      allow get: if isValidId(applicationId)
+        && isVerifiedUser()
+        && (existing().workerUid == request.auth.uid || existing().employerUid == request.auth.uid || isAdmin());
+      allow list: if isVerifiedUser()
+        && (existing().workerUid == request.auth.uid || existing().employerUid == request.auth.uid || isAdmin());
+      allow create: if isValidId(applicationId)
+        && isVerifiedUser()
+        && isValidApplication(incoming())
+        && (
+          (incoming().workerUid == request.auth.uid && incoming().status == 'applied') ||
+          (incoming().employerUid == request.auth.uid && incoming().status == 'invited')
+        )
+        && incoming().liveTrackingAuthorized == false
+        && isValidTimestampOnCreate()
+        && get(/databases/$(database)/documents/jobs/$(incoming().jobId)).data.employerUid == incoming().employerUid;
+      allow update: if isValidId(applicationId)
+        && isVerifiedUser()
+        && isValidApplication(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().jobId == existing().jobId
+        && incoming().employerUid == existing().employerUid
+        && incoming().workerUid == existing().workerUid
+        && (
+          isAdmin() ||
+          (
+            existing().status != 'work_completed'
+            && isOwner(existing().workerUid)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'proposedWage', 'note', 'liveTrackingAuthorized', 'updatedAt'])
+            && incoming().status in ['applied', 'accepted', 'declined']
+            && (!incoming().liveTrackingAuthorized || incoming().status == 'accepted')
+          ) ||
+          (
+            existing().status != 'work_completed'
+            && isOwner(existing().employerUid)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'workerRating', 'employerFeedback', 'updatedAt'])
+            && incoming().status in ['invited', 'accepted', 'declined', 'work_completed']
+          )
+        );
+      allow delete: if isValidId(applicationId) && isAdmin();
+    }
+
+    match /partnershipEnquiries/{enquiryId} {
+      allow get: if isValidId(enquiryId) && isVerifiedUser() && (existing().submitterUid == request.auth.uid || isAdmin());
+      allow list: if isVerifiedUser() && (existing().submitterUid == request.auth.uid || isAdmin());
+      allow create: if isValidId(enquiryId)
+        && isVerifiedUser()
+        && isValidPartnershipEnquiry(incoming())
+        && incoming().submitterUid == request.auth.uid
+        && incoming().status == 'received'
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(enquiryId)
+        && isAdmin()
+        && isValidPartnershipEnquiry(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().submitterUid == existing().submitterUid;
+      allow delete: if isValidId(enquiryId) && isAdmin();
+    }
+
+    match /grievances/{grievanceId} {
+      allow get: if isValidId(grievanceId) && isVerifiedUser() && (existing().reporterUid == request.auth.uid || isAdmin());
+      allow list: if isVerifiedUser() && (existing().reporterUid == request.auth.uid || isAdmin());
+      allow create: if isValidId(grievanceId)
+        && isVerifiedUser()
+        && isValidGrievance(incoming())
+        && incoming().reporterUid == request.auth.uid
+        && incoming().status == 'open'
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(grievanceId)
+        && isAdmin()
+        && isValidGrievance(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().reporterUid == existing().reporterUid;
+      allow delete: if isValidId(grievanceId) && isAdmin();
+    }
+
+    match /announcements/{announcementId} {
+      allow get: if isValidId(announcementId);
+      allow list: if true;
+      allow create: if isValidId(announcementId)
+        && isAdmin()
+        && isValidAnnouncement(incoming())
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(announcementId)
+        && isAdmin()
+        && isValidAnnouncement(incoming())
+        && isValidTimestampOnUpdate();
+      allow delete: if isValidId(announcementId) && isAdmin();
+    }
+
+    match /auditLogs/{logId} {
+      allow get: if isValidId(logId) && isAdmin();
+      allow list: if isAdmin();
+      allow create: if isValidId(logId)
+        && isAdmin()
+        && isValidAuditLog(incoming())
+        && incoming().adminUid == request.auth.uid
+        && incoming().createdAt == request.time;
+      allow update, delete: if false;
+    }
+
+    match /vehicleListings/{vehicleId} {
+      allow get: if isValidId(vehicleId);
+      allow list: if true;
+      allow create: if isValidId(vehicleId)
+        && isVerifiedUser()
+        && isValidVehicleListing(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().verificationStatus == 'pending'
+        && incoming().completedTripsCount == 0
+        && incoming().ratingAvg == 0
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(vehicleId)
+        && isVerifiedUser()
+        && isValidVehicleListing(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().registrationId == existing().registrationId
+        && (
+          isAdmin() ||
+          (
+            isOwner(existing().ownerUid)
+            && existing().verificationStatus != 'suspended'
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'ownerDisplayName', 'vehicleType', 'vehicleTitle', 'vehicleNumberMasked',
+              'seatingOrCapacity', 'acAvailable', 'withDriver', 'ratePerKm', 'ratePerDay',
+              'minFare', 'availabilityStatus', 'state', 'district', 'cityOrVillage',
+              'approxLat', 'approxLng', 'languagesKnown', 'serviceNotes', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isValidId(vehicleId) && isAdmin();
+    }
+
+    match /vehiclePrivate/{vehicleId} {
+      allow get: if isValidId(vehicleId)
+        && isVerifiedUser()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isVerifiedUser() && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow create: if isValidId(vehicleId)
+        && isVerifiedUser()
+        && isValidVehiclePrivate(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(vehicleId)
+        && isVerifiedUser()
+        && isValidVehiclePrivate(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && (isAdmin() || isOwner(existing().ownerUid));
+      allow delete: if isValidId(vehicleId) && isAdmin();
+    }
+
+    match /vehicleBookings/{bookingId} {
+      allow get: if isValidId(bookingId)
+        && isVerifiedUser()
+        && (existing().customerUid == request.auth.uid || existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isVerifiedUser()
+        && (existing().customerUid == request.auth.uid || existing().ownerUid == request.auth.uid || isAdmin());
+      allow create: if isValidId(bookingId)
+        && isVerifiedUser()
+        && isValidVehicleBooking(incoming())
+        && incoming().customerUid == request.auth.uid
+        && incoming().status == 'requested'
+        && isValidTimestampOnCreate()
+        && get(/databases/$(database)/documents/vehicleListings/$(incoming().vehicleId)).data.ownerUid == incoming().ownerUid;
+      allow update: if isValidId(bookingId)
+        && isVerifiedUser()
+        && isValidVehicleBooking(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().vehicleId == existing().vehicleId
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().customerUid == existing().customerUid
+        && !(existing().status in ['completed', 'cancelled', 'declined'])
+        && (
+          isAdmin() ||
+          (
+            isOwner(existing().ownerUid)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+            && incoming().status in ['accepted', 'declined', 'completed']
+          ) ||
+          (
+            isOwner(existing().customerUid)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+            && incoming().status in ['cancelled', 'completed']
+          )
+        );
+      allow delete: if isValidId(bookingId) && isAdmin();
+    }
+
+    match /customerPreferences/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(userId)
+        && isOwner(userId)
+        && isValidCustomerPreference(incoming())
+        && incoming().ownerUid == userId
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(userId)
+        && isVerifiedUser()
+        && isValidCustomerPreference(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && (isAdmin() || isOwner(userId));
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+  }
+}
