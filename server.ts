@@ -9,6 +9,7 @@ import express from 'express';
 import type { Request, Response } from 'express';
 import { EMPLOYMENT_CATEGORIES } from './src/data/categories.ts';
 import { calculateDistanceKm, findNearestDistrict, INDIA_STATES_DISTRICTS } from './src/data/indiaLocations.ts';
+import { registerNotificationRoutes } from './src/server/notificationsEngine.ts';
 
 dotenv.config();
 
@@ -234,6 +235,8 @@ async function startServer() {
       smsGatewayConfigured: Boolean(process.env.SMS_PROVIDER_API_KEY),
     });
   });
+
+  registerNotificationRoutes(app, __dirname);
 
   // Google Maps Geocoding API v4 Reverse Proxy (handles CORS & attribution header)
   app.get('/api/geocode/reverse', async (req: Request, res: Response) => {

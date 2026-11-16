@@ -5,19 +5,42 @@ interface BeforeInstallPromptEvent extends Event {
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed'; platform: string }>;
 }
 
+export type DevicePlatform = 'android' | 'ios' | 'desktop';
+export type BrowserFamily = 'chrome' | 'safari' | 'edge' | 'samsung' | 'firefox' | 'other';
+
+function detectDeviceEnvironment(): { platform: DevicePlatform; browser: BrowserFamily } {
+  if (typeof window === 'undefined') {
+    return { platform: 'desktop', browser: 'other' };
+  }
+  const ua = window.navigator.userAgent.toLowerCase();
+  const isIOS = /iphone|ipad|ipod/.test(ua) || (ua.includes('macintosh') && 'ontouchend' in document);
+  const isAndroid = /android/.test(ua);
+  const platform: DevicePlatform = isIOS ? 'ios' : isAndroid ? 'android' : 'desktop';
+
+  let browser: BrowserFamily = 'other';
+  if (/samsungbrowser/.test(ua)) browser = 'samsung';
+  else if (/edg/.test(ua)) browser = 'edge';
+  else if (/firefox|fxios/.test(ua)) browser = 'firefox';
+  else if (/crios|chrome/.test(ua)) browser = 'chrome';
+  else if (/safari/.test(ua)) browser = 'safari';
+
+  return { platform, browser };
+}
+
 export function usePWAInstall() {
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [isInstalled, setIsInstalled] = useState(false);
-  const [isIOS, setIsIOS] = useState(false);
+  const [env, setEnv] = useState<{ platform: DevicePlatform; browser: BrowserFamily }>({
+    platform: 'desktop',
+    browser: 'other',
+  });
 
   useEffect(() => {
     const isStandalone =
       window.matchMedia('(display-mode: standalone)').matches ||
       (window.navigator as unknown as { standalone?: boolean }).standalone === true;
     setIsInstalled(isStandalone);
-
-    const userAgent = window.navigator.userAgent.toLowerCase();
-    setIsIOS(/iphone|ipad|ipod/.test(userAgent));
+    setEnv(detectDeviceEnvironment());
 
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
@@ -38,22 +61,24 @@ export function usePWAInstall() {
     };
   }, []);
 
-  const install = async () => {
-    if (!deferredPrompt) return false;
+  const install = async (): Promise<'accepted' | 'dismissed' | 'unavailable'> => {
+    if (!deferredPrompt) return 'unavailable';
     await deferredPrompt.prompt();
     const { outcome } = await deferredPrompt.userChoice;
     if (outcome === 'accepted') {
       setIsInstalled(true);
       setDeferredPrompt(null);
-      return true;
+      return 'accepted';
     }
-    return false;
+    return 'dismissed';
   };
 
   return {
     isInstallable: !!deferredPrompt,
     isInstalled,
-    isIOS,
+    isIOS: env.platform === 'ios',
+    platform: env.platform,
+    browser: env.browser,
     install,
   };
 }

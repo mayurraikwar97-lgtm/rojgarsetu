@@ -29,6 +29,7 @@ import type {
   PublicWorkerProfile,
 } from '../types/domain';
 import { EmploymentMap } from './EmploymentMap';
+import { PWAInstallButton } from './PWAControls';
 import { ResilientImage } from './ResilientImage';
 
 interface HomeViewProps {
@@ -255,6 +256,10 @@ export const HomeView: React.FC<HomeViewProps> = ({
                       {t.hero.ctaWorker}
                       <ArrowRight className="w-4 h-4" />
                     </button>
+                    <PWAInstallButton
+                      variant="primary"
+                      className="!bg-white/10 !border !border-white/30 !text-white hover:!bg-white/20 !py-2.5 !text-xs sm:!text-sm"
+                    />
                   </div>
                   <p className="text-xs font-semibold text-emerald-300">
                     {t.hero.campaignNote}

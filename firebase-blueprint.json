@@ -396,6 +396,181 @@
         "ownerUid", "frequentWorkerCategories", "frequentVehicleTypes",
         "totalHireOrders", "totalTransportOrders", "createdAt", "updatedAt"
       ]
+    },
+    "DeviceTokenRecord": {
+      "title": "DeviceTokenRecord",
+      "description": "FCM Web Push device registration token bound to a user or isolated demo test worker.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "role": { "type": "string", "enum": ["worker", "employer", "admin", "demo_worker"] },
+        "isDemo": { "type": "boolean" },
+        "demoAccountId": { "type": "string", "maxLength": 128 },
+        "token": { "type": "string", "minLength": 20, "maxLength": 512 },
+        "platform": { "type": "string", "enum": ["android", "ios", "desktop"] },
+        "browser": { "type": "string", "maxLength": 60 },
+        "preferredLanguage": { "type": "string", "enum": ["en", "hi", "mr"] },
+        "enabled": { "type": "boolean" },
+        "userAgentShort": { "type": "string", "maxLength": 160 },
+        "lastSeenAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerUid", "role", "isDemo", "token", "platform", "browser",
+        "preferredLanguage", "enabled", "userAgentShort", "lastSeenAt", "createdAt", "updatedAt"
+      ]
+    },
+    "NotificationPreferences": {
+      "title": "NotificationPreferences",
+      "description": "Granular push notification category preferences per user.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "masterEnabled": { "type": "boolean" },
+        "matchingJobs": { "type": "boolean" },
+        "nearbyJobs": { "type": "boolean" },
+        "applicationUpdates": { "type": "boolean" },
+        "bookingNotifications": { "type": "boolean" },
+        "announcements": { "type": "boolean" },
+        "preferredLanguage": { "type": "string", "enum": ["en", "hi", "mr"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerUid", "masterEnabled", "matchingJobs", "nearbyJobs",
+        "applicationUpdates", "bookingNotifications", "announcements",
+        "preferredLanguage", "createdAt", "updatedAt"
+      ]
+    },
+    "AppNotificationRecord": {
+      "title": "AppNotificationRecord",
+      "description": "User notification inbox item with delivery status and deep-link metadata.",
+      "type": "object",
+      "properties": {
+        "recipientUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "recipientRole": { "type": "string", "enum": ["worker", "employer", "admin", "demo_worker"] },
+        "isDemo": { "type": "boolean" },
+        "category": { "type": "string", "enum": ["matchingJobs", "nearbyJobs", "applicationUpdates", "bookingNotifications", "announcements"] },
+        "title": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "body": { "type": "string", "minLength": 2, "maxLength": 500 },
+        "language": { "type": "string", "enum": ["en", "hi", "mr"] },
+        "targetRoute": { "type": "string", "maxLength": 60 },
+        "targetJobId": { "type": "string", "maxLength": 128 },
+        "targetDemoJobId": { "type": "string", "maxLength": 128 },
+        "dedupeKey": { "type": "string", "maxLength": 200 },
+        "deliveryStatus": { "type": "string", "enum": ["sent", "failed", "in_app_only"] },
+        "errorMessage": { "type": "string", "maxLength": 400 },
+        "read": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "recipientUid", "recipientRole", "isDemo", "category", "title", "body",
+        "language", "targetRoute", "dedupeKey", "deliveryStatus", "read", "createdAt", "updatedAt"
+      ]
+    },
+    "NotificationDeliveryLog": {
+      "title": "NotificationDeliveryLog",
+      "description": "Server-side FCM push delivery log for admin live monitoring and failure inspection.",
+      "type": "object",
+      "properties": {
+        "notificationBatchId": { "type": "string", "maxLength": 128 },
+        "recipientUid": { "type": "string", "maxLength": 128 },
+        "recipientLabel": { "type": "string", "maxLength": 140 },
+        "recipientRole": { "type": "string", "enum": ["worker", "employer", "admin", "demo_worker"] },
+        "isDemo": { "type": "boolean" },
+        "category": { "type": "string", "enum": ["matchingJobs", "nearbyJobs", "applicationUpdates", "bookingNotifications", "announcements"] },
+        "title": { "type": "string", "maxLength": 160 },
+        "body": { "type": "string", "maxLength": 500 },
+        "language": { "type": "string", "enum": ["en", "hi", "mr"] },
+        "targetUrl": { "type": "string", "maxLength": 300 },
+        "status": { "type": "string", "enum": ["sent", "failed"] },
+        "errorCode": { "type": "string", "maxLength": 120 },
+        "errorMessage": { "type": "string", "maxLength": 400 },
+        "fcmMessageId": { "type": "string", "maxLength": 200 },
+        "sentByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "notificationBatchId", "recipientUid", "recipientLabel", "recipientRole",
+        "isDemo", "category", "title", "body", "language", "targetUrl", "status", "sentByUid", "createdAt"
+      ]
+    },
+    "DemoWorkerAccount": {
+      "title": "DemoWorkerAccount",
+      "description": "Isolated DEMO worker profile managed by admins for end-to-end mobile PWA push testing.",
+      "type": "object",
+      "properties": {
+        "adminUid": { "type": "string", "maxLength": 128 },
+        "assignedUid": { "type": "string", "maxLength": 128 },
+        "name": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "maskedMobile": { "type": "string", "minLength": 6, "maxLength": 20 },
+        "primarySkill": { "type": "string", "maxLength": 80 },
+        "skills": { "type": "array" },
+        "state": { "type": "string", "maxLength": 80 },
+        "district": { "type": "string", "maxLength": 80 },
+        "cityOrVillage": { "type": "string", "maxLength": 100 },
+        "preferredLanguage": { "type": "string", "enum": ["en", "hi", "mr"] },
+        "notificationsEnabled": { "type": "boolean" },
+        "status": { "type": "string", "enum": ["DEMO"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "adminUid", "name", "maskedMobile", "primarySkill", "skills", "state",
+        "district", "cityOrVillage", "preferredLanguage", "notificationsEnabled", "status", "createdAt", "updatedAt"
+      ]
+    },
+    "DemoJobPosting": {
+      "title": "DemoJobPosting",
+      "description": "Isolated [DEMO] job posting created by admins for notification and application workflow testing.",
+      "type": "object",
+      "properties": {
+        "adminUid": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "minLength": 3, "maxLength": 160 },
+        "category": { "type": "string", "maxLength": 80 },
+        "description": { "type": "string", "maxLength": 1000 },
+        "workersRequired": { "type": "number" },
+        "offeredWage": { "type": "number" },
+        "wageUnit": { "type": "string", "enum": ["daily", "monthly", "hourly", "contract"] },
+        "workType": { "type": "string", "enum": ["full_time", "part_time", "daily_wage", "contract", "temporary", "urgent", "bulk"] },
+        "state": { "type": "string", "maxLength": 80 },
+        "district": { "type": "string", "maxLength": 80 },
+        "cityOrVillage": { "type": "string", "maxLength": 100 },
+        "status": { "type": "string", "enum": ["open", "closed"] },
+        "isDemo": { "type": "boolean" },
+        "applicationsCount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "adminUid", "title", "category", "description", "workersRequired",
+        "offeredWage", "wageUnit", "workType", "state", "district", "cityOrVillage",
+        "status", "isDemo", "applicationsCount", "createdAt", "updatedAt"
+      ]
+    },
+    "DemoJobApplication": {
+      "title": "DemoJobApplication",
+      "description": "Isolated demo job application submitted by a demo tester.",
+      "type": "object",
+      "properties": {
+        "demoJobId": { "type": "string", "maxLength": 128 },
+        "demoJobTitle": { "type": "string", "maxLength": 160 },
+        "demoAccountId": { "type": "string", "maxLength": 128 },
+        "applicantUid": { "type": "string", "maxLength": 128 },
+        "workerName": { "type": "string", "maxLength": 120 },
+        "proposedWage": { "type": "number" },
+        "note": { "type": "string", "maxLength": 400 },
+        "status": { "type": "string", "enum": ["applied", "reviewed"] },
+        "isDemo": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "demoJobId", "demoJobTitle", "demoAccountId", "applicantUid",
+        "workerName", "proposedWage", "status", "isDemo", "createdAt", "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -462,6 +637,35 @@
     "/customerPreferences/{userId}": {
       "schema": { "$ref": "#/entities/CustomerPreference" },
       "description": "Frequent hirer saved locations, repeated worker trades, and local transport preferences."
+    },
+    "/device_tokens/{tokenId}": {
+      "schema": { "$ref": "#/entities/DeviceTokenRecord" },
+      "description": "FCM Web Push device tokens per signed-in user or isolated demo tester."
+    },
+    "/notification_preferences/{userId}": {
+      "schema": { "$ref": "#/entities/NotificationPreferences" },
+      "description": "User notification category preferences and master toggle."
+    },
+    "/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/AppNotificationRecord" },
+      "description": "Multilingual user notification history items and delivery state."
+    },
+    "/notification_delivery_logs/{logId}": {
+      "schema": { "$ref": "#/entities/NotificationDeliveryLog" },
+      "description": "Admin delivery audit logs showing real sent/failed FCM outcomes."
+    },
+    "/demo_accounts/{accountId}": {
+      "schema": { "$ref": "#/entities/DemoWorkerAccount" },
+      "description": "Isolated DEMO worker accounts excluded from real production statistics."
+    },
+    "/demo_jobs/{demoJobId}": {
+      "schema": { "$ref": "#/entities/DemoJobPosting" },
+      "description": "Isolated [DEMO] jobs excluded from real job listings and statistics."
+    },
+    "/demo_applications/{demoAppId}": {
+      "schema": { "$ref": "#/entities/DemoJobApplication" },
+      "description": "Isolated demo job applications submitted during admin live demo tests."
     }
   }
 }
+

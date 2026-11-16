@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  BellRing,
   Bike,
   BookmarkCheck,
   Briefcase,
@@ -22,6 +23,8 @@ import {
   Zap,
 } from 'lucide-react';
 import { RojgarSetuLogo } from './RojgarSetuLogo';
+import { UserNotificationCenter } from './UserNotificationCenter';
+import { AdminNotificationDemoPanel } from './AdminNotificationDemoPanel';
 import { doc, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { getVehicleTypeLabel } from '../data/vehicleTypes';
@@ -35,6 +38,7 @@ import {
   adminUpdateGrievanceStatus,
   adminUpdateJobStatus,
   adminUpdateVerification,
+  callNotificationApi,
   saveCustomerDefaultLocation,
   subscribeAdminAuditLogs,
   subscribeAdminEnquiries,
@@ -106,9 +110,18 @@ function formatFirestoreTimestamp(ts: unknown): string {
 interface WorkerDashboardProps {
   jobs: JobPosting[];
   onNavigate: (route: PageRoute, categoryFilter?: string) => void;
+  onNavigateToTarget?: (route: PageRoute, jobId?: string, demoJobId?: string) => void;
+  highlightedDemoJobId?: string;
+  onClearHighlightedDemoJob?: () => void;
 }
 
-export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({ jobs, onNavigate }) => {
+export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
+  jobs,
+  onNavigate,
+  onNavigateToTarget,
+  highlightedDemoJobId,
+  onClearHighlightedDemoJob,
+}) => {
   const { lang, t } = useLanguage();
   const { user, workerProfile, workerPrivate, signInWithGoogle, refreshUserProfiles } = useAuth();
   const [applications, setApplications] = useState<JobApplication[]>([]);
@@ -188,9 +201,36 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({ jobs, onNa
         status: decision,
         liveTrackingAuthorized: false,
       });
+      void callNotificationApi('/api/notifications/send-customer-event', {
+        recipientUid: app.employerUid,
+        eventType: decision === 'accepted' ? 'booking_accepted' : 'booking_cancelled',
+        workerName: workerProfile?.displayName || 'Worker',
+        jobTitle: app.jobTitle,
+        jobId: app.jobId,
+        targetRoute: 'employer-dashboard',
+      }).catch(() => undefined);
     } finally {
       setBusyActionId(null);
     }
+  };
+
+  const handleVehicleBookingDecision = async (
+    b: VehicleBooking,
+    nextStatus: 'accepted' | 'declined' | 'completed'
+  ) => {
+    await updateVehicleBookingStatus(b.id, nextStatus);
+    void callNotificationApi('/api/notifications/send-customer-event', {
+      recipientUid: b.customerUid,
+      eventType:
+        nextStatus === 'accepted'
+          ? 'booking_accepted'
+          : nextStatus === 'completed'
+          ? 'job_completed'
+          : 'booking_cancelled',
+      workerName: b.vehicleTitle,
+      jobTitle: `${b.vehicleTitle} (${b.pickupLocation} → ${b.dropLocation})`,
+      targetRoute: 'employer-dashboard',
+    }).catch(() => undefined);
   };
 
   if (!user) {
@@ -338,14 +378,14 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({ jobs, onNa
                       <>
                         <button
                           type="button"
-                          onClick={() => updateVehicleBookingStatus(b.id, 'accepted')}
+                          onClick={() => handleVehicleBookingDecision(b, 'accepted')}
                           className="px-3 py-1.5 rounded bg-[#15803D] text-white text-xs font-semibold cursor-pointer"
                         >
                           {t.dashboards.acceptBtn}
                         </button>
                         <button
                           type="button"
-                          onClick={() => updateVehicleBookingStatus(b.id, 'declined')}
+                          onClick={() => handleVehicleBookingDecision(b, 'declined')}
                           className="px-3 py-1.5 rounded border border-slate-300 text-xs font-semibold text-slate-700 cursor-pointer"
                         >
                           {t.dashboards.declineBtn}
@@ -355,7 +395,7 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({ jobs, onNa
                     {b.status === 'accepted' && (
                       <button
                         type="button"
-                        onClick={() => updateVehicleBookingStatus(b.id, 'completed')}
+                        onClick={() => handleVehicleBookingDecision(b, 'completed')}
                         className="px-3 py-1.5 rounded bg-[#0B3B75] text-white text-xs font-semibold cursor-pointer"
                       >
                         {tr(lang, 'Mark Trip Completed', 'यात्रा पूर्ण करें', 'प्रवास पूर्ण करा')}
@@ -367,6 +407,13 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({ jobs, onNa
             </div>
           )}
         </section>
+
+        <UserNotificationCenter
+          mode="worker"
+          onNavigateToTarget={onNavigateToTarget || ((r) => onNavigate(r))}
+          highlightedDemoJobId={highlightedDemoJobId}
+          onClearHighlightedDemoJob={onClearHighlightedDemoJob}
+        />
       </div>
     );
   }
@@ -740,14 +787,14 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({ jobs, onNa
                       <>
                         <button
                           type="button"
-                          onClick={() => updateVehicleBookingStatus(b.id, 'accepted')}
+                          onClick={() => handleVehicleBookingDecision(b, 'accepted')}
                           className="px-2.5 py-1 rounded bg-[#15803D] text-white font-semibold cursor-pointer"
                         >
                           {t.dashboards.acceptBtn}
                         </button>
                         <button
                           type="button"
-                          onClick={() => updateVehicleBookingStatus(b.id, 'declined')}
+                          onClick={() => handleVehicleBookingDecision(b, 'declined')}
                           className="px-2.5 py-1 rounded border border-slate-300 text-slate-700 font-semibold cursor-pointer"
                         >
                           {t.dashboards.declineBtn}
@@ -757,7 +804,7 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({ jobs, onNa
                     {b.status === 'accepted' && (
                       <button
                         type="button"
-                        onClick={() => updateVehicleBookingStatus(b.id, 'completed')}
+                        onClick={() => handleVehicleBookingDecision(b, 'completed')}
                         className="px-2.5 py-1 rounded bg-[#0B3B75] text-white font-semibold cursor-pointer"
                       >
                         {tr(lang, 'Complete', 'पूर्ण', 'पूर्ण')}
@@ -770,6 +817,13 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({ jobs, onNa
           )}
         </section>
       )}
+
+      <UserNotificationCenter
+        mode="worker"
+        onNavigateToTarget={onNavigateToTarget || ((r) => onNavigate(r))}
+        highlightedDemoJobId={highlightedDemoJobId}
+        onClearHighlightedDemoJob={onClearHighlightedDemoJob}
+      />
     </div>
   );
 };
@@ -781,9 +835,14 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({ jobs, onNa
 interface EmployerDashboardProps {
   jobs: JobPosting[];
   onNavigate: (route: PageRoute, categoryFilter?: string) => void;
+  onNavigateToTarget?: (route: PageRoute, jobId?: string, demoJobId?: string) => void;
 }
 
-export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({ jobs, onNavigate }) => {
+export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
+  jobs,
+  onNavigate,
+  onNavigateToTarget,
+}) => {
   const { lang, t } = useLanguage();
   const { user, employerProfile, customerPreference, signInWithGoogle } = useAuth();
   const [applications, setApplications] = useState<JobApplication[]>([]);
@@ -897,6 +956,14 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({ jobs, 
     setBusyId(app.id);
     try {
       await updateApplicationByEmployer(app.id, { status });
+      void callNotificationApi('/api/notifications/send-customer-event', {
+        recipientUid: app.workerUid,
+        eventType: status === 'accepted' ? 'booking_accepted' : 'booking_cancelled',
+        workerName: employerProfile?.businessName || user?.displayName || 'Customer',
+        jobTitle: app.jobTitle,
+        jobId: app.jobId,
+        targetRoute: 'worker-dashboard',
+      }).catch(() => undefined);
     } finally {
       setBusyId(null);
     }
@@ -911,6 +978,14 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({ jobs, 
         workerRating: ratingVal,
         ...(feedbackVal.trim() ? { employerFeedback: feedbackVal.trim() } : {}),
       });
+      void callNotificationApi('/api/notifications/send-customer-event', {
+        recipientUid: app.workerUid,
+        eventType: 'job_completed',
+        workerName: employerProfile?.businessName || user?.displayName || 'Customer',
+        jobTitle: app.jobTitle,
+        jobId: app.jobId,
+        targetRoute: 'worker-dashboard',
+      }).catch(() => undefined);
       setCompletingAppId(null);
       setFeedbackVal('');
       setRatingVal(5);
@@ -1549,6 +1624,11 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({ jobs, 
           </div>
         )}
       </section>
+
+      <UserNotificationCenter
+        mode="employer"
+        onNavigateToTarget={onNavigateToTarget || ((r) => onNavigate(r))}
+      />
     </div>
   );
 };
@@ -1564,7 +1644,15 @@ interface AdminDashboardProps {
   announcements: PlatformAnnouncement[];
 }
 
-type AdminTab = 'workers' | 'employers' | 'jobs' | 'grievances' | 'enquiries' | 'announcements' | 'audit';
+type AdminTab =
+  | 'workers'
+  | 'employers'
+  | 'jobs'
+  | 'notifications'
+  | 'grievances'
+  | 'enquiries'
+  | 'announcements'
+  | 'audit';
 
 export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
   workers,
@@ -1723,6 +1811,7 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
             { id: 'workers', label: `Workers (${workers.length})`, icon: Users },
             { id: 'employers', label: `Employers (${employers.length})`, icon: Briefcase },
             { id: 'jobs', label: `Jobs (${jobs.length})`, icon: FileText },
+            { id: 'notifications', label: '📲 Live Notification Demo', icon: BellRing },
             { id: 'grievances', label: `${t.dashboards.grievances} (${grievances.length})`, icon: AlertTriangle },
             { id: 'enquiries', label: `${t.dashboards.enquiries} (${enquiries.length})`, icon: Shield },
             { id: 'announcements', label: `${t.dashboards.announcements} (${announcements.length})`, icon: Megaphone },
@@ -1730,6 +1819,7 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
           ] as { id: AdminTab; label: string; icon: React.ComponentType<{ className?: string }> }[]
         ).map((item) => {
           const Icon = item.icon;
+          const isNotif = item.id === 'notifications';
           return (
             <button
               key={item.id}
@@ -1737,7 +1827,11 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
               onClick={() => setTab(item.id)}
               className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md text-xs font-semibold cursor-pointer ${
                 tab === item.id
-                  ? 'bg-[#0B3B75] text-white'
+                  ? isNotif
+                    ? 'bg-[#E06D1B] text-white'
+                    : 'bg-[#0B3B75] text-white'
+                  : isNotif
+                  ? 'bg-amber-50 border border-amber-300 text-[#C25E00] hover:bg-amber-100'
                   : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
               }`}
             >
@@ -1747,6 +1841,10 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
           );
         })}
       </div>
+
+      {tab === 'notifications' && (
+        <AdminNotificationDemoPanel workers={workers} employers={employers} />
+      )}
 
       {/* Tab Content */}
       {tab === 'workers' && (

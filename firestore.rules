@@ -462,6 +462,131 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidDeviceToken(data) {
+      return data.keys().hasAll([
+          'ownerUid', 'role', 'isDemo', 'token', 'platform', 'browser',
+          'preferredLanguage', 'enabled', 'userAgentShort', 'lastSeenAt', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid', 'role', 'isDemo', 'demoAccountId', 'token', 'platform', 'browser',
+          'preferredLanguage', 'enabled', 'userAgentShort', 'lastSeenAt', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerUid)
+        && data.role in ['worker', 'employer', 'admin', 'demo_worker']
+        && data.isDemo is bool
+        && (!('demoAccountId' in data) || isValidId(data.demoAccountId))
+        && data.token is string && data.token.size() >= 20 && data.token.size() <= 512
+        && data.platform in ['android', 'ios', 'desktop']
+        && data.browser is string && data.browser.size() >= 1 && data.browser.size() <= 60
+        && data.preferredLanguage in ['en', 'hi', 'mr']
+        && data.enabled is bool
+        && data.userAgentShort is string && data.userAgentShort.size() <= 160
+        && data.lastSeenAt is timestamp
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidNotificationPreferences(data) {
+      return data.keys().hasAll([
+          'ownerUid', 'masterEnabled', 'matchingJobs', 'nearbyJobs',
+          'applicationUpdates', 'bookingNotifications', 'announcements',
+          'preferredLanguage', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid', 'masterEnabled', 'matchingJobs', 'nearbyJobs',
+          'applicationUpdates', 'bookingNotifications', 'announcements',
+          'preferredLanguage', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerUid)
+        && data.masterEnabled is bool
+        && data.matchingJobs is bool
+        && data.nearbyJobs is bool
+        && data.applicationUpdates is bool
+        && data.bookingNotifications is bool
+        && data.announcements is bool
+        && data.preferredLanguage in ['en', 'hi', 'mr']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDemoAccount(data) {
+      return data.keys().hasAll([
+          'adminUid', 'name', 'maskedMobile', 'primarySkill', 'skills',
+          'state', 'district', 'cityOrVillage', 'preferredLanguage',
+          'notificationsEnabled', 'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'adminUid', 'assignedUid', 'name', 'maskedMobile', 'primarySkill', 'skills',
+          'state', 'district', 'cityOrVillage', 'preferredLanguage',
+          'notificationsEnabled', 'status', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.adminUid)
+        && (!('assignedUid' in data) || isValidId(data.assignedUid))
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 120
+        && data.maskedMobile is string && data.maskedMobile.size() >= 6 && data.maskedMobile.size() <= 20
+        && data.primarySkill is string && data.primarySkill.size() >= 2 && data.primarySkill.size() <= 80
+        && data.skills is list && data.skills.size() >= 1 && data.skills.size() <= 15 && data.skills[0] is string
+        && data.state is string && data.state.size() >= 2 && data.state.size() <= 80
+        && data.district is string && data.district.size() >= 2 && data.district.size() <= 80
+        && data.cityOrVillage is string && data.cityOrVillage.size() >= 2 && data.cityOrVillage.size() <= 100
+        && data.preferredLanguage in ['en', 'hi', 'mr']
+        && data.notificationsEnabled is bool
+        && data.status == 'DEMO'
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDemoJob(data) {
+      return data.keys().hasAll([
+          'adminUid', 'title', 'category', 'description', 'workersRequired',
+          'offeredWage', 'wageUnit', 'workType', 'state', 'district', 'cityOrVillage',
+          'status', 'isDemo', 'applicationsCount', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'adminUid', 'title', 'category', 'description', 'workersRequired',
+          'offeredWage', 'wageUnit', 'workType', 'state', 'district', 'cityOrVillage',
+          'status', 'isDemo', 'applicationsCount', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.adminUid)
+        && data.title is string && data.title.size() >= 3 && data.title.size() <= 160
+        && data.category is string && data.category.size() >= 2 && data.category.size() <= 80
+        && data.description is string && data.description.size() >= 5 && data.description.size() <= 1000
+        && data.workersRequired is number && data.workersRequired >= 1 && data.workersRequired <= 500
+        && data.offeredWage is number && data.offeredWage >= 0 && data.offeredWage <= 500000
+        && data.wageUnit in ['daily', 'monthly', 'hourly', 'contract']
+        && data.workType in ['full_time', 'part_time', 'daily_wage', 'contract', 'temporary', 'urgent', 'bulk']
+        && data.state is string && data.state.size() >= 2 && data.state.size() <= 80
+        && data.district is string && data.district.size() >= 2 && data.district.size() <= 80
+        && data.cityOrVillage is string && data.cityOrVillage.size() >= 2 && data.cityOrVillage.size() <= 100
+        && data.status in ['open', 'closed']
+        && data.isDemo == true
+        && data.applicationsCount is number && data.applicationsCount >= 0 && data.applicationsCount <= 5000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDemoApplication(data) {
+      return data.keys().hasAll([
+          'demoJobId', 'demoJobTitle', 'demoAccountId', 'applicantUid',
+          'workerName', 'proposedWage', 'status', 'isDemo', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'demoJobId', 'demoJobTitle', 'demoAccountId', 'applicantUid',
+          'workerName', 'proposedWage', 'note', 'status', 'isDemo', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.demoJobId)
+        && data.demoJobTitle is string && data.demoJobTitle.size() >= 2 && data.demoJobTitle.size() <= 160
+        && isValidId(data.demoAccountId)
+        && isValidId(data.applicantUid)
+        && data.workerName is string && data.workerName.size() >= 2 && data.workerName.size() <= 120
+        && data.proposedWage is number && data.proposedWage >= 0 && data.proposedWage <= 500000
+        && (!('note' in data) || (data.note is string && data.note.size() <= 400))
+        && data.status in ['applied', 'reviewed']
+        && data.isDemo == true
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
     // Collection Rules
 
     match /users/{userId} {
@@ -856,6 +981,125 @@ service cloud.firestore {
         && incoming().ownerUid == existing().ownerUid
         && (isAdmin() || isOwner(userId));
       allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    match /device_tokens/{tokenId} {
+      allow get: if isValidId(tokenId)
+        && isVerifiedUser()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isVerifiedUser()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow create: if isValidId(tokenId)
+        && isVerifiedUser()
+        && isValidDeviceToken(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(tokenId)
+        && isVerifiedUser()
+        && isValidDeviceToken(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && (isAdmin() || isOwner(existing().ownerUid));
+      allow delete: if isValidId(tokenId)
+        && isVerifiedUser()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+    }
+
+    match /notification_preferences/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(userId)
+        && isOwner(userId)
+        && isValidNotificationPreferences(incoming())
+        && incoming().ownerUid == userId
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(userId)
+        && isVerifiedUser()
+        && isValidNotificationPreferences(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && (isAdmin() || isOwner(userId));
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    match /notifications/{notificationId} {
+      allow get: if isValidId(notificationId)
+        && isVerifiedUser()
+        && (existing().recipientUid == request.auth.uid || isAdmin());
+      allow list: if isVerifiedUser()
+        && (existing().recipientUid == request.auth.uid || isAdmin());
+      allow create, delete: if isAdmin();
+      allow update: if isValidId(notificationId)
+        && isVerifiedUser()
+        && isOwner(existing().recipientUid)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['read', 'updatedAt'])
+        && incoming().read is bool
+        && isValidTimestampOnUpdate();
+    }
+
+    match /notification_delivery_logs/{logId} {
+      allow get: if isValidId(logId) && isAdmin();
+      allow list: if isAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /demo_accounts/{accountId} {
+      allow get: if isValidId(accountId) && isVerifiedUser();
+      allow list: if isVerifiedUser();
+      allow create: if isValidId(accountId)
+        && isAdmin()
+        && isValidDemoAccount(incoming())
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(accountId)
+        && isVerifiedUser()
+        && isValidDemoAccount(incoming())
+        && isValidTimestampOnUpdate()
+        && (
+          isAdmin() ||
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['assignedUid', 'notificationsEnabled', 'updatedAt'])
+            && incoming().assignedUid == request.auth.uid
+          )
+        );
+      allow delete: if isValidId(accountId) && isAdmin();
+    }
+
+    match /demo_jobs/{demoJobId} {
+      allow get: if isValidId(demoJobId) && isVerifiedUser();
+      allow list: if isVerifiedUser();
+      allow create: if isValidId(demoJobId)
+        && isAdmin()
+        && isValidDemoJob(incoming())
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(demoJobId)
+        && isVerifiedUser()
+        && isValidDemoJob(incoming())
+        && isValidTimestampOnUpdate()
+        && (
+          isAdmin() ||
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['applicationsCount', 'updatedAt'])
+            && incoming().applicationsCount == existing().applicationsCount + 1
+          )
+        );
+      allow delete: if isValidId(demoJobId) && isAdmin();
+    }
+
+    match /demo_applications/{demoAppId} {
+      allow get: if isValidId(demoAppId)
+        && isVerifiedUser()
+        && (existing().applicantUid == request.auth.uid || isAdmin());
+      allow list: if isVerifiedUser()
+        && (existing().applicantUid == request.auth.uid || isAdmin());
+      allow create: if isValidId(demoAppId)
+        && isVerifiedUser()
+        && isValidDemoApplication(incoming())
+        && incoming().applicantUid == request.auth.uid
+        && incoming().status == 'applied'
+        && incoming().isDemo == true
+        && isValidTimestampOnCreate()
+        && exists(/databases/$(database)/documents/demo_jobs/$(incoming().demoJobId));
+      allow update, delete: if isValidId(demoAppId) && isAdmin();
     }
   }
 }

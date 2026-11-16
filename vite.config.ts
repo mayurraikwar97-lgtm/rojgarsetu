@@ -11,15 +11,24 @@ export default defineConfig(() => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: ['icon.svg', 'logo-horizontal.svg', 'apple-touch-icon.png', 'pwa-192x192.png', 'pwa-512x512.png'],
+        includeAssets: [
+          'icon.svg',
+          'logo-horizontal.svg',
+          'apple-touch-icon.png',
+          'pwa-192x192.png',
+          'pwa-512x512.png',
+          'pwa-maskable-512x512.png',
+          'firebase-messaging-sw.js',
+        ],
         manifest: {
           id: '/',
-          name: 'ROJGAR SETU — National Workforce Platform',
-          short_name: 'Rojgar Setu',
+          name: 'ROJGAR SETU',
+          short_name: 'ROJGAR SETU',
           description: 'Every Hand Deserves an Opportunity. Connecting India’s workforce with employment opportunities under ABUJMAD FOUNDATION.',
-          theme_color: '#0C2340',
+          theme_color: '#0B3B75',
           background_color: '#FFFFFF',
           display: 'standalone',
+          orientation: 'portrait-primary',
           start_url: '/',
           scope: '/',
           icons: [
@@ -45,6 +54,7 @@ export default defineConfig(() => {
         },
         workbox: {
           maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
+          navigateFallbackDenylist: [/^\/api\//, /^\/firebase-messaging-sw\.js$/],
           globPatterns: ['**/*.{js,css,html,ico,png,svg,woff,woff2}'],
           runtimeCaching: [
             {

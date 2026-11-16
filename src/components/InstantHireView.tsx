@@ -42,6 +42,7 @@ import {
 } from '../data/indiaLocations';
 import { useLanguage } from '../i18n/LanguageContext';
 import {
+  callNotificationApi,
   createInstantHireRequest,
   recordCustomerOrderPreference,
   saveCustomerDefaultLocation,
@@ -680,6 +681,10 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
         lat: coords.lat,
         lng: coords.lng,
       });
+
+      void callNotificationApi('/api/notifications/send-matching-job', {
+        jobId: result.jobId,
+      }).catch(() => undefined);
 
       setBookingResult({
         jobId: result.jobId,

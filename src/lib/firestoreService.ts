@@ -1,6 +1,7 @@
 import {
   addDoc,
   collection,
+  deleteDoc,
   doc,
   getDoc,
   increment,
@@ -13,14 +14,21 @@ import {
   where,
   writeBatch,
 } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from './firebase';
+import { auth, db, handleFirestoreError, OperationType } from './firebase';
 import type {
+  AppNotificationRecord,
   AuditLog,
   CustomerPreference,
+  DemoJobApplication,
+  DemoJobPosting,
+  DemoWorkerAccount,
+  DeviceTokenRecord,
   EmployerPrivateInfo,
   GrievanceReport,
   JobApplication,
   JobPosting,
+  NotificationDeliveryLog,
+  NotificationPreferences,
   PartnershipEnquiry,
   PlatformAnnouncement,
   PublicEmployerProfile,
@@ -867,3 +875,284 @@ export async function recordCustomerOrderPreference(
     handleFirestoreError(err, OperationType.WRITE, path);
   }
 }
+
+export function subscribeNotificationPreferences(
+  uid: string,
+  onData: (pref: NotificationPreferences | null) => void
+): () => void {
+  const path = `notification_preferences/${uid}`;
+  return onSnapshot(
+    doc(db, 'notification_preferences', uid),
+    (snap) => {
+      onData(snap.exists() ? ({ id: snap.id, ...snap.data() } as NotificationPreferences) : null);
+    },
+    (err) => handleFirestoreError(err, OperationType.GET, path)
+  );
+}
+
+export async function saveNotificationPreferences(
+  uid: string,
+  updates: Partial<
+    Pick<
+      NotificationPreferences,
+      | 'masterEnabled'
+      | 'matchingJobs'
+      | 'nearbyJobs'
+      | 'applicationUpdates'
+      | 'bookingNotifications'
+      | 'announcements'
+      | 'preferredLanguage'
+    >
+  >
+): Promise<void> {
+  const path = `notification_preferences/${uid}`;
+  const ref = doc(db, 'notification_preferences', uid);
+  try {
+    const snap = await getDoc(ref);
+    if (snap.exists()) {
+      await updateDoc(ref, {
+        ...updates,
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(ref, {
+        ownerUid: uid,
+        masterEnabled: updates.masterEnabled ?? true,
+        matchingJobs: updates.matchingJobs ?? true,
+        nearbyJobs: updates.nearbyJobs ?? true,
+        applicationUpdates: updates.applicationUpdates ?? true,
+        bookingNotifications: updates.bookingNotifications ?? true,
+        announcements: updates.announcements ?? true,
+        preferredLanguage: updates.preferredLanguage ?? 'en',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, path);
+  }
+}
+
+export function subscribeUserDeviceTokens(
+  uid: string,
+  onData: (tokens: DeviceTokenRecord[]) => void
+): () => void {
+  const path = 'device_tokens';
+  const q = query(collection(db, path), where('ownerUid', '==', uid));
+  return onSnapshot(
+    q,
+    (snap) => {
+      onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DeviceTokenRecord)));
+    },
+    (err) => handleFirestoreError(err, OperationType.LIST, path)
+  );
+}
+
+export function subscribeAllDeviceTokensAdmin(
+  onData: (tokens: DeviceTokenRecord[]) => void
+): () => void {
+  const path = 'device_tokens';
+  return onSnapshot(
+    collection(db, path),
+    (snap) => {
+      onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DeviceTokenRecord)));
+    },
+    (err) => handleFirestoreError(err, OperationType.LIST, path)
+  );
+}
+
+export function subscribeUserNotifications(
+  uid: string,
+  onData: (items: AppNotificationRecord[]) => void
+): () => void {
+  const path = 'notifications';
+  const q = query(collection(db, path), where('recipientUid', '==', uid));
+  return onSnapshot(
+    q,
+    (snap) => {
+      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as AppNotificationRecord));
+      list.sort((a, b) => {
+        const ta = (a.createdAt as { seconds?: number })?.seconds ?? 0;
+        const tb = (b.createdAt as { seconds?: number })?.seconds ?? 0;
+        return tb - ta;
+      });
+      onData(list);
+    },
+    (err) => handleFirestoreError(err, OperationType.LIST, path)
+  );
+}
+
+export async function markNotificationRead(notificationId: string): Promise<void> {
+  const path = `notifications/${notificationId}`;
+  try {
+    await updateDoc(doc(db, 'notifications', notificationId), {
+      read: true,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
+export function subscribeDeliveryLogsAdmin(
+  onData: (items: NotificationDeliveryLog[]) => void
+): () => void {
+  const path = 'notification_delivery_logs';
+  const q = query(collection(db, path), orderBy('createdAt', 'desc'));
+  return onSnapshot(
+    q,
+    (snap) => {
+      onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as NotificationDeliveryLog)));
+    },
+    (err) => handleFirestoreError(err, OperationType.LIST, path)
+  );
+}
+
+export function subscribeDemoAccounts(
+  onData: (items: DemoWorkerAccount[]) => void
+): () => void {
+  const path = 'demo_accounts';
+  const q = query(collection(db, path), orderBy('createdAt', 'desc'));
+  return onSnapshot(
+    q,
+    (snap) => {
+      onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DemoWorkerAccount)));
+    },
+    (err) => handleFirestoreError(err, OperationType.LIST, path)
+  );
+}
+
+export async function createDemoAccount(
+  payload: Omit<DemoWorkerAccount, 'id' | 'status' | 'createdAt' | 'updatedAt'>
+): Promise<string> {
+  const path = 'demo_accounts';
+  try {
+    const ref = await addDoc(collection(db, path), {
+      ...payload,
+      status: 'DEMO',
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    return ref.id;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.CREATE, path);
+  }
+}
+
+export async function deleteDemoAccount(accountId: string): Promise<void> {
+  const path = `demo_accounts/${accountId}`;
+  try {
+    await deleteDoc(doc(db, 'demo_accounts', accountId));
+  } catch (err) {
+    handleFirestoreError(err, OperationType.DELETE, path);
+  }
+}
+
+export function subscribeDemoJobs(
+  onData: (items: DemoJobPosting[]) => void
+): () => void {
+  const path = 'demo_jobs';
+  const q = query(collection(db, path), orderBy('createdAt', 'desc'));
+  return onSnapshot(
+    q,
+    (snap) => {
+      onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DemoJobPosting)));
+    },
+    (err) => handleFirestoreError(err, OperationType.LIST, path)
+  );
+}
+
+export async function createDemoJob(
+  payload: Omit<DemoJobPosting, 'id' | 'isDemo' | 'status' | 'applicationsCount' | 'createdAt' | 'updatedAt'>
+): Promise<string> {
+  const path = 'demo_jobs';
+  try {
+    const ref = await addDoc(collection(db, path), {
+      ...payload,
+      status: 'open',
+      isDemo: true,
+      applicationsCount: 0,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+    return ref.id;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.CREATE, path);
+  }
+}
+
+export function subscribeDemoApplicationsByUser(
+  uid: string,
+  onData: (items: DemoJobApplication[]) => void
+): () => void {
+  const path = 'demo_applications';
+  const q = query(collection(db, path), where('applicantUid', '==', uid));
+  return onSnapshot(
+    q,
+    (snap) => {
+      onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DemoJobApplication)));
+    },
+    (err) => handleFirestoreError(err, OperationType.LIST, path)
+  );
+}
+
+export function subscribeAllDemoApplicationsAdmin(
+  onData: (items: DemoJobApplication[]) => void
+): () => void {
+  const path = 'demo_applications';
+  const q = query(collection(db, path), orderBy('createdAt', 'desc'));
+  return onSnapshot(
+    q,
+    (snap) => {
+      onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DemoJobApplication)));
+    },
+    (err) => handleFirestoreError(err, OperationType.LIST, path)
+  );
+}
+
+export async function submitDemoJobApplication(
+  payload: Omit<DemoJobApplication, 'id' | 'status' | 'isDemo' | 'createdAt' | 'updatedAt'>
+): Promise<string> {
+  const appRef = doc(collection(db, 'demo_applications'));
+  const jobRef = doc(db, 'demo_jobs', payload.demoJobId);
+  const batch = writeBatch(db);
+  batch.set(appRef, {
+    ...payload,
+    status: 'applied',
+    isDemo: true,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+  batch.update(jobRef, {
+    applicationsCount: increment(1),
+    updatedAt: serverTimestamp(),
+  });
+
+  try {
+    await batch.commit();
+    return appRef.id;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.CREATE, `demo_applications/${appRef.id}`);
+  }
+}
+
+export async function callNotificationApi<T = Record<string, unknown>>(
+  endpoint: string,
+  body?: Record<string, unknown>
+): Promise<{ status: number; data: T }> {
+  const idToken = auth.currentUser ? await auth.currentUser.getIdToken() : '';
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+  if (idToken) {
+    headers.Authorization = `Bearer ${idToken}`;
+  }
+  const response = await fetch(endpoint, {
+    method: body ? 'POST' : 'GET',
+    headers,
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  const data = (await response.json().catch(() => ({}))) as T;
+  return { status: response.status, data };
+}
+

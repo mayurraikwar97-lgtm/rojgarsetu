@@ -321,3 +321,135 @@ export interface AiHirePrefill {
   note?: string;
   transcript?: string;
 }
+
+export type NotificationCategoryKey =
+  | 'matchingJobs'
+  | 'nearbyJobs'
+  | 'applicationUpdates'
+  | 'bookingNotifications'
+  | 'announcements';
+
+export interface DeviceTokenRecord {
+  id: string;
+  ownerUid: string;
+  role: 'worker' | 'employer' | 'admin' | 'demo_worker';
+  isDemo: boolean;
+  demoAccountId?: string;
+  token: string;
+  platform: 'android' | 'ios' | 'desktop';
+  browser: string;
+  preferredLanguage: Language;
+  enabled: boolean;
+  userAgentShort: string;
+  lastSeenAt?: unknown;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface NotificationPreferences {
+  id?: string;
+  ownerUid: string;
+  masterEnabled: boolean;
+  matchingJobs: boolean;
+  nearbyJobs: boolean;
+  applicationUpdates: boolean;
+  bookingNotifications: boolean;
+  announcements: boolean;
+  preferredLanguage: Language;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface AppNotificationRecord {
+  id: string;
+  recipientUid: string;
+  recipientRole: 'worker' | 'employer' | 'admin' | 'demo_worker';
+  isDemo: boolean;
+  category: NotificationCategoryKey;
+  title: string;
+  body: string;
+  language: Language;
+  targetRoute: PageRoute;
+  targetJobId?: string;
+  targetDemoJobId?: string;
+  dedupeKey: string;
+  deliveryStatus: 'sent' | 'failed' | 'in_app_only';
+  errorMessage?: string;
+  read: boolean;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface NotificationDeliveryLog {
+  id: string;
+  notificationBatchId: string;
+  recipientUid: string;
+  recipientLabel: string;
+  recipientRole: 'worker' | 'employer' | 'admin' | 'demo_worker';
+  isDemo: boolean;
+  category: NotificationCategoryKey;
+  title: string;
+  body: string;
+  language: Language;
+  targetUrl: string;
+  status: 'sent' | 'failed';
+  errorCode?: string;
+  errorMessage?: string;
+  fcmMessageId?: string;
+  sentByUid: string;
+  createdAt?: unknown;
+}
+
+export interface DemoWorkerAccount {
+  id: string;
+  adminUid: string;
+  assignedUid?: string;
+  name: string;
+  maskedMobile: string;
+  primarySkill: string;
+  skills: string[];
+  state: string;
+  district: string;
+  cityOrVillage: string;
+  preferredLanguage: Language;
+  notificationsEnabled: boolean;
+  status: 'DEMO';
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface DemoJobPosting {
+  id: string;
+  adminUid: string;
+  title: string;
+  category: string;
+  description: string;
+  workersRequired: number;
+  offeredWage: number;
+  wageUnit: WageUnit;
+  workType: JobWorkType;
+  state: string;
+  district: string;
+  cityOrVillage: string;
+  status: 'open' | 'closed';
+  isDemo: true;
+  applicationsCount: number;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface DemoJobApplication {
+  id: string;
+  demoJobId: string;
+  demoJobTitle: string;
+  demoAccountId: string;
+  applicantUid: string;
+  workerName: string;
+  proposedWage: number;
+  note?: string;
+  status: 'applied' | 'reviewed';
+  isDemo: true;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+

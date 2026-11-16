@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from 'react';
-import { AlertTriangle, X } from 'lucide-react';
+import React, { useCallback, useEffect, useState } from 'react';
+import { AlertTriangle, BellRing, X } from 'lucide-react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { LanguageProvider } from './i18n/LanguageContext';
+import { subscribeForegroundPush } from './lib/pushNotifications';
 import {
   subscribeAllApplicationsAdmin,
   subscribeAnnouncements,
@@ -45,11 +46,46 @@ import {
   TrustSafetyView,
 } from './components/InstitutionalPages';
 
+const VALID_ROUTES: PageRoute[] = [
+  'home',
+  'hire',
+  'transport',
+  'find-work',
+  'find-workers',
+  'skills-training',
+  'register-worker',
+  'register-employer',
+  'register-vehicle',
+  'post-job',
+  'worker-dashboard',
+  'employer-dashboard',
+  'admin',
+  'about',
+  'partnerships',
+  'pricing',
+  'trust-safety',
+  'contact',
+];
+
+function isValidRoute(value: string | undefined | null): value is PageRoute {
+  return Boolean(value && VALID_ROUTES.includes(value as PageRoute));
+}
+
 const AppShell: React.FC = () => {
-  const { isAdmin } = useAuth();
+  const { user, isAdmin } = useAuth();
   const [route, setRoute] = useState<PageRoute>('home');
   const [categoryFilter, setCategoryFilter] = useState('');
+  const [highlightedJobId, setHighlightedJobId] = useState('');
+  const [highlightedDemoJobId, setHighlightedDemoJobId] = useState('');
   const [gmpQuotaExceeded, setGmpQuotaExceeded] = useState(false);
+
+  const [foregroundPush, setForegroundPush] = useState<{
+    title: string;
+    body: string;
+    route?: PageRoute;
+    jobId?: string;
+    demoJobId?: string;
+  } | null>(null);
 
   const [workers, setWorkers] = useState<PublicWorkerProfile[]>([]);
   const [employers, setEmployers] = useState<PublicEmployerProfile[]>([]);
@@ -61,6 +97,103 @@ const AppShell: React.FC = () => {
   const [aiOpen, setAiOpen] = useState(false);
   const [aiLocationHint, setAiLocationHint] = useState('');
   const [aiPrefill, setAiPrefill] = useState<AiHirePrefill | null>(null);
+
+  const navigate = useCallback((nextRoute: PageRoute, nextCategory?: string) => {
+    setRoute(nextRoute);
+    setCategoryFilter(nextCategory ?? '');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }, []);
+
+  const navigateToTarget = useCallback(
+    (targetRoute: PageRoute, jobId?: string, demoJobId?: string) => {
+      if (jobId) setHighlightedJobId(jobId);
+      if (demoJobId) setHighlightedDemoJobId(demoJobId);
+      navigate(targetRoute);
+    },
+    [navigate]
+  );
+
+  // Parse deep links from URL query parameters on boot (?route=find-work&jobId=...)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const params = new URLSearchParams(window.location.search);
+    const r = params.get('route');
+    const jId = params.get('jobId') || '';
+    const djId = params.get('demoJobId') || '';
+    const cat = params.get('category') || '';
+
+    if (jId) setHighlightedJobId(jId);
+    if (djId) setHighlightedDemoJobId(djId);
+    if (isValidRoute(r)) {
+      setRoute(r);
+      if (cat) setCategoryFilter(cat);
+    } else if (jId) {
+      setRoute('find-work');
+    } else if (djId) {
+      setRoute('worker-dashboard');
+    }
+
+    if (r || jId || djId || cat) {
+      const cleanUrl = window.location.pathname + window.location.hash;
+      window.history.replaceState({}, document.title, cleanUrl);
+    }
+  }, []);
+
+  // Handle Service Worker notification click deep-link messages when app is already open
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) return;
+    const onMessage = (event: MessageEvent) => {
+      const data = event.data as {
+        type?: string;
+        route?: string;
+        jobId?: string;
+        demoJobId?: string;
+      } | null;
+      if (data?.type === 'ROJGAR_SETU_DEEP_LINK') {
+        const nextRoute = isValidRoute(data.route)
+          ? data.route
+          : data.demoJobId
+          ? 'worker-dashboard'
+          : data.jobId
+          ? 'find-work'
+          : 'home';
+        navigateToTarget(nextRoute, data.jobId, data.demoJobId);
+      }
+    };
+    navigator.serviceWorker.addEventListener('message', onMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', onMessage);
+  }, [navigateToTarget]);
+
+  // Listen to foreground FCM messages while user has app open
+  useEffect(() => {
+    if (!user?.emailVerified) return;
+    let unsub: () => void = () => undefined;
+    let active = true;
+    void subscribeForegroundPush((payload) => {
+      if (!active) return;
+      const targetRoute = isValidRoute(payload.route)
+        ? payload.route
+        : payload.demoJobId
+        ? 'worker-dashboard'
+        : payload.jobId
+        ? 'find-work'
+        : 'home';
+      setForegroundPush({
+        title: payload.title,
+        body: payload.body,
+        route: targetRoute,
+        jobId: payload.jobId,
+        demoJobId: payload.demoJobId,
+      });
+    }).then((fn) => {
+      if (active) unsub = fn;
+      else fn();
+    });
+    return () => {
+      active = false;
+      unsub();
+    };
+  }, [user?.uid, user?.emailVerified]);
 
   useEffect(() => {
     const onQuota = () => setGmpQuotaExceeded(true);
@@ -92,14 +225,58 @@ const AppShell: React.FC = () => {
     return () => u();
   }, [isAdmin]);
 
-  const navigate = (nextRoute: PageRoute, nextCategory?: string) => {
-    setRoute(nextRoute);
-    setCategoryFilter(nextCategory ?? '');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  };
-
   return (
     <div id="top" className="min-h-screen flex flex-col bg-[#F4F6F9] text-slate-900">
+      {/* Live Foreground Push Notification Toast */}
+      {foregroundPush && (
+        <div
+          role="status"
+          className="fixed top-16 right-4 z-50 max-w-sm w-[calc(100%-2rem)] bg-white border-2 border-[#E06D1B] rounded-lg shadow-xl p-4 space-y-2.5"
+        >
+          <div className="flex items-start justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[#C25E00]">
+              <BellRing className="w-4 h-4 text-[#E06D1B] shrink-0" />
+              <span>ROJGAR SETU Notification</span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setForegroundPush(null)}
+              aria-label="Close notification"
+              className="p-0.5 rounded hover:bg-slate-100 text-slate-500 cursor-pointer"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <div>
+            <div className="font-display text-sm font-bold text-[#0B3B75]">{foregroundPush.title}</div>
+            <p className="text-xs text-slate-600 mt-0.5">{foregroundPush.body}</p>
+          </div>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => setForegroundPush(null)}
+              className="px-3 py-1.5 rounded border border-slate-300 text-xs font-semibold text-slate-700 cursor-pointer"
+            >
+              Dismiss
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                const target = foregroundPush;
+                setForegroundPush(null);
+                navigateToTarget(
+                  target.route || 'home',
+                  target.jobId,
+                  target.demoJobId
+                );
+              }}
+              className="px-3.5 py-1.5 rounded bg-[#0B3B75] text-white text-xs font-bold hover:bg-slate-800 cursor-pointer"
+            >
+              Open
+            </button>
+          </div>
+        </div>
+      )}
       {/* Case A Demo Key Quota Exceeded Banner */}
       {gmpQuotaExceeded && (
         <div
@@ -187,6 +364,8 @@ const AppShell: React.FC = () => {
           <FindWorkView
             jobs={jobs}
             initialCategory={categoryFilter}
+            highlightedJobId={highlightedJobId}
+            onClearHighlightedJob={() => setHighlightedJobId('')}
             onNavigate={(r) => navigate(r)}
           />
         )}
@@ -205,10 +384,20 @@ const AppShell: React.FC = () => {
         )}
         {route === 'post-job' && <PostJobView onNavigate={(r) => navigate(r)} />}
         {route === 'worker-dashboard' && (
-          <WorkerDashboardView jobs={jobs} onNavigate={navigate} />
+          <WorkerDashboardView
+            jobs={jobs}
+            onNavigate={navigate}
+            onNavigateToTarget={navigateToTarget}
+            highlightedDemoJobId={highlightedDemoJobId}
+            onClearHighlightedDemoJob={() => setHighlightedDemoJobId('')}
+          />
         )}
         {route === 'employer-dashboard' && (
-          <EmployerDashboardView jobs={jobs} onNavigate={navigate} />
+          <EmployerDashboardView
+            jobs={jobs}
+            onNavigate={navigate}
+            onNavigateToTarget={navigateToTarget}
+          />
         )}
         {route === 'admin' && (
           <AdminDashboardView

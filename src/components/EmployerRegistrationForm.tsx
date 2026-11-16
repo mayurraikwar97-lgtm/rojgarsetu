@@ -6,7 +6,9 @@ import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../i18n/LanguageContext';
 import { saveEmployerRegistration } from '../lib/firestoreService';
 import type { PageRoute } from '../types/domain';
+import { NotificationOptInButton } from './NotificationOptInButton';
 import { OtpVerificationBox } from './OtpVerificationBox';
+import { PWAInstallButton } from './PWAControls';
 
 interface EmployerRegistrationFormProps {
   onNavigate: (route: PageRoute) => void;
@@ -34,6 +36,7 @@ export const EmployerRegistrationForm: React.FC<EmployerRegistrationFormProps> =
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [savedId, setSavedId] = useState('');
+  const [showSuccessScreen, setShowSuccessScreen] = useState(false);
 
   useEffect(() => {
     if (employerProfile && employerPrivate) {
@@ -126,6 +129,8 @@ export const EmployerRegistrationForm: React.FC<EmployerRegistrationFormProps> =
 
       await refreshUserProfiles();
       setSavedId(regId);
+      setShowSuccessScreen(true);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Failed to save employer registration.');
     } finally {
@@ -160,36 +165,99 @@ export const EmployerRegistrationForm: React.FC<EmployerRegistrationFormProps> =
         </div>
       )}
 
-      {savedId && (
+      {savedId && showSuccessScreen && (
+        <section className="mb-8 bg-white border-2 border-[#0B3B75] rounded-lg overflow-hidden shadow-sm">
+          <div className="bg-[#0B3B75] text-white px-6 py-4 flex items-start gap-3 border-b-2 border-[#E06D1B]">
+            <CheckCircle2 className="w-7 h-7 text-amber-300 shrink-0 mt-0.5" />
+            <div>
+              <h2 className="font-display text-xl sm:text-2xl font-extrabold">
+                Welcome to ROJGAR SETU!
+              </h2>
+              <p className="text-sm sm:text-base text-blue-100 font-semibold mt-0.5">
+                तुम्ही आता कामगार शोधू शकता आणि नवीन कामाची मागणी नोंदवू शकता.
+              </p>
+            </div>
+          </div>
+
+          <div className="p-6 space-y-5">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-slate-50 border border-slate-200 rounded-lg p-4 text-xs sm:text-sm">
+              <div>
+                <div className="text-slate-500 text-xs font-medium">Customer ID</div>
+                <div className="font-mono-tabular font-extrabold text-[#C25E00] mt-0.5">{savedId}</div>
+              </div>
+              <div>
+                <div className="text-slate-500 text-xs font-medium">{t.employerForm.businessName}</div>
+                <div className="font-bold text-[#0B3B75] mt-0.5">{businessName}</div>
+              </div>
+              <div>
+                <div className="text-slate-500 text-xs font-medium">Location</div>
+                <div className="font-semibold text-slate-800 mt-0.5">
+                  {districtName}, {stateName}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <PWAInstallButton variant="primary" />
+              <NotificationOptInButton role="employer" />
+              <button
+                type="button"
+                onClick={() => onNavigate('post-job')}
+                className="px-5 py-2.5 rounded-md bg-[#15803D] text-white text-sm font-bold hover:bg-emerald-800 cursor-pointer min-h-[44px]"
+              >
+                Post a Job
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigate('employer-dashboard')}
+                className="px-5 py-2.5 rounded-md border border-[#0B3B75] text-[#0B3B75] text-sm font-bold hover:bg-blue-50 cursor-pointer min-h-[44px]"
+              >
+                Customer Dashboard
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowSuccessScreen(false)}
+                className="px-4 py-2.5 rounded-md border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+              >
+                Edit Details
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {savedId && !showSuccessScreen && (
         <div className="mb-6 bg-green-50 border border-green-200 rounded-lg p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-start gap-2.5">
             <CheckCircle2 className="w-5 h-5 text-[#15803D] shrink-0 mt-0.5" />
             <div>
               <p className="text-sm font-semibold text-green-950">{t.employerForm.successMsg}</p>
               <p className="text-xs text-green-900 mt-0.5 font-mono-tabular">
-                Registration ID: <strong>{savedId}</strong>
+                Customer ID: <strong>{savedId}</strong>
               </p>
             </div>
           </div>
-          <div className="flex gap-2">
+          <div className="flex flex-wrap gap-2">
+            <PWAInstallButton variant="compact" />
             <button
               type="button"
               onClick={() => onNavigate('post-job')}
               className="px-4 py-2 rounded-md bg-[#0B3B75] text-white text-xs font-semibold hover:bg-slate-800 whitespace-nowrap cursor-pointer"
             >
-              {t.jobs.postTitle}
+              Post a Job
             </button>
             <button
               type="button"
               onClick={() => onNavigate('employer-dashboard')}
               className="px-4 py-2 rounded-md border border-green-700 text-green-900 text-xs font-semibold hover:bg-green-100 whitespace-nowrap cursor-pointer"
             >
-              {t.nav.employerDashboard}
+              Customer Dashboard
             </button>
           </div>
         </div>
       )}
 
+      {!showSuccessScreen && (
       <form onSubmit={handleSubmit} className="bg-white border border-slate-200 rounded-lg p-6 sm:p-8 space-y-6">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
           <div>
@@ -413,6 +481,7 @@ export const EmployerRegistrationForm: React.FC<EmployerRegistrationFormProps> =
           </button>
         </div>
       </form>
+      )}
     </div>
   );
 };

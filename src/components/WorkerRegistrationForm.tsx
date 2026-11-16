@@ -8,7 +8,9 @@ import { saveWorkerRegistration } from '../lib/firestoreService';
 import { detectBestGpsLocation } from '../lib/locationService';
 import type { PageRoute, WageUnit, WorkType } from '../types/domain';
 import { LocationPinModal } from './LocationPinModal';
+import { NotificationOptInButton } from './NotificationOptInButton';
 import { OtpVerificationBox } from './OtpVerificationBox';
+import { PWAInstallButton } from './PWAControls';
 
 interface WorkerRegistrationFormProps {
   onNavigate: (route: PageRoute) => void;
@@ -49,6 +51,7 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({ 
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [savedId, setSavedId] = useState('');
+  const [showSuccessScreen, setShowSuccessScreen] = useState(false);
   const [gpsStatusMsg, setGpsStatusMsg] = useState('');
   const [gpsDetecting, setGpsDetecting] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
@@ -235,6 +238,8 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({ 
 
       await refreshUserProfiles();
       setSavedId(regId);
+      setShowSuccessScreen(true);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Unable to save registration.');
     } finally {
@@ -270,7 +275,81 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({ 
         </div>
       )}
 
-      {savedId && (
+      {savedId && showSuccessScreen && (
+        <section className="mb-8 bg-white border-2 border-[#15803D] rounded-lg overflow-hidden shadow-sm">
+          <div className="bg-[#15803D] text-white px-6 py-4 flex items-start gap-3">
+            <CheckCircle2 className="w-7 h-7 text-amber-300 shrink-0 mt-0.5" />
+            <div>
+              <h2 className="font-display text-xl sm:text-2xl font-extrabold">
+                Welcome to ROJGAR SETU!
+              </h2>
+              <p className="text-sm sm:text-base text-emerald-50 font-semibold mt-0.5">
+                आपका कामगार नोंदणी अर्ज यशस्वी झाला आहे.
+              </p>
+            </div>
+          </div>
+
+          <div className="p-6 space-y-5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 bg-slate-50 border border-slate-200 rounded-lg p-4 text-xs sm:text-sm">
+              <div>
+                <div className="text-slate-500 text-xs font-medium">
+                  {lang === 'hi' ? 'कामगार नाम' : lang === 'mr' ? 'कामगार नाव' : 'Worker Name'}
+                </div>
+                <div className="font-bold text-[#0B3B75] mt-0.5">{fullName}</div>
+              </div>
+              <div>
+                <div className="text-slate-500 text-xs font-medium">{t.workerForm.uniqueIdLabel}</div>
+                <div className="font-mono-tabular font-extrabold text-[#C25E00] mt-0.5">{savedId}</div>
+              </div>
+              <div>
+                <div className="text-slate-500 text-xs font-medium">{t.dashboards.profileStatus}</div>
+                <div className="font-bold text-[#15803D] uppercase mt-0.5">
+                  {workerProfile?.verificationStatus || 'pending'}
+                </div>
+              </div>
+              <div>
+                <div className="text-slate-500 text-xs font-medium">
+                  {lang === 'hi' ? 'पंजीकृत कौशल' : lang === 'mr' ? 'नोंदवलेली कौशल्ये' : 'Registered Skills'}
+                </div>
+                <div className="font-semibold text-slate-800 mt-0.5">{skills.join(' · ')}</div>
+              </div>
+              <div className="sm:col-span-2">
+                <div className="text-slate-500 text-xs font-medium">
+                  {lang === 'hi' ? 'स्थान' : lang === 'mr' ? 'ठिकाण' : 'Location'}
+                </div>
+                <div className="font-semibold text-slate-800 mt-0.5">
+                  {cityOrVillage}, {districtName}, {stateName}
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-md bg-blue-50 border border-blue-200 p-4 text-sm font-medium text-[#0B3B75]">
+              रोजगार सेतु मोबाईलमध्ये इन्स्टॉल करा. तुमच्या कौशल्यानुसार नवीन कामाच्या संधींच्या सूचना थेट मोबाईलवर मिळवा.
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <PWAInstallButton variant="primary" />
+              <NotificationOptInButton role="worker" />
+              <button
+                type="button"
+                onClick={() => onNavigate('worker-dashboard')}
+                className="px-5 py-2.5 rounded-md bg-[#15803D] text-white text-sm font-bold hover:bg-emerald-800 cursor-pointer min-h-[44px]"
+              >
+                Open Worker Dashboard
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowSuccessScreen(false)}
+                className="px-4 py-2.5 rounded-md border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+              >
+                {lang === 'hi' ? 'प्रोफ़ाइल संपादित करें' : lang === 'mr' ? 'प्रोफाईल बदला' : 'Edit Profile'}
+              </button>
+            </div>
+          </div>
+        </section>
+      )}
+
+      {savedId && !showSuccessScreen && (
         <div className="mb-6 bg-green-50 border border-green-200 rounded-lg p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-start gap-2.5">
             <CheckCircle2 className="w-5 h-5 text-[#15803D] shrink-0 mt-0.5" />
@@ -281,16 +360,20 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({ 
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => onNavigate('worker-dashboard')}
-            className="px-4 py-2 rounded-md bg-[#15803D] text-white text-xs font-semibold hover:bg-green-800 whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            {t.nav.workerDashboard}
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <PWAInstallButton variant="compact" />
+            <button
+              type="button"
+              onClick={() => onNavigate('worker-dashboard')}
+              className="px-4 py-2 rounded-md bg-[#15803D] text-white text-xs font-semibold hover:bg-green-800 whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              Open Worker Dashboard
+            </button>
+          </div>
         </div>
       )}
 
+      {!showSuccessScreen && (
       <form onSubmit={handleSubmit} className="bg-white border border-slate-200 rounded-lg p-6 sm:p-8 space-y-6">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
           <div>
@@ -747,6 +830,7 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({ 
           </button>
         </div>
       </form>
+      )}
     </div>
   );
 };

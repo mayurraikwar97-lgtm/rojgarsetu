@@ -1,10 +1,10 @@
-import React, { useMemo, useState } from 'react';
-import { Briefcase, CheckCircle2, MapPin, PlusCircle, Search, Users } from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { BellRing, Briefcase, CheckCircle2, MapPin, PlusCircle, Search, Users } from 'lucide-react';
 import { EMPLOYMENT_CATEGORIES } from '../data/categories';
 import { getDistrictCoordinates, INDIA_STATES_DISTRICTS } from '../data/indiaLocations';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../i18n/LanguageContext';
-import { applyToJob, createJobPosting } from '../lib/firestoreService';
+import { applyToJob, callNotificationApi, createJobPosting } from '../lib/firestoreService';
 import type {
   JobPosting,
   JobWorkType,
@@ -16,12 +16,16 @@ import type {
 interface FindWorkViewProps {
   jobs: JobPosting[];
   initialCategory?: string;
+  highlightedJobId?: string;
+  onClearHighlightedJob?: () => void;
   onNavigate: (route: PageRoute) => void;
 }
 
 export const FindWorkView: React.FC<FindWorkViewProps> = ({
   jobs,
   initialCategory = '',
+  highlightedJobId = '',
+  onClearHighlightedJob,
   onNavigate,
 }) => {
   const { lang, t } = useLanguage();
@@ -42,7 +46,7 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
 
   const filteredJobs = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return jobs
+    const list = jobs
       .filter((j) => j.status === 'open')
       .filter((j) => !stateFilter || j.state === stateFilter)
       .filter((j) => !workTypeFilter || j.workType === workTypeFilter)
@@ -57,7 +61,20 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
           j.employerName.toLowerCase().includes(q) ||
           j.requiredSkills.some((s) => s.toLowerCase().includes(q))
       );
-  }, [jobs, search, stateFilter, workTypeFilter, womenOnly, pwdOnly]);
+
+    if (highlightedJobId) {
+      list.sort((a, b) => (a.id === highlightedJobId ? -1 : b.id === highlightedJobId ? 1 : 0));
+    }
+    return list;
+  }, [jobs, search, stateFilter, workTypeFilter, womenOnly, pwdOnly, highlightedJobId]);
+
+  useEffect(() => {
+    if (!highlightedJobId) return;
+    const el = document.getElementById(`job-card-${highlightedJobId}`);
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [highlightedJobId, filteredJobs.length]);
 
   const handleOpenApply = (job: JobPosting) => {
     setErrorMsg('');
@@ -72,6 +89,7 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
     setSubmitting(true);
     setErrorMsg('');
     try {
+      const numericWage = Number(proposedWage) || applyingJob.offeredWage;
       await applyToJob({
         jobId: applyingJob.id,
         jobTitle: applyingJob.title,
@@ -80,11 +98,23 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
         workerRegistrationId: workerProfile.registrationId,
         workerName: workerProfile.displayName,
         workerPrimarySkill: workerProfile.primarySkill,
-        proposedWage: Number(proposedWage) || applyingJob.offeredWage,
+        proposedWage: numericWage,
         note: applyNote.trim().slice(0, 600),
       });
+      void callNotificationApi('/api/notifications/send-customer-event', {
+        recipientUid: applyingJob.employerUid,
+        eventType: numericWage !== applyingJob.offeredWage ? 'worker_quotation' : 'new_application',
+        workerName: workerProfile.displayName,
+        jobTitle: applyingJob.title,
+        jobId: applyingJob.id,
+        proposedWage: numericWage,
+        targetRoute: 'employer-dashboard',
+      }).catch(() => undefined);
       setAppliedJobIds((prev) => [...prev, applyingJob.id]);
       setApplyingJob(null);
+      if (highlightedJobId === applyingJob.id && onClearHighlightedJob) {
+        onClearHighlightedJob();
+      }
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Unable to submit application.');
     } finally {
@@ -175,6 +205,26 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
         </div>
       </div>
 
+      {highlightedJobId && (
+        <div className="mb-6 bg-amber-50 border-2 border-[#E06D1B] rounded-lg px-4 py-3 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-xs sm:text-sm font-semibold text-[#0B3B75]">
+            <BellRing className="w-4 h-4 text-[#E06D1B] shrink-0" />
+            <span>
+              Opened directly from your ROJGAR SETU push notification. Review details below and tap Apply.
+            </span>
+          </div>
+          {onClearHighlightedJob && (
+            <button
+              type="button"
+              onClick={onClearHighlightedJob}
+              className="text-xs font-bold text-[#C25E00] hover:underline shrink-0 cursor-pointer"
+            >
+              Dismiss
+            </button>
+          )}
+        </div>
+      )}
+
       {filteredJobs.length === 0 ? (
         <div className="bg-white border border-slate-200 rounded-lg p-12 text-center space-y-3">
           <Briefcase className="w-8 h-8 text-slate-300 mx-auto" />
@@ -184,6 +234,7 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
         <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           {filteredJobs.map((job) => {
             const isApplied = appliedJobIds.includes(job.id);
+            const isHighlighted = highlightedJobId === job.id;
             const catItem = EMPLOYMENT_CATEGORIES.find((c) => c.en === job.category);
             const catTitle = catItem
               ? lang === 'hi'
@@ -194,12 +245,21 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
               : job.category;
 
             return (
-              <div key={job.id} className="bg-white border border-slate-200 rounded-lg p-6 flex flex-col justify-between gap-4">
+              <div
+                key={job.id}
+                id={`job-card-${job.id}`}
+                className={`bg-white rounded-lg p-6 flex flex-col justify-between gap-4 ${
+                  isHighlighted
+                    ? 'border-2 border-[#E06D1B] ring-2 ring-amber-200'
+                    : 'border border-slate-200'
+                }`}
+              >
                 <div className="space-y-2.5">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <p className="text-xs text-slate-500">
                         {catTitle} · {job.workType.replace('_', ' ')}
+                        {isHighlighted ? ' · 🔔 Notification Match' : ''}
                       </p>
                       <h2 className="font-display text-lg font-bold text-[#0B3B75] mt-0.5">
                         {job.title}
@@ -489,12 +549,14 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ onNavigate }) => {
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [createdJobId, setCreatedJobId] = useState('');
+  const [pushDispatchNotice, setPushDispatchNotice] = useState('');
 
   const stateObj = INDIA_STATES_DISTRICTS.find((s) => s.name === stateName);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
+    setPushDispatchNotice('');
     if (!user || !employerProfile) return;
 
     const coords = getDistrictCoordinates(stateName, districtName);
@@ -534,6 +596,28 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ onNavigate }) => {
         biddingEnabled,
       });
       setCreatedJobId(id);
+
+      try {
+        const res = await callNotificationApi<{
+          ok?: boolean;
+          matchedWorkersCount?: number;
+          sentCount?: number;
+          inAppOnlyCount?: number;
+          message?: string;
+        }>('/api/notifications/send-matching-job', { jobId: id });
+        if ((res.data.sentCount || 0) > 0) {
+          setPushDispatchNotice(
+            `Push notifications delivered to ${res.data.sentCount} matching worker device(s).`
+          );
+        } else if ((res.data.matchedWorkersCount || 0) > 0) {
+          setPushDispatchNotice(
+            res.data.message ||
+              `${res.data.matchedWorkersCount} matching worker(s) found (${res.data.inAppOnlyCount || 0} in-app alerts recorded).`
+          );
+        }
+      } catch {
+        // Non-blocking: job is still published even if server push credentials aren't active
+      }
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Unable to publish job.');
     } finally {
@@ -577,14 +661,19 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ onNavigate }) => {
       ) : (
         <>
           {createdJobId && (
-            <div className="mb-6 bg-green-50 border border-green-200 rounded-lg p-4 flex items-center justify-between gap-4">
-              <p className="text-sm font-semibold text-green-950">
-                Job published successfully (ID: <span className="font-mono-tabular">{createdJobId}</span>).
-              </p>
+            <div className="mb-6 bg-green-50 border border-green-200 rounded-lg p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-semibold text-green-950">
+                  Job published successfully (ID: <span className="font-mono-tabular">{createdJobId}</span>).
+                </p>
+                {pushDispatchNotice && (
+                  <p className="text-xs text-emerald-800 mt-1">{pushDispatchNotice}</p>
+                )}
+              </div>
               <button
                 type="button"
                 onClick={() => onNavigate('employer-dashboard')}
-                className="px-4 py-2 rounded-md bg-[#15803D] text-white text-xs font-semibold cursor-pointer"
+                className="px-4 py-2 rounded-md bg-[#15803D] text-white text-xs font-semibold cursor-pointer shrink-0"
               >
                 {t.nav.employerDashboard}
               </button>

@@ -1,12 +1,32 @@
 import { initializeApp } from 'firebase/app';
-import { getAuth, GoogleAuthProvider } from 'firebase/auth';
+import {
+  browserLocalPersistence,
+  getAuth,
+  GoogleAuthProvider,
+  setPersistence,
+} from 'firebase/auth';
 import { doc, getDocFromServer, getFirestore } from 'firebase/firestore';
+import { getMessaging, isSupported } from 'firebase/messaging';
+import type { Messaging } from 'firebase/messaging';
 import firebaseConfig from '../../firebase-applet-config.json';
 
 const app = initializeApp(firebaseConfig);
 export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const auth = getAuth(app);
+setPersistence(auth, browserLocalPersistence).catch((err) => {
+  console.warn('Auth persistence setup notice:', err);
+});
 export const googleProvider = new GoogleAuthProvider();
+
+let messagingPromise: Promise<Messaging | null> | null = null;
+export function getFirebaseMessaging(): Promise<Messaging | null> {
+  if (!messagingPromise) {
+    messagingPromise = isSupported()
+      .then((supported) => (supported ? getMessaging(app) : null))
+      .catch(() => null);
+  }
+  return messagingPromise;
+}
 
 export const BOOTSTRAPPED_ADMIN_EMAIL = 'mayurraikwar97@gmail.com';
 
