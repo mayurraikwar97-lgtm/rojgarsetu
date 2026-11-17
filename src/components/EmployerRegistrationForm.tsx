@@ -85,6 +85,10 @@ export const EmployerRegistrationForm: React.FC<EmployerRegistrationFormProps> =
       setErrorMsg('Please fill out business name and contact person.');
       return;
     }
+    if (!/^[6-9]\d{9}$/.test(mobile.trim())) {
+      setErrorMsg('Please enter a valid 10-digit Indian mobile number.');
+      return;
+    }
     if (!mobileVerified) {
       setErrorMsg('Please complete mobile OTP verification.');
       return;

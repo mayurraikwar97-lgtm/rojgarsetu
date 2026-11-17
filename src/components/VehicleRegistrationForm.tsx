@@ -606,7 +606,10 @@ export const VehicleRegistrationForm: React.FC<VehicleRegistrationFormProps> = (
                 setMobileVerified(false);
               }}
               verified={mobileVerified}
-              onVerified={() => setMobileVerified(true)}
+              onVerified={(m) => {
+                setMobile(m);
+                setMobileVerified(true);
+              }}
             />
           </div>
 

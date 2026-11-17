@@ -662,6 +662,7 @@ service cloud.firestore {
         && isOwner(workerId)
         && isValidWorkerPrivate(incoming())
         && incoming().ownerUid == request.auth.uid
+        && incoming().mobileVerified == true
         && incoming().idVerificationStatus in ['not_submitted', 'voluntary_pending']
         && isValidTimestampOnCreate();
       allow update: if isValidId(workerId)
@@ -673,6 +674,7 @@ service cloud.firestore {
           isAdmin() ||
           (
             isOwner(existing().ownerUid)
+            && incoming().mobileVerified == true
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'fullName', 'mobile', 'mobileVerified', 'email', 'ageConfirmed',
               'preferredWorkLocation', 'liveLocationConsent', 'privacyConsent',
@@ -720,6 +722,7 @@ service cloud.firestore {
         && isOwner(employerId)
         && isValidEmployerPrivate(incoming())
         && incoming().ownerUid == request.auth.uid
+        && incoming().mobileVerified == true
         && isValidTimestampOnCreate();
       allow update: if isValidId(employerId)
         && isVerifiedUser()
@@ -730,6 +733,7 @@ service cloud.firestore {
           isAdmin() ||
           (
             isOwner(existing().ownerUid)
+            && incoming().mobileVerified == true
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'contactPerson', 'mobile', 'mobileVerified', 'email',
               'businessAddress', 'gstNumber', 'establishmentDetails',
@@ -921,13 +925,23 @@ service cloud.firestore {
         && isVerifiedUser()
         && isValidVehiclePrivate(incoming())
         && incoming().ownerUid == request.auth.uid
+        && incoming().mobileVerified == true
         && isValidTimestampOnCreate();
       allow update: if isValidId(vehicleId)
         && isVerifiedUser()
         && isValidVehiclePrivate(incoming())
         && isValidTimestampOnUpdate()
         && incoming().ownerUid == existing().ownerUid
-        && (isAdmin() || isOwner(existing().ownerUid));
+        && (
+          isAdmin() ||
+          (
+            isOwner(existing().ownerUid)
+            && incoming().mobileVerified == true
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'ownerName', 'mobile', 'mobileVerified', 'email', 'rcOrLicenseNotes', 'updatedAt'
+            ])
+          )
+        );
       allow delete: if isValidId(vehicleId) && isAdmin();
     }
 
