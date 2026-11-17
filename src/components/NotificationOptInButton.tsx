@@ -20,6 +20,7 @@ interface NotificationOptInButtonProps {
   demoAccountId?: string;
   compact?: boolean;
   className?: string;
+  onStatusChange?: (enabled: boolean) => void;
 }
 
 export const NotificationOptInButton: React.FC<NotificationOptInButtonProps> = ({
@@ -28,6 +29,7 @@ export const NotificationOptInButton: React.FC<NotificationOptInButtonProps> = (
   demoAccountId,
   compact = false,
   className = '',
+  onStatusChange,
 }) => {
   const { lang } = useLanguage();
   const { user } = useAuth();
@@ -61,6 +63,7 @@ export const NotificationOptInButton: React.FC<NotificationOptInButtonProps> = (
       });
       setStatusMsg(res.message);
       setStatusKind(res.ok ? 'ok' : 'warn');
+      if (res.ok) onStatusChange?.(true);
     } finally {
       setBusy(false);
     }
@@ -81,6 +84,7 @@ export const NotificationOptInButton: React.FC<NotificationOptInButtonProps> = (
         )
       );
       setStatusKind('info');
+      onStatusChange?.(false);
     } finally {
       setBusy(false);
     }

@@ -11,8 +11,10 @@ import {
   subscribePublicWorkers,
   subscribeVehicleListings,
 } from './lib/firestoreService';
+import { isDemoModeEnvEnabled, subscribeDemoModeConfig } from './lib/demoService';
 import type {
   AiHirePrefill,
+  DemoModeConfig,
   JobPosting,
   PageRoute,
   PlatformAnnouncement,
@@ -37,6 +39,7 @@ import {
   EmployerDashboardView,
   WorkerDashboardView,
 } from './components/DashboardsView';
+import { DemoTestingCenter } from './components/DemoTestingCenter';
 import {
   AboutUsView,
   ContactView,
@@ -60,6 +63,7 @@ const VALID_ROUTES: PageRoute[] = [
   'worker-dashboard',
   'employer-dashboard',
   'admin',
+  'demo-testing',
   'about',
   'partnerships',
   'pricing',
@@ -78,6 +82,7 @@ const AppShell: React.FC = () => {
   const [highlightedJobId, setHighlightedJobId] = useState('');
   const [highlightedDemoJobId, setHighlightedDemoJobId] = useState('');
   const [gmpQuotaExceeded, setGmpQuotaExceeded] = useState(false);
+  const [demoConfig, setDemoConfig] = useState<DemoModeConfig | null>(null);
 
   const [foregroundPush, setForegroundPush] = useState<{
     title: string;
@@ -207,14 +212,19 @@ const AppShell: React.FC = () => {
     const u3 = subscribeJobs(setJobs);
     const u4 = subscribeAnnouncements(setAnnouncements);
     const u5 = subscribeVehicleListings(setVehicles);
+    const u6 = subscribeDemoModeConfig(setDemoConfig);
     return () => {
       u1();
       u2();
       u3();
       u4();
       u5();
+      u6();
     };
   }, []);
+
+  const demoModeActive =
+    isDemoModeEnvEnabled() && (Boolean(demoConfig?.enabled) || isAdmin);
 
   useEffect(() => {
     if (!isAdmin) {
@@ -313,6 +323,7 @@ const AppShell: React.FC = () => {
       <Header
         currentRoute={route}
         onNavigate={(r) => navigate(r)}
+        demoModeActive={demoModeActive}
         onOpenAiAssistant={() => {
           setAiLocationHint('');
           setAiOpen(true);
@@ -332,6 +343,7 @@ const AppShell: React.FC = () => {
             jobs={jobs}
             announcements={announcements}
             totalApplicationsCount={adminAppsCount}
+            demoModeActive={demoModeActive}
           />
         )}
         {route === 'hire' && (
@@ -405,7 +417,11 @@ const AppShell: React.FC = () => {
             employers={employers}
             jobs={jobs}
             announcements={announcements}
+            onNavigate={(r) => navigate(r)}
           />
+        )}
+        {route === 'demo-testing' && (
+          <DemoTestingCenter onNavigate={(r) => navigate(r)} />
         )}
         {route === 'about' && <AboutUsView />}
         {route === 'partnerships' && <PartnershipsView />}

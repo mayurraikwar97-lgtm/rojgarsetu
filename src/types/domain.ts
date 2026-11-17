@@ -16,6 +16,7 @@ export type PageRoute =
   | 'worker-dashboard'
   | 'employer-dashboard'
   | 'admin'
+  | 'demo-testing'
   | 'about'
   | 'partnerships'
   | 'pricing'
@@ -459,4 +460,147 @@ export interface DemoJobApplication {
   createdAt?: unknown;
   updatedAt?: unknown;
 }
+
+export type DemoUserRole = 'customer' | 'worker';
+export type DemoLocationPermissionStatus = 'granted' | 'denied' | 'prompt' | 'manual_fallback';
+export type DemoLocationSource = 'gps' | 'search' | 'manual_test';
+export type DemoShareSource = 'gps_watch' | 'gps_once' | 'simulated_move';
+
+export type DemoWorkOrderStatus =
+  | 'requested'
+  | 'accepted'
+  | 'customer_confirmed'
+  | 'in_progress'
+  | 'completed'
+  | 'closed'
+  | 'declined'
+  | 'cancelled';
+
+export interface DemoModeConfig {
+  id?: string;
+  enabled: boolean;
+  testOnlyOtpMode: boolean;
+  maxUsers: number;
+  updatedByUid: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface DemoUserProfile {
+  id: string;
+  uniqueUserId: string;
+  ownerUid: string;
+  slotLabel?: string;
+  deviceLabel?: string;
+  testPinHash?: string;
+  role: DemoUserRole;
+  category: string;
+  displayName: string;
+  mobile10: string;
+  maskedMobile: string;
+  testVerificationStatus: 'demo_test_verified';
+  availabilityStatus: 'available' | 'busy' | 'offline';
+  state: string;
+  district: string;
+  cityOrVillage: string;
+  lat: number;
+  lng: number;
+  accuracyMeters: number;
+  locationPermissionStatus: DemoLocationPermissionStatus;
+  locationSource: DemoLocationSource;
+  pushEnabled?: boolean;
+  isDemo: true;
+  lastActiveAt?: unknown;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface DemoWorkOrder {
+  id: string;
+  orderCode: string;
+  ownerUid: string;
+  customerDemoUserId: string;
+  customerName: string;
+  customerUniqueId: string;
+  serviceCategory: string;
+  title: string;
+  description: string;
+  state: string;
+  district: string;
+  cityOrVillage: string;
+  requestLat: number;
+  requestLng: number;
+  offeredWage: number;
+  wageUnit: WageUnit;
+  status: DemoWorkOrderStatus;
+  matchedWorkerIds: string[];
+  matchedWorkerOwnerUids: string[];
+  rejectedWorkerIds: string[];
+  acceptedWorkerId?: string;
+  acceptedWorkerOwnerUid?: string;
+  acceptedWorkerName?: string;
+  acceptedWorkerUniqueId?: string;
+  customerConfirmedAt?: unknown;
+  completedAt?: unknown;
+  closedAt?: unknown;
+  customerLocationSharing: boolean;
+  workerLocationSharing: boolean;
+  completionNotes?: string;
+  workerRating?: number;
+  isDemo: true;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface DemoLiveLocationShare {
+  id: string;
+  orderId: string;
+  ownerUid: string;
+  authorizedOwnerUids: string[];
+  demoUserId: string;
+  participantRole: 'customer' | 'worker';
+  participantName: string;
+  lat: number;
+  lng: number;
+  accuracyMeters: number;
+  sharingActive: boolean;
+  permissionState: DemoLocationPermissionStatus;
+  source: DemoShareSource;
+  isDemo: true;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface DemoNotificationRecord {
+  id: string;
+  dedupeKey: string;
+  recipientDemoUserId: string;
+  recipientName: string;
+  recipientRole: DemoUserRole;
+  recipientOwnerUid: string;
+  senderOwnerUid: string;
+  ownerUid: string;
+  orderId: string;
+  eventType:
+    | 'job_request'
+    | 'job_accepted'
+    | 'customer_confirmed'
+    | 'job_started'
+    | 'job_rejected'
+    | 'job_completed'
+    | 'deal_closed'
+    | 'location_started'
+    | 'location_stopped';
+  title: string;
+  body: string;
+  inAppDelivered: boolean;
+  browserNotificationStatus: 'delivered' | 'permission_default' | 'permission_denied' | 'unsupported';
+  fcmPushStatus: 'sent' | 'failed' | 'skipped_no_token';
+  fcmErrorReason?: string;
+  read: boolean;
+  isDemo: true;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
 

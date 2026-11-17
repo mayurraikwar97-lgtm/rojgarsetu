@@ -573,6 +573,178 @@
         "demoJobId", "demoJobTitle", "demoAccountId", "applicantUid",
         "workerName", "proposedWage", "status", "isDemo", "createdAt", "updatedAt"
       ]
+    },
+    "DemoModeConfig": {
+      "title": "DemoModeConfig",
+      "description": "Admin-controlled global feature toggle for temporary pre-launch 5-user demo testing.",
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "testOnlyOtpMode": { "type": "boolean" },
+        "maxUsers": { "type": "number" },
+        "updatedByUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["enabled", "testOnlyOtpMode", "maxUsers", "updatedByUid", "createdAt", "updatedAt"]
+    },
+    "DemoUserProfile": {
+      "title": "DemoUserProfile",
+      "description": "Isolated pre-launch 5-mobile test account (Worker A Electrician, Worker B Plumber, Worker C Carpenter, Customer A, Customer B).",
+      "type": "object",
+      "properties": {
+        "uniqueUserId": { "type": "string", "minLength": 6, "maxLength": 48, "pattern": "^RS-DEMO-[A-Z0-9\\-]+$" },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "slotLabel": { "type": "string", "maxLength": 60 },
+        "deviceLabel": { "type": "string", "maxLength": 60 },
+        "testPinHash": { "type": "string", "maxLength": 128 },
+        "role": { "type": "string", "enum": ["customer", "worker"] },
+        "category": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "displayName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "mobile10": { "type": "string", "minLength": 10, "maxLength": 10, "pattern": "^[6-9][0-9]{9}$" },
+        "maskedMobile": { "type": "string", "minLength": 10, "maxLength": 20 },
+        "testVerificationStatus": { "type": "string", "enum": ["demo_test_verified"] },
+        "availabilityStatus": { "type": "string", "enum": ["available", "busy", "offline"] },
+        "state": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "district": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "cityOrVillage": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "lat": { "type": "number" },
+        "lng": { "type": "number" },
+        "accuracyMeters": { "type": "number" },
+        "locationPermissionStatus": { "type": "string", "enum": ["granted", "denied", "prompt", "manual_fallback"] },
+        "locationSource": { "type": "string", "enum": ["gps", "search", "manual_test"] },
+        "pushEnabled": { "type": "boolean" },
+        "isDemo": { "type": "boolean" },
+        "lastActiveAt": { "type": "string", "format": "date-time" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "uniqueUserId", "ownerUid", "role", "category", "displayName", "mobile10",
+        "maskedMobile", "testVerificationStatus", "availabilityStatus", "state",
+        "district", "cityOrVillage", "lat", "lng", "accuracyMeters",
+        "locationPermissionStatus", "locationSource", "isDemo", "lastActiveAt",
+        "createdAt", "updatedAt"
+      ]
+    },
+    "DemoMobileRegistry": {
+      "title": "DemoMobileRegistry",
+      "description": "Atomic duplicate-mobile lock document ensuring no two demo users share a mobile number.",
+      "type": "object",
+      "properties": {
+        "mobile10": { "type": "string", "minLength": 10, "maxLength": 10, "pattern": "^[6-9][0-9]{9}$" },
+        "demoUserId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["mobile10", "demoUserId", "ownerUid", "createdAt", "updatedAt"]
+    },
+    "DemoWorkOrder": {
+      "title": "DemoWorkOrder",
+      "description": "End-to-end 7-stage customer job request across 5 test phones: requested -> accepted -> customer_confirmed -> in_progress -> completed -> closed.",
+      "type": "object",
+      "properties": {
+        "orderCode": { "type": "string", "minLength": 5, "maxLength": 48 },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "customerDemoUserId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "customerName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "customerUniqueId": { "type": "string", "minLength": 5, "maxLength": 48 },
+        "serviceCategory": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "title": { "type": "string", "minLength": 3, "maxLength": 160 },
+        "description": { "type": "string", "minLength": 5, "maxLength": 1000 },
+        "state": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "district": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "cityOrVillage": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "requestLat": { "type": "number" },
+        "requestLng": { "type": "number" },
+        "offeredWage": { "type": "number" },
+        "wageUnit": { "type": "string", "enum": ["daily", "monthly", "hourly", "contract"] },
+        "status": { "type": "string", "enum": ["requested", "accepted", "customer_confirmed", "in_progress", "completed", "closed", "declined", "cancelled"] },
+        "matchedWorkerIds": { "type": "array", "description": "Bounded list of up to 10 matched demo worker IDs." },
+        "matchedWorkerOwnerUids": { "type": "array", "description": "Bounded list of Firebase UIDs belonging to matched workers for cross-device rule access." },
+        "rejectedWorkerIds": { "type": "array", "description": "Bounded list of up to 10 demo worker IDs who declined." },
+        "acceptedWorkerId": { "type": "string", "maxLength": 128 },
+        "acceptedWorkerOwnerUid": { "type": "string", "maxLength": 128 },
+        "acceptedWorkerName": { "type": "string", "maxLength": 120 },
+        "acceptedWorkerUniqueId": { "type": "string", "maxLength": 48 },
+        "customerConfirmedAt": { "type": "string", "format": "date-time" },
+        "completedAt": { "type": "string", "format": "date-time" },
+        "closedAt": { "type": "string", "format": "date-time" },
+        "customerLocationSharing": { "type": "boolean" },
+        "workerLocationSharing": { "type": "boolean" },
+        "completionNotes": { "type": "string", "maxLength": 500 },
+        "workerRating": { "type": "number" },
+        "isDemo": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "orderCode", "ownerUid", "customerDemoUserId", "customerName", "customerUniqueId",
+        "serviceCategory", "title", "description", "state", "district", "cityOrVillage",
+        "requestLat", "requestLng", "offeredWage", "wageUnit", "status",
+        "matchedWorkerIds", "matchedWorkerOwnerUids", "rejectedWorkerIds",
+        "customerLocationSharing", "workerLocationSharing", "isDemo", "createdAt", "updatedAt"
+      ]
+    },
+    "DemoLiveLocationShare": {
+      "title": "DemoLiveLocationShare",
+      "description": "Authorized real-time GPS coordinate stream shared strictly between accepted worker and customer across devices.",
+      "type": "object",
+      "properties": {
+        "orderId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "authorizedOwnerUids": { "type": "array", "description": "Up to 2 Firebase UIDs (customer & accepted worker) permitted to view coordinates." },
+        "demoUserId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "participantRole": { "type": "string", "enum": ["customer", "worker"] },
+        "participantName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "lat": { "type": "number" },
+        "lng": { "type": "number" },
+        "accuracyMeters": { "type": "number" },
+        "sharingActive": { "type": "boolean" },
+        "permissionState": { "type": "string", "enum": ["granted", "denied", "prompt", "manual_fallback"] },
+        "source": { "type": "string", "enum": ["gps_watch", "gps_once", "simulated_move"] },
+        "isDemo": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "orderId", "ownerUid", "authorizedOwnerUids", "demoUserId", "participantRole",
+        "participantName", "lat", "lng", "accuracyMeters", "sharingActive",
+        "permissionState", "source", "isDemo", "createdAt", "updatedAt"
+      ]
+    },
+    "DemoNotificationRecord": {
+      "title": "DemoNotificationRecord",
+      "description": "Deduplicated 3-channel notification log (In-App, Browser Notification, Cross-Device FCM Push) for 5-mobile testing.",
+      "type": "object",
+      "properties": {
+        "dedupeKey": { "type": "string", "minLength": 4, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "recipientDemoUserId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "recipientName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "recipientRole": { "type": "string", "enum": ["customer", "worker"] },
+        "recipientOwnerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "senderOwnerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "orderId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "eventType": { "type": "string", "enum": ["job_request", "job_accepted", "customer_confirmed", "job_started", "job_rejected", "job_completed", "deal_closed", "location_started", "location_stopped"] },
+        "title": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "body": { "type": "string", "minLength": 2, "maxLength": 500 },
+        "inAppDelivered": { "type": "boolean" },
+        "browserNotificationStatus": { "type": "string", "enum": ["delivered", "permission_default", "permission_denied", "unsupported"] },
+        "fcmPushStatus": { "type": "string", "enum": ["sent", "failed", "skipped_no_token"] },
+        "fcmErrorReason": { "type": "string", "maxLength": 400 },
+        "read": { "type": "boolean" },
+        "isDemo": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "dedupeKey", "recipientDemoUserId", "recipientName", "recipientRole",
+        "recipientOwnerUid", "senderOwnerUid", "ownerUid", "orderId",
+        "eventType", "title", "body", "inAppDelivered", "browserNotificationStatus",
+        "fcmPushStatus", "read", "isDemo", "createdAt", "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -667,6 +839,30 @@
     "/demo_applications/{demoAppId}": {
       "schema": { "$ref": "#/entities/DemoJobApplication" },
       "description": "Isolated demo job applications submitted during admin live demo tests."
+    },
+    "/platform_settings/{settingId}": {
+      "schema": { "$ref": "#/entities/DemoModeConfig" },
+      "description": "Admin-controlled platform settings including temporary Demo Mode toggle."
+    },
+    "/demo_users/{demoUserId}": {
+      "schema": { "$ref": "#/entities/DemoUserProfile" },
+      "description": "Pre-launch 5-user test accounts (Customer, Plumber, Electrician, Carpenter, Driver) with GPS and availability telemetry."
+    },
+    "/demo_mobile_registry/{mobileKey}": {
+      "schema": { "$ref": "#/entities/DemoMobileRegistry" },
+      "description": "Unique mobile number index preventing duplicate mobile registrations in Demo Mode."
+    },
+    "/demo_work_orders/{orderId}": {
+      "schema": { "$ref": "#/entities/DemoWorkOrder" },
+      "description": "Pre-launch demo customer job requests, worker matching, acceptance/rejection, and completion tracking."
+    },
+    "/demo_location_shares/{shareId}": {
+      "schema": { "$ref": "#/entities/DemoLiveLocationShare" },
+      "description": "Authorized two-way live GPS location shares gated behind job acceptance and active sharing consent."
+    },
+    "/demo_notifications/{notifId}": {
+      "schema": { "$ref": "#/entities/DemoNotificationRecord" },
+      "description": "3-channel notification history and diagnostic records for Demo Mode testing."
     }
   }
 }

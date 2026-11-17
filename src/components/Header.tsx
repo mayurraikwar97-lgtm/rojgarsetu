@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { ChevronDown, Globe, LogOut, Menu, Mic, Shield, UserCheck, UserPlus, X, Zap } from 'lucide-react';
+import { ChevronDown, FlaskConical, Globe, LogOut, Menu, Mic, Shield, UserCheck, UserPlus, X, Zap } from 'lucide-react';
 import { useLanguage } from '../i18n/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
 import type { Language, PageRoute } from '../types/domain';
@@ -11,9 +11,15 @@ interface HeaderProps {
   currentRoute: PageRoute;
   onNavigate: (route: PageRoute) => void;
   onOpenAiAssistant?: () => void;
+  demoModeActive?: boolean;
 }
 
-export const Header: React.FC<HeaderProps> = ({ currentRoute, onNavigate, onOpenAiAssistant }) => {
+export const Header: React.FC<HeaderProps> = ({
+  currentRoute,
+  onNavigate,
+  onOpenAiAssistant,
+  demoModeActive = false,
+}) => {
   const { lang, setLang, t } = useLanguage();
   const { user, workerProfile, employerProfile, isAdmin, signInWithGoogle, logout } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -105,6 +111,21 @@ export const Header: React.FC<HeaderProps> = ({ currentRoute, onNavigate, onOpen
             </div>
 
             <PWAInstallButton />
+
+            {demoModeActive && (
+              <button
+                type="button"
+                onClick={() => handleNav('demo-testing')}
+                className={`hidden md:inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[11px] font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  currentRoute === 'demo-testing'
+                    ? 'bg-amber-400 text-[#072A54] border-amber-300'
+                    : 'bg-amber-500/20 text-amber-200 border-amber-400/60 hover:bg-amber-400 hover:text-[#072A54]'
+                }`}
+              >
+                <FlaskConical className="w-3 h-3" />
+                <span>{lang === 'hi' ? 'डेमो टेस्ट (5 यूजर)' : lang === 'mr' ? 'डेमो टेस्ट (5 युझर)' : 'Demo Test (5 Users)'}</span>
+              </button>
+            )}
 
             {/* Mandatory 3-Language Switcher */}
             <div
@@ -284,6 +305,19 @@ export const Header: React.FC<HeaderProps> = ({ currentRoute, onNavigate, onOpen
                       { id: 'pricing', label: t.nav.pricing },
                       { id: 'trust-safety', label: t.nav.trustSafety },
                       { id: 'contact', label: t.nav.contact },
+                      ...(demoModeActive
+                        ? [
+                            {
+                              id: 'demo-testing' as PageRoute,
+                              label:
+                                lang === 'hi'
+                                  ? '🧪 डेमो टेस्ट मोड (5 यूजर)'
+                                  : lang === 'mr'
+                                  ? '🧪 डेमो टेस्ट मोड (5 युझर)'
+                                  : '🧪 Pre-Launch Demo Mode (5 Users)',
+                            },
+                          ]
+                        : []),
                       ...(isAdmin ? [{ id: 'admin' as PageRoute, label: t.nav.adminPanel }] : []),
                     ] as { id: PageRoute; label: string }[]
                   ).map((sub) => (
@@ -403,6 +437,19 @@ export const Header: React.FC<HeaderProps> = ({ currentRoute, onNavigate, onOpen
                 { id: 'pricing', label: t.nav.pricing },
                 { id: 'trust-safety', label: t.nav.trustSafety },
                 { id: 'contact', label: t.nav.contact },
+                ...(demoModeActive
+                  ? [
+                      {
+                        id: 'demo-testing' as PageRoute,
+                        label:
+                          lang === 'hi'
+                            ? '🧪 डेमो टेस्ट मोड (5 यूजर)'
+                            : lang === 'mr'
+                            ? '🧪 डेमो टेस्ट मोड (5 युझर)'
+                            : '🧪 Pre-Launch Demo Mode (5 Users)',
+                      },
+                    ]
+                  : []),
                 ...(isAdmin ? [{ id: 'admin' as PageRoute, label: t.nav.adminPanel }] : []),
               ] as { id: PageRoute; label: string }[]
             ).map((item) => (

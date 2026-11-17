@@ -1175,4 +1175,208 @@ export function registerNotificationRoutes(
       res.status(500).json({ ok: false, errorCode: 'SERVER_ERROR', message });
     }
   });
+
+  app.post('/api/notifications/demo-push', async (req: Request, res: Response) => {
+    const result = await handleDemoPushDispatch({
+      authHeader: req.headers.authorization || '',
+      body: (req.body || {}) as Record<string, unknown>,
+      rootDir,
+    });
+    res.status(result.httpStatus).json(result.payload);
+  });
+}
+
+export async function handleDemoPushDispatch(params: {
+  authHeader: string;
+  body: Record<string, unknown>;
+  rootDir: string;
+}): Promise<{ httpStatus: number; payload: Record<string, unknown> }> {
+  const runtime = getAdminRuntime(params.rootDir);
+  const match = params.authHeader.match(/^Bearer\s+(.+)$/i);
+  if (!match) {
+    return {
+      httpStatus: 401,
+      payload: { ok: false, fcmPushStatus: 'failed', reason: 'Missing Authorization Bearer token.' },
+    };
+  }
+
+  let callerUid = '';
+  let isAdmin = false;
+  try {
+    const decoded = await getAuth(runtime.app).verifyIdToken(match[1]);
+    callerUid = decoded.uid;
+    isAdmin = decoded.email === BOOTSTRAPPED_ADMIN_EMAIL && decoded.email_verified === true;
+    if (!isAdmin && runtime.hasMessagingCredentials) {
+      try {
+        const adminSnap = await runtime.db.collection('admins').doc(decoded.uid).get();
+        if (adminSnap.exists) isAdmin = true;
+      } catch {
+        // Ignore optional admin lookup error
+      }
+    }
+  } catch {
+    return {
+      httpStatus: 401,
+      payload: { ok: false, fcmPushStatus: 'failed', reason: 'Invalid Firebase ID token.' },
+    };
+  }
+
+  if (!checkRateLimit(callerUid, 60)) {
+    return {
+      httpStatus: 429,
+      payload: { ok: false, fcmPushStatus: 'failed', reason: 'Rate limit exceeded for demo push dispatch.' },
+    };
+  }
+
+  const orderId = typeof params.body.orderId === 'string' ? params.body.orderId.trim() : '';
+  const recipientOwnerUid =
+    typeof params.body.recipientOwnerUid === 'string' ? params.body.recipientOwnerUid.trim() : '';
+  const recipientName =
+    typeof params.body.recipientName === 'string' ? params.body.recipientName.trim().slice(0, 120) : 'Demo User';
+  const recipientRole = params.body.recipientRole === 'customer' ? 'employer' : 'demo_worker';
+  const title = typeof params.body.title === 'string' ? params.body.title.trim().slice(0, 140) : '[DEMO] ROJGAR SETU Alert';
+  const body = typeof params.body.body === 'string' ? params.body.body.trim().slice(0, 400) : 'New Demo Mode update.';
+  const dedupeKey =
+    typeof params.body.dedupeKey === 'string' && params.body.dedupeKey.trim()
+      ? params.body.dedupeKey.trim().slice(0, 128)
+      : `demo_${orderId}_${recipientOwnerUid}_${Date.now()}`;
+
+  if (!orderId || !recipientOwnerUid) {
+    return {
+      httpStatus: 400,
+      payload: { ok: false, fcmPushStatus: 'failed', reason: 'orderId and recipientOwnerUid are required.' },
+    };
+  }
+
+  if (!runtime.hasMessagingCredentials) {
+    return {
+      httpStatus: 200,
+      payload: {
+        ok: false,
+        fcmPushStatus: 'failed',
+        attemptedTokens: 0,
+        sentCount: 0,
+        failedCount: 0,
+        reason:
+          'Server Firebase Admin credentials (FIREBASE_SERVICE_ACCOUNT_JSON or Cloud Run ADC) are not configured for cross-device FCM push.',
+      },
+    };
+  }
+
+  try {
+    if (!isAdmin) {
+      const orderSnap = await runtime.db.collection('demo_work_orders').doc(orderId).get();
+      if (!orderSnap.exists) {
+        return {
+          httpStatus: 404,
+          payload: { ok: false, fcmPushStatus: 'failed', reason: 'Demo work order not found.' },
+        };
+      }
+      const orderData = orderSnap.data() as {
+        ownerUid?: string;
+        matchedWorkerOwnerUids?: string[];
+        acceptedWorkerOwnerUid?: string;
+      };
+      const participants = new Set<string>([
+        ...(orderData.ownerUid ? [orderData.ownerUid] : []),
+        ...(Array.isArray(orderData.matchedWorkerOwnerUids) ? orderData.matchedWorkerOwnerUids : []),
+        ...(orderData.acceptedWorkerOwnerUid ? [orderData.acceptedWorkerOwnerUid] : []),
+      ]);
+      if (!participants.has(callerUid) || !participants.has(recipientOwnerUid)) {
+        return {
+          httpStatus: 403,
+          payload: {
+            ok: false,
+            fcmPushStatus: 'failed',
+            reason: 'Caller or recipient is not an authorized participant on this demo work order.',
+          },
+        };
+      }
+    }
+
+    const tokenSnap = await runtime.db
+      .collection('device_tokens')
+      .where('ownerUid', '==', recipientOwnerUid)
+      .where('enabled', '==', true)
+      .get();
+
+    if (tokenSnap.empty) {
+      return {
+        httpStatus: 200,
+        payload: {
+          ok: false,
+          fcmPushStatus: 'skipped_no_token',
+          attemptedTokens: 0,
+          sentCount: 0,
+          failedCount: 0,
+          reason:
+            'No active FCM Web Push token registered on the recipient mobile browser yet. Click "Enable Mobile Push Notifications" on that device first.',
+        },
+      };
+    }
+
+    const tokens = tokenSnap.docs.map((d) => ({
+      docId: d.id,
+      token: String((d.data() as { token?: string }).token || ''),
+    })).filter((t) => Boolean(t.token));
+
+    if (tokens.length === 0) {
+      return {
+        httpStatus: 200,
+        payload: {
+          ok: false,
+          fcmPushStatus: 'skipped_no_token',
+          attemptedTokens: 0,
+          sentCount: 0,
+          failedCount: 0,
+          reason: 'Recipient has no valid active push token.',
+        },
+      };
+    }
+
+    const firstTokenLang = getLanguageOrDefault((tokenSnap.docs[0].data() as { preferredLanguage?: string })?.preferredLanguage);
+    const dispatchResult = await dispatchAndRecordTargets({
+      runtime,
+      targets: [
+        {
+          uid: recipientOwnerUid,
+          label: recipientName,
+          role: recipientRole,
+          isDemo: true,
+          language: firstTokenLang,
+          tokens,
+          title,
+          body,
+          category: 'bookingNotifications',
+          targetRoute: 'demo-testing',
+          targetDemoJobId: orderId,
+          clickUrl: `/?route=demo-testing&demoJobId=${encodeURIComponent(orderId)}`,
+          dedupeKey,
+        },
+      ],
+      sentByUid: callerUid,
+    });
+
+    const fcmPushStatus = dispatchResult.sentCount > 0 ? 'sent' : 'failed';
+    return {
+      httpStatus: 200,
+      payload: {
+        ok: dispatchResult.sentCount > 0,
+        fcmPushStatus,
+        attemptedTokens: dispatchResult.attemptedTokens,
+        sentCount: dispatchResult.sentCount,
+        failedCount: dispatchResult.failedCount,
+        reason:
+          dispatchResult.sentCount > 0
+            ? ''
+            : dispatchResult.errors?.[0]?.message || dispatchResult.message || 'FCM push delivery failed.',
+      },
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Server push dispatch error';
+    return {
+      httpStatus: 500,
+      payload: { ok: false, fcmPushStatus: 'failed', reason: message },
+    };
+  }
 }

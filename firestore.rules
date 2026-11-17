@@ -39,6 +39,11 @@ service cloud.firestore {
       );
     }
 
+    function isDemoModeEnabled() {
+      return exists(/databases/$(database)/documents/platform_settings/demo_config)
+        && get(/databases/$(database)/documents/platform_settings/demo_config).data.enabled == true;
+    }
+
     function isValidTimestampOnCreate() {
       return incoming().createdAt == request.time && incoming().updatedAt == request.time;
     }
@@ -589,6 +594,189 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidDemoModeConfig(data) {
+      return data.keys().hasAll(['enabled', 'testOnlyOtpMode', 'maxUsers', 'updatedByUid', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['enabled', 'testOnlyOtpMode', 'maxUsers', 'updatedByUid', 'createdAt', 'updatedAt'])
+        && data.enabled is bool
+        && data.testOnlyOtpMode is bool
+        && data.maxUsers is number && data.maxUsers >= 1 && data.maxUsers <= 20
+        && isValidId(data.updatedByUid)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDemoUserProfile(data) {
+      return data.keys().hasAll([
+          'uniqueUserId', 'ownerUid', 'role', 'category', 'displayName', 'mobile10',
+          'maskedMobile', 'testVerificationStatus', 'availabilityStatus', 'state',
+          'district', 'cityOrVillage', 'lat', 'lng', 'accuracyMeters',
+          'locationPermissionStatus', 'locationSource', 'isDemo', 'lastActiveAt',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uniqueUserId', 'ownerUid', 'slotLabel', 'deviceLabel', 'testPinHash',
+          'role', 'category', 'displayName', 'mobile10',
+          'maskedMobile', 'testVerificationStatus', 'availabilityStatus', 'state',
+          'district', 'cityOrVillage', 'lat', 'lng', 'accuracyMeters',
+          'locationPermissionStatus', 'locationSource', 'pushEnabled', 'isDemo',
+          'lastActiveAt', 'createdAt', 'updatedAt'
+        ])
+        && data.uniqueUserId is string && data.uniqueUserId.size() >= 6 && data.uniqueUserId.size() <= 48 && data.uniqueUserId.matches('^RS-DEMO-[A-Z0-9\\-]+$')
+        && isValidId(data.ownerUid)
+        && (!('slotLabel' in data) || (data.slotLabel is string && data.slotLabel.size() <= 60))
+        && (!('deviceLabel' in data) || (data.deviceLabel is string && data.deviceLabel.size() <= 60))
+        && (!('testPinHash' in data) || (data.testPinHash is string && data.testPinHash.size() <= 128))
+        && data.role in ['customer', 'worker']
+        && data.category is string && data.category.size() >= 2 && data.category.size() <= 80
+        && data.displayName is string && data.displayName.size() >= 2 && data.displayName.size() <= 120
+        && data.mobile10 is string && data.mobile10.size() == 10 && data.mobile10.matches('^[6-9][0-9]{9}$')
+        && data.maskedMobile is string && data.maskedMobile.size() >= 10 && data.maskedMobile.size() <= 20
+        && data.testVerificationStatus == 'demo_test_verified'
+        && data.availabilityStatus in ['available', 'busy', 'offline']
+        && data.state is string && data.state.size() >= 2 && data.state.size() <= 80
+        && data.district is string && data.district.size() >= 2 && data.district.size() <= 80
+        && data.cityOrVillage is string && data.cityOrVillage.size() >= 2 && data.cityOrVillage.size() <= 100
+        && data.lat is number && data.lat >= -90 && data.lat <= 90
+        && data.lng is number && data.lng >= -180 && data.lng <= 180
+        && data.accuracyMeters is number && data.accuracyMeters >= 0 && data.accuracyMeters <= 200000
+        && data.locationPermissionStatus in ['granted', 'denied', 'prompt', 'manual_fallback']
+        && data.locationSource in ['gps', 'search', 'manual_test']
+        && (!('pushEnabled' in data) || data.pushEnabled is bool)
+        && data.isDemo == true
+        && data.lastActiveAt is timestamp
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDemoMobileRegistry(data) {
+      return data.keys().hasAll(['mobile10', 'demoUserId', 'ownerUid', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['mobile10', 'demoUserId', 'ownerUid', 'createdAt', 'updatedAt'])
+        && data.mobile10 is string && data.mobile10.size() == 10 && data.mobile10.matches('^[6-9][0-9]{9}$')
+        && isValidId(data.demoUserId)
+        && isValidId(data.ownerUid)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDemoWorkOrder(data) {
+      return data.keys().hasAll([
+          'orderCode', 'ownerUid', 'customerDemoUserId', 'customerName', 'customerUniqueId',
+          'serviceCategory', 'title', 'description', 'state', 'district', 'cityOrVillage',
+          'requestLat', 'requestLng', 'offeredWage', 'wageUnit', 'status',
+          'matchedWorkerIds', 'matchedWorkerOwnerUids', 'rejectedWorkerIds',
+          'customerLocationSharing', 'workerLocationSharing', 'isDemo', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'orderCode', 'ownerUid', 'customerDemoUserId', 'customerName', 'customerUniqueId',
+          'serviceCategory', 'title', 'description', 'state', 'district', 'cityOrVillage',
+          'requestLat', 'requestLng', 'offeredWage', 'wageUnit', 'status',
+          'matchedWorkerIds', 'matchedWorkerOwnerUids', 'rejectedWorkerIds',
+          'acceptedWorkerId', 'acceptedWorkerOwnerUid', 'acceptedWorkerName', 'acceptedWorkerUniqueId',
+          'customerConfirmedAt', 'completedAt', 'closedAt',
+          'customerLocationSharing', 'workerLocationSharing',
+          'completionNotes', 'workerRating', 'isDemo', 'createdAt', 'updatedAt'
+        ])
+        && data.orderCode is string && data.orderCode.size() >= 5 && data.orderCode.size() <= 48
+        && isValidId(data.ownerUid)
+        && isValidId(data.customerDemoUserId)
+        && data.customerName is string && data.customerName.size() >= 2 && data.customerName.size() <= 120
+        && data.customerUniqueId is string && data.customerUniqueId.size() >= 5 && data.customerUniqueId.size() <= 48
+        && data.serviceCategory is string && data.serviceCategory.size() >= 2 && data.serviceCategory.size() <= 80
+        && data.title is string && data.title.size() >= 3 && data.title.size() <= 160
+        && data.description is string && data.description.size() >= 5 && data.description.size() <= 1000
+        && data.state is string && data.state.size() >= 2 && data.state.size() <= 80
+        && data.district is string && data.district.size() >= 2 && data.district.size() <= 80
+        && data.cityOrVillage is string && data.cityOrVillage.size() >= 2 && data.cityOrVillage.size() <= 100
+        && data.requestLat is number && data.requestLat >= -90 && data.requestLat <= 90
+        && data.requestLng is number && data.requestLng >= -180 && data.requestLng <= 180
+        && data.offeredWage is number && data.offeredWage >= 0 && data.offeredWage <= 500000
+        && data.wageUnit in ['daily', 'monthly', 'hourly', 'contract']
+        && data.status in ['requested', 'accepted', 'customer_confirmed', 'in_progress', 'completed', 'closed', 'declined', 'cancelled']
+        && data.matchedWorkerIds is list && data.matchedWorkerIds.size() <= 10
+        && (data.matchedWorkerIds.size() == 0 || data.matchedWorkerIds[0] is string)
+        && data.matchedWorkerOwnerUids is list && data.matchedWorkerOwnerUids.size() <= 10
+        && (data.matchedWorkerOwnerUids.size() == 0 || data.matchedWorkerOwnerUids[0] is string)
+        && data.rejectedWorkerIds is list && data.rejectedWorkerIds.size() <= 10
+        && (data.rejectedWorkerIds.size() == 0 || data.rejectedWorkerIds[0] is string)
+        && (!('acceptedWorkerId' in data) || isValidId(data.acceptedWorkerId))
+        && (!('acceptedWorkerOwnerUid' in data) || isValidId(data.acceptedWorkerOwnerUid))
+        && (!('acceptedWorkerName' in data) || (data.acceptedWorkerName is string && data.acceptedWorkerName.size() <= 120))
+        && (!('acceptedWorkerUniqueId' in data) || (data.acceptedWorkerUniqueId is string && data.acceptedWorkerUniqueId.size() <= 48))
+        && (!('customerConfirmedAt' in data) || data.customerConfirmedAt is timestamp)
+        && (!('completedAt' in data) || data.completedAt is timestamp)
+        && (!('closedAt' in data) || data.closedAt is timestamp)
+        && data.customerLocationSharing is bool
+        && data.workerLocationSharing is bool
+        && (!('completionNotes' in data) || (data.completionNotes is string && data.completionNotes.size() <= 500))
+        && (!('workerRating' in data) || (data.workerRating is number && data.workerRating >= 1 && data.workerRating <= 5))
+        && data.isDemo == true
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDemoLiveLocationShare(data) {
+      return data.keys().hasAll([
+          'orderId', 'ownerUid', 'authorizedOwnerUids', 'demoUserId', 'participantRole',
+          'participantName', 'lat', 'lng', 'accuracyMeters', 'sharingActive', 'permissionState',
+          'source', 'isDemo', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'orderId', 'ownerUid', 'authorizedOwnerUids', 'demoUserId', 'participantRole',
+          'participantName', 'lat', 'lng', 'accuracyMeters', 'sharingActive', 'permissionState',
+          'source', 'isDemo', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.orderId)
+        && isValidId(data.ownerUid)
+        && data.authorizedOwnerUids is list && data.authorizedOwnerUids.size() >= 1 && data.authorizedOwnerUids.size() <= 4
+        && data.authorizedOwnerUids[0] is string
+        && isValidId(data.demoUserId)
+        && data.participantRole in ['customer', 'worker']
+        && data.participantName is string && data.participantName.size() >= 2 && data.participantName.size() <= 120
+        && data.lat is number && data.lat >= -90 && data.lat <= 90
+        && data.lng is number && data.lng >= -180 && data.lng <= 180
+        && data.accuracyMeters is number && data.accuracyMeters >= 0 && data.accuracyMeters <= 200000
+        && data.sharingActive is bool
+        && data.permissionState in ['granted', 'denied', 'prompt', 'manual_fallback']
+        && data.source in ['gps_watch', 'gps_once', 'simulated_move']
+        && data.isDemo == true
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDemoNotificationRecord(data) {
+      return data.keys().hasAll([
+          'dedupeKey', 'recipientDemoUserId', 'recipientName', 'recipientRole',
+          'recipientOwnerUid', 'senderOwnerUid', 'ownerUid', 'orderId',
+          'eventType', 'title', 'body', 'inAppDelivered', 'browserNotificationStatus',
+          'fcmPushStatus', 'read', 'isDemo', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'dedupeKey', 'recipientDemoUserId', 'recipientName', 'recipientRole',
+          'recipientOwnerUid', 'senderOwnerUid', 'ownerUid', 'orderId',
+          'eventType', 'title', 'body', 'inAppDelivered', 'browserNotificationStatus',
+          'fcmPushStatus', 'fcmErrorReason', 'read', 'isDemo', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.dedupeKey)
+        && isValidId(data.recipientDemoUserId)
+        && data.recipientName is string && data.recipientName.size() >= 2 && data.recipientName.size() <= 120
+        && data.recipientRole in ['customer', 'worker']
+        && isValidId(data.recipientOwnerUid)
+        && isValidId(data.senderOwnerUid)
+        && isValidId(data.ownerUid)
+        && isValidId(data.orderId)
+        && data.eventType in ['job_request', 'job_accepted', 'customer_confirmed', 'job_started', 'job_rejected', 'job_completed', 'deal_closed', 'location_started', 'location_stopped']
+        && data.title is string && data.title.size() >= 2 && data.title.size() <= 160
+        && data.body is string && data.body.size() >= 2 && data.body.size() <= 500
+        && data.inAppDelivered is bool
+        && data.browserNotificationStatus in ['delivered', 'permission_default', 'permission_denied', 'unsupported']
+        && data.fcmPushStatus in ['sent', 'failed', 'skipped_no_token']
+        && (!('fcmErrorReason' in data) || (data.fcmErrorReason is string && data.fcmErrorReason.size() <= 400))
+        && data.read is bool
+        && data.isDemo == true
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
     // Collection Rules
 
     match /users/{userId} {
@@ -1116,6 +1304,197 @@ service cloud.firestore {
         && isValidTimestampOnCreate()
         && exists(/databases/$(database)/documents/demo_jobs/$(incoming().demoJobId));
       allow update, delete: if isValidId(demoAppId) && isAdmin();
+    }
+
+    match /platform_settings/{settingId} {
+      allow get: if isValidId(settingId);
+      allow list: if isAdmin();
+      allow create: if isValidId(settingId)
+        && isAdmin()
+        && isValidDemoModeConfig(incoming())
+        && incoming().updatedByUid == request.auth.uid
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(settingId)
+        && isAdmin()
+        && isValidDemoModeConfig(incoming())
+        && incoming().updatedByUid == request.auth.uid
+        && isValidTimestampOnUpdate();
+      allow delete: if isValidId(settingId) && isAdmin();
+    }
+
+    match /demo_users/{demoUserId} {
+      allow get, list: if isVerifiedUser()
+        && (isDemoModeEnabled() || isAdmin());
+      allow create: if isValidId(demoUserId)
+        && isVerifiedUser()
+        && (isDemoModeEnabled() || isAdmin())
+        && isValidDemoUserProfile(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().isDemo == true
+        && isValidTimestampOnCreate()
+        && existsAfter(/databases/$(database)/documents/demo_mobile_registry/$( 'mob_' + incoming().mobile10 ));
+      allow update: if isValidId(demoUserId)
+        && isVerifiedUser()
+        && (isDemoModeEnabled() || isAdmin())
+        && isValidDemoUserProfile(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().uniqueUserId == existing().uniqueUserId
+        && incoming().mobile10 == existing().mobile10
+        && (isOwner(existing().ownerUid) || isAdmin());
+      allow delete: if isValidId(demoUserId)
+        && isVerifiedUser()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+    }
+
+    match /demo_mobile_registry/{mobileKey} {
+      allow get: if isValidId(mobileKey)
+        && isVerifiedUser()
+        && (isDemoModeEnabled() || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(mobileKey)
+        && isVerifiedUser()
+        && (isDemoModeEnabled() || isAdmin())
+        && isValidDemoMobileRegistry(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && mobileKey == ('mob_' + incoming().mobile10)
+        && !exists(/databases/$(database)/documents/demo_mobile_registry/$(mobileKey))
+        && isValidTimestampOnCreate();
+      allow update: if false;
+      allow delete: if isValidId(mobileKey)
+        && isVerifiedUser()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+    }
+
+    match /demo_work_orders/{orderId} {
+      allow get, list: if isVerifiedUser()
+        && (isDemoModeEnabled() || isAdmin())
+        && (
+          isAdmin()
+          || existing().ownerUid == request.auth.uid
+          || request.auth.uid in existing().matchedWorkerOwnerUids
+          || ('acceptedWorkerOwnerUid' in existing() && existing().acceptedWorkerOwnerUid == request.auth.uid)
+        );
+      allow create: if isValidId(orderId)
+        && isVerifiedUser()
+        && (isDemoModeEnabled() || isAdmin())
+        && isValidDemoWorkOrder(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().status == 'requested'
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(orderId)
+        && isVerifiedUser()
+        && (isDemoModeEnabled() || isAdmin())
+        && isValidDemoWorkOrder(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && (
+          isAdmin()
+          || isOwner(existing().ownerUid)
+          || (
+            request.auth.uid in existing().matchedWorkerOwnerUids
+            && existing().status == 'requested'
+            && (
+              (
+                incoming().status == 'accepted'
+                && incoming().acceptedWorkerOwnerUid == request.auth.uid
+              )
+              || incoming().status in ['requested', 'declined']
+            )
+          )
+          || (
+            'acceptedWorkerOwnerUid' in existing()
+            && existing().acceptedWorkerOwnerUid == request.auth.uid
+            && existing().status in ['accepted', 'customer_confirmed', 'in_progress']
+            && incoming().status in ['accepted', 'customer_confirmed', 'in_progress', 'completed']
+          )
+        );
+      allow delete: if isValidId(orderId)
+        && isVerifiedUser()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+    }
+
+    match /demo_location_shares/{shareId} {
+      allow get, list: if isVerifiedUser()
+        && (isDemoModeEnabled() || isAdmin())
+        && (
+          isAdmin()
+          || existing().ownerUid == request.auth.uid
+          || request.auth.uid in existing().authorizedOwnerUids
+        );
+      allow create: if isValidId(shareId)
+        && isVerifiedUser()
+        && (isDemoModeEnabled() || isAdmin())
+        && isValidDemoLiveLocationShare(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && isValidTimestampOnCreate()
+        && (
+          !incoming().sharingActive ||
+          get(/databases/$(database)/documents/demo_work_orders/$(incoming().orderId)).data.status in ['accepted', 'customer_confirmed', 'in_progress']
+        );
+      allow update: if isValidId(shareId)
+        && isVerifiedUser()
+        && (isDemoModeEnabled() || isAdmin())
+        && isValidDemoLiveLocationShare(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().orderId == existing().orderId
+        && (
+          isAdmin()
+          || isOwner(existing().ownerUid)
+          || (
+            request.auth.uid in existing().authorizedOwnerUids
+            && incoming().sharingActive == false
+            && incoming().lat == existing().lat
+            && incoming().lng == existing().lng
+          )
+        )
+        && (
+          !incoming().sharingActive ||
+          get(/databases/$(database)/documents/demo_work_orders/$(incoming().orderId)).data.status in ['accepted', 'customer_confirmed', 'in_progress']
+        );
+      allow delete: if isValidId(shareId)
+        && isVerifiedUser()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+    }
+
+    match /demo_notifications/{notifId} {
+      allow get, list: if isVerifiedUser()
+        && (isDemoModeEnabled() || isAdmin())
+        && (
+          isAdmin()
+          || existing().recipientOwnerUid == request.auth.uid
+          || existing().senderOwnerUid == request.auth.uid
+        );
+      allow create: if isValidId(notifId)
+        && isVerifiedUser()
+        && (isDemoModeEnabled() || isAdmin())
+        && isValidDemoNotificationRecord(incoming())
+        && incoming().senderOwnerUid == request.auth.uid
+        && incoming().dedupeKey == notifId
+        && !exists(/databases/$(database)/documents/demo_notifications/$(notifId))
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(notifId)
+        && isVerifiedUser()
+        && (isDemoModeEnabled() || isAdmin())
+        && isValidDemoNotificationRecord(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().senderOwnerUid == existing().senderOwnerUid
+        && incoming().recipientOwnerUid == existing().recipientOwnerUid
+        && (
+          isAdmin()
+          || (
+            isOwner(existing().recipientOwnerUid)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['read', 'updatedAt'])
+          )
+          || (
+            isOwner(existing().senderOwnerUid)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['fcmPushStatus', 'fcmErrorReason', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(notifId)
+        && isVerifiedUser()
+        && (existing().ownerUid == request.auth.uid || existing().recipientOwnerUid == request.auth.uid || isAdmin());
     }
   }
 }

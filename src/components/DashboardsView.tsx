@@ -10,6 +10,7 @@ import {
   Crosshair,
   Download,
   FileText,
+  FlaskConical,
   History,
   LocateFixed,
   Lock,
@@ -25,6 +26,7 @@ import {
 import { RojgarSetuLogo } from './RojgarSetuLogo';
 import { UserNotificationCenter } from './UserNotificationCenter';
 import { AdminNotificationDemoPanel } from './AdminNotificationDemoPanel';
+import { AdminDemoOversightPanel } from './AdminDemoOversightPanel';
 import { doc, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { getVehicleTypeLabel } from '../data/vehicleTypes';
@@ -1653,12 +1655,14 @@ interface AdminDashboardProps {
   employers: PublicEmployerProfile[];
   jobs: JobPosting[];
   announcements: PlatformAnnouncement[];
+  onNavigate?: (route: PageRoute) => void;
 }
 
 type AdminTab =
   | 'workers'
   | 'employers'
   | 'jobs'
+  | 'demo-oversight'
   | 'notifications'
   | 'grievances'
   | 'enquiries'
@@ -1670,6 +1674,7 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
   employers,
   jobs,
   announcements,
+  onNavigate,
 }) => {
   const { lang, t } = useLanguage();
   const { user, isAdmin, signInWithGoogle } = useAuth();
@@ -1822,6 +1827,7 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
             { id: 'workers', label: `Workers (${workers.length})`, icon: Users },
             { id: 'employers', label: `Employers (${employers.length})`, icon: Briefcase },
             { id: 'jobs', label: `Jobs (${jobs.length})`, icon: FileText },
+            { id: 'demo-oversight', label: '🧪 5-User Demo Oversight', icon: FlaskConical },
             { id: 'notifications', label: '📲 Live Notification Demo', icon: BellRing },
             { id: 'grievances', label: `${t.dashboards.grievances} (${grievances.length})`, icon: AlertTriangle },
             { id: 'enquiries', label: `${t.dashboards.enquiries} (${enquiries.length})`, icon: Shield },
@@ -1830,7 +1836,7 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
           ] as { id: AdminTab; label: string; icon: React.ComponentType<{ className?: string }> }[]
         ).map((item) => {
           const Icon = item.icon;
-          const isNotif = item.id === 'notifications';
+          const isNotif = item.id === 'notifications' || item.id === 'demo-oversight';
           return (
             <button
               key={item.id}
@@ -1852,6 +1858,10 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
           );
         })}
       </div>
+
+      {tab === 'demo-oversight' && (
+        <AdminDemoOversightPanel onNavigate={onNavigate} />
+      )}
 
       {tab === 'notifications' && (
         <AdminNotificationDemoPanel workers={workers} employers={employers} />
