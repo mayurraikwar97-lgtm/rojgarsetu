@@ -353,7 +353,7 @@ export const TRANSLATIONS: Record<Language, TranslationBundle> = {
     brand: {
       name: 'ROJGAR SETU',
       slogan: 'Every Hand Deserves an Opportunity.',
-      supporting: "Connecting India's Workforce with Employment Opportunities.",
+      supporting: "India's A to Z Work & Employment Network.",
       disclaimerShort: 'An initiative under ABUJMAD FOUNDATION · Independent non-government social-impact platform',
       initiativeLine: 'An employment and workforce connectivity initiative under ABUJMAD FOUNDATION.',
       dignityLine: 'Designed to promote dignity of labour, inclusive employment and digital access to work opportunities.',
@@ -780,8 +780,8 @@ export const TRANSLATIONS: Record<Language, TranslationBundle> = {
   hi: {
     brand: {
       name: 'रोजगार सेतु',
-      slogan: 'हर हाथ को काम का अवसर।',
-      supporting: 'भारत के कार्यबल को रोजगार के अवसरों से जोड़ने वाला डिजिटल मंच।',
+      slogan: 'हर हाथ को काम, हर हुनर को सम्मान!',
+      supporting: 'भारत का A से Z कार्य एवं रोजगार नेटवर्क।',
       disclaimerShort: 'ABUJMAD FOUNDATION के अंतर्गत एक सामाजिक पहल · यह सरकारी पोर्टल नहीं है',
       initiativeLine: 'ABUJMAD FOUNDATION के अंतर्गत एक रोजगार एवं कार्यबल संपर्क पहल।',
       dignityLine: 'श्रम की गरिमा, समावेशी रोजगार और काम के अवसरों तक डिजिटल पहुंच को बढ़ावा देने हेतु निर्मित।',
@@ -1207,8 +1207,8 @@ export const TRANSLATIONS: Record<Language, TranslationBundle> = {
   mr: {
     brand: {
       name: 'रोजगार सेतु',
-      slogan: 'प्रत्येक हाताला कामाची संधी!',
-      supporting: 'भारतातील कामगारांना रोजगाराच्या संधींशी जोडणारे डिजिटल व्यासपीठ.',
+      slogan: 'प्रत्येक हाताला काम, प्रत्येक कौशल्याला सन्मान!',
+      supporting: 'भारताचे A ते Z काम व रोजगार नेटवर्क.',
       disclaimerShort: 'ABUJMAD FOUNDATION अंतर्गत सामाजिक उपक्रम · हे सरकारी पोर्टल नाही',
       initiativeLine: 'ABUJMAD FOUNDATION अंतर्गत रोजगार आणि कार्यबळ जोडणी उपक्रम.',
       dignityLine: 'श्रमाची प्रतिष्ठा, सर्वसमावेशक रोजगार आणि कामाच्या संधींपर्यंत डिजिटल पोहोच वाढवण्यासाठी तयार.',

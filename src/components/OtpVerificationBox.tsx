@@ -73,10 +73,16 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
       });
       const data = await res.json();
       if (!res.ok || !data.verified) {
-        setErrorMsg('Invalid or expired OTP code. Please try again.');
+        setErrorMsg(data.message || 'Invalid or expired OTP code. Please try again.');
+        if (data.error === 'OTP_ATTEMPTS_EXCEEDED' || data.error === 'OTP_EXPIRED' || data.error === 'INVALID_TOKEN') {
+          setChallengeToken('');
+          setPreviewOtp('');
+          setOtpInput('');
+        }
       } else {
         setPreviewOtp('');
         setStatusMsg('');
+        setChallengeToken('');
         onVerified(data.mobile);
       }
     } catch {
@@ -96,7 +102,13 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
             inputMode="numeric"
             maxLength={10}
             value={mobile}
-            onChange={(e) => onMobileChange(e.target.value.replace(/\D/g, ''))}
+            onChange={(e) => {
+              onMobileChange(e.target.value.replace(/\D/g, ''));
+              setChallengeToken('');
+              setPreviewOtp('');
+              setOtpInput('');
+              setErrorMsg('');
+            }}
             placeholder="9876543210"
             className="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-md text-sm font-mono-tabular focus:outline-none focus:ring-2 focus:ring-[#0B3B75]"
           />

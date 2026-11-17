@@ -18,7 +18,43 @@ const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT || 3000);
 const IS_PROD = process.env.NODE_ENV === 'production';
-const OTP_SECRET = process.env.OTP_HMAC_SECRET || crypto.createHash('sha256').update(process.env.APP_URL || 'rojgar-setu-dev-otp-key').digest('hex');
+const OTP_SECRET =
+  process.env.OTP_HMAC_SECRET ||
+  (() => {
+    if (IS_PROD) {
+      console.warn('SECURITY NOTICE: OTP_HMAC_SECRET is not set; using ephemeral per-process HMAC secret.');
+    }
+    return crypto.randomBytes(32).toString('hex');
+  })();
+
+const ipRateBuckets = new Map<string, number[]>();
+function checkEndpointRateLimit(key: string, maxRequests: number, windowMs: number): boolean {
+  const now = Date.now();
+  const recent = (ipRateBuckets.get(key) || []).filter((ts) => now - ts < windowMs);
+  if (recent.length >= maxRequests) {
+    ipRateBuckets.set(key, recent);
+    return false;
+  }
+  recent.push(now);
+  ipRateBuckets.set(key, recent);
+  if (ipRateBuckets.size > 5000) {
+    for (const [k, list] of ipRateBuckets.entries()) {
+      if (list.length === 0 || now - list[list.length - 1] > windowMs) {
+        ipRateBuckets.delete(k);
+      }
+    }
+  }
+  return true;
+}
+
+function getClientIp(req: Request): string {
+  const fwd = req.headers['x-forwarded-for'];
+  const raw = Array.isArray(fwd) ? fwd[0] : typeof fwd === 'string' ? fwd.split(',')[0] : '';
+  return (raw || req.ip || 'unknown').trim();
+}
+
+const otpChallengeStates = new Map<string, { attempts: number; used: boolean; expiresAt: number }>();
+const MAX_OTP_VERIFY_ATTEMPTS = 5;
 
 function getGeminiClient(): GoogleGenAI | null {
   const key = process.env.GEMINI_API_KEY;
@@ -191,6 +227,7 @@ function extractGoogleGeoFields(
 }
 
 interface OtpPayload {
+  jti: string;
   mobile: string;
   otpHash: string;
   expiresAt: number;
@@ -232,7 +269,7 @@ async function startServer() {
     const mapsApiKey = getMapsApiKey();
     res.json({
       mapsApiKey,
-      smsGatewayConfigured: Boolean(process.env.SMS_PROVIDER_API_KEY),
+      smsGatewayConfigured: Boolean(process.env.SMS_PROVIDER_API_KEY && process.env.SMS_GATEWAY_WEBHOOK_URL),
     });
   });
 
@@ -448,6 +485,15 @@ async function startServer() {
 
   // Server-Side Gemini AI Voice & Photo Job / Vehicle Assistant
   app.post('/api/ai/voice-assistant', async (req: Request, res: Response) => {
+    const clientIp = getClientIp(req);
+    if (!checkEndpointRateLimit(`ai:${clientIp}`, 25, 5 * 60 * 1000)) {
+      res.status(429).json({
+        error: 'RATE_LIMITED',
+        message: 'Too many AI assistant requests. Please wait a few minutes and try again.',
+      });
+      return;
+    }
+
     const ai = getGeminiClient();
     if (!ai) {
       res.status(503).json({
@@ -464,6 +510,7 @@ async function startServer() {
     const imageMimeType = typeof req.body?.imageMimeType === 'string' ? req.body.imageMimeType : 'image/jpeg';
     const language = req.body?.language === 'hi' || req.body?.language === 'mr' ? req.body.language : 'en';
     const userLocation = typeof req.body?.userLocation === 'string' ? req.body.userLocation.trim() : '';
+    const conversationContext = typeof req.body?.conversationContext === 'string' ? req.body.conversationContext.trim().slice(0, 1200) : '';
 
     if (!text && !audioBase64 && !imageBase64) {
       res.status(400).json({ error: 'EMPTY_REQUEST', message: 'Speak, type a request, or attach a photo.' });
@@ -492,7 +539,8 @@ async function startServer() {
     }
 
     const promptText = [
-      text ? `User text input: "${text}"` : 'Analyze the attached voice recording and/or photo.',
+      conversationContext ? `Previous conversation context:\n${conversationContext}` : '',
+      text ? `User input: "${text}"` : 'Analyze the attached voice recording and/or photo.',
       userLocation ? `User current location hint: "${userLocation}"` : '',
       `Respond naturally in ${language === 'mr' ? 'Marathi' : language === 'hi' ? 'Hindi' : 'English'} (or match the spoken language if clearly Hindi/Marathi/English).`,
     ]
@@ -519,6 +567,7 @@ Available local transport vehicle types (NO heavy highway trucks):
 - pickup_tempo (Medium-Large Local Goods / Bolero Pickup / 407 Tempo, local only)
 - tractor (Tractor + Trolley for local sand/brick/farm shifting)
 Always set intent='rent_vehicle' when the user asks for a Bike Taxi, Auto, Car, Cab, SUV, Trolley, E-Loader, Chhota Hathi, Pickup Tempo, or Tractor (e.g., 'बाईक', 'ऑटो', 'कार', 'ट्रॉली', 'छोटी गाडी', 'टेम्पो', 'गाडी भाड्याने'). Set intent='hire_worker' when asking for a worker/mistri/labourer/plumber/electrician/driver-only.
+If location, destination (for transport), or key timing/wage detail is missing, list them briefly in missingDetails and ask a short clarifying question in followUpQuestion and replyText. Set readyToPublish=true when the core skill/vehicle and location are clear.
 Return concise, practical JSON.`,
           responseMimeType: 'application/json',
           responseSchema: {
@@ -532,10 +581,13 @@ Return concise, practical JSON.`,
               toLocation: { type: Type.STRING, description: 'Destination city/place if trip/ride mentioned, else empty.' },
               tripType: { type: Type.STRING, description: 'One of: one_way, round_trip, hourly, full_day, or empty.' },
               urgency: { type: Type.STRING, description: 'One of: today, tomorrow, scheduled' },
+              estimatedWage: { type: Type.NUMBER, description: 'Suggested daily wage or fare in INR (0 if unspecified).' },
               suggestedTitle: { type: Type.STRING, description: 'Short 4-8 word booking/job title.' },
-              replyText: { type: Type.STRING, description: 'Helpful 2-3 sentence spoken/text reply confirming detected trade/vehicle and asking any missing date/time/pickup detail.' },
+              followUpQuestion: { type: Type.STRING, description: 'Short clarifying question if location, timing, or destination is missing, else empty string.' },
+              readyToPublish: { type: Type.BOOLEAN, description: 'True if enough details exist to summarize and confirm publishing.' },
+              replyText: { type: Type.STRING, description: 'Helpful 2-3 sentence spoken/text reply summarizing detected requirement and asking any missing detail.' },
             },
-            required: ['transcript', 'intent', 'matchedCategory', 'vehicleType', 'fromLocation', 'toLocation', 'tripType', 'urgency', 'suggestedTitle', 'replyText'],
+            required: ['transcript', 'intent', 'matchedCategory', 'vehicleType', 'fromLocation', 'toLocation', 'tripType', 'urgency', 'estimatedWage', 'suggestedTitle', 'followUpQuestion', 'readyToPublish', 'replyText'],
           },
         },
       });
@@ -552,6 +604,12 @@ Return concise, practical JSON.`,
 
   // Server-Side Gemini Text-to-Speech (gemini-3.8-flash-lite-tts)
   app.post('/api/ai/tts', async (req: Request, res: Response) => {
+    const clientIp = getClientIp(req);
+    if (!checkEndpointRateLimit(`tts:${clientIp}`, 30, 5 * 60 * 1000)) {
+      res.status(429).json({ error: 'RATE_LIMITED', message: 'Too many voice playback requests.' });
+      return;
+    }
+
     const ai = getGeminiClient();
     if (!ai) {
       res.status(503).json({ error: 'GEMINI_NOT_CONFIGURED' });
@@ -603,26 +661,80 @@ Return concise, practical JSON.`,
     }
   });
 
-  app.post('/api/otp/request', (req: Request, res: Response) => {
+  app.post('/api/otp/request', async (req: Request, res: Response) => {
     const mobile = typeof req.body?.mobile === 'string' ? req.body.mobile.trim().replace(/\s+/g, '') : '';
     if (!/^[6-9]\d{9}$/.test(mobile)) {
       res.status(400).json({ error: 'INVALID_MOBILE', message: 'Enter a valid 10-digit Indian mobile number.' });
       return;
     }
 
-    const otp = String(crypto.randomInt(100000, 999999));
-    const otpHash = crypto.createHmac('sha256', OTP_SECRET).update(`${mobile}:${otp}`).digest('hex');
-    const expiresAt = Date.now() + 5 * 60 * 1000;
-    const challengeToken = signOtpPayload({ mobile, otpHash, expiresAt });
-
-    const smsConfigured = Boolean(process.env.SMS_PROVIDER_API_KEY);
-    if (smsConfigured) {
-      res.json({
-        mode: 'sms_gateway',
-        challengeToken,
-        expiresInSeconds: 300,
+    const clientIp = getClientIp(req);
+    if (
+      !checkEndpointRateLimit(`otp-req-ip:${clientIp}`, 12, 10 * 60 * 1000) ||
+      !checkEndpointRateLimit(`otp-req-mob:${mobile}`, 5, 10 * 60 * 1000)
+    ) {
+      res.status(429).json({
+        error: 'OTP_RATE_LIMITED',
+        message: 'Too many OTP requests. Please wait a few minutes before requesting another code.',
       });
       return;
+    }
+
+    const otp = String(crypto.randomInt(100000, 999999));
+    const jti = crypto.randomBytes(12).toString('hex');
+    const otpHash = crypto.createHmac('sha256', OTP_SECRET).update(`${jti}:${mobile}:${otp}`).digest('hex');
+    const expiresAt = Date.now() + 5 * 60 * 1000;
+    const challengeToken = signOtpPayload({ jti, mobile, otpHash, expiresAt });
+
+    const now = Date.now();
+    for (const [k, st] of otpChallengeStates.entries()) {
+      if (st.expiresAt < now) otpChallengeStates.delete(k);
+    }
+    otpChallengeStates.set(jti, { attempts: 0, used: false, expiresAt });
+
+    const smsApiKey = (process.env.SMS_PROVIDER_API_KEY || '').trim();
+    const smsWebhookUrl = (process.env.SMS_GATEWAY_WEBHOOK_URL || '').trim();
+
+    if (smsApiKey) {
+      if (!smsWebhookUrl) {
+        res.status(503).json({
+          error: 'SMS_GATEWAY_NOT_CONFIGURED',
+          message: 'SMS_PROVIDER_API_KEY is present, but SMS_GATEWAY_WEBHOOK_URL transport endpoint is not configured.',
+        });
+        return;
+      }
+      try {
+        const smsRes = await fetch(smsWebhookUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${smsApiKey}`,
+          },
+          body: JSON.stringify({
+            to: `+91${mobile}`,
+            message: `Your ROJGAR SETU verification OTP is ${otp}. Valid for 5 minutes.`,
+          }),
+        });
+        if (!smsRes.ok) {
+          res.status(502).json({
+            error: 'SMS_DISPATCH_FAILED',
+            message: 'Configured SMS provider failed to deliver OTP.',
+          });
+          return;
+        }
+        res.json({
+          mode: 'sms_gateway',
+          challengeToken,
+          expiresInSeconds: 300,
+        });
+        return;
+      } catch {
+        res.status(502).json({
+          error: 'SMS_DISPATCH_FAILED',
+          message: 'Unable to reach configured SMS gateway.',
+        });
+        return;
+      }
     }
 
     res.json({
@@ -634,38 +746,87 @@ Return concise, practical JSON.`,
   });
 
   app.post('/api/otp/verify', (req: Request, res: Response) => {
+    const clientIp = getClientIp(req);
+    if (!checkEndpointRateLimit(`otp-ver-ip:${clientIp}`, 20, 10 * 60 * 1000)) {
+      res.status(429).json({
+        verified: false,
+        error: 'OTP_RATE_LIMITED',
+        message: 'Too many OTP verification attempts. Please wait a few minutes.',
+      });
+      return;
+    }
+
     const mobile = typeof req.body?.mobile === 'string' ? req.body.mobile.trim().replace(/\s+/g, '') : '';
     const otp = typeof req.body?.otp === 'string' ? req.body.otp.trim() : '';
     const challengeToken = typeof req.body?.challengeToken === 'string' ? req.body.challengeToken : '';
 
     if (!mobile || !otp || !challengeToken) {
-      res.status(400).json({ verified: false, error: 'MISSING_FIELDS' });
+      res.status(400).json({ verified: false, error: 'MISSING_FIELDS', message: 'Mobile, OTP, and challenge token are required.' });
       return;
     }
 
     const payload = verifyOtpToken(challengeToken);
-    if (!payload) {
-      res.status(400).json({ verified: false, error: 'INVALID_TOKEN' });
+    if (!payload || !payload.jti) {
+      res.status(400).json({ verified: false, error: 'INVALID_TOKEN', message: 'Invalid OTP session. Please request a new code.' });
       return;
     }
 
     if (Date.now() > payload.expiresAt) {
-      res.status(400).json({ verified: false, error: 'OTP_EXPIRED' });
+      otpChallengeStates.delete(payload.jti);
+      res.status(400).json({ verified: false, error: 'OTP_EXPIRED', message: 'OTP expired. Please request a new code.' });
       return;
     }
 
     if (payload.mobile !== mobile) {
-      res.status(400).json({ verified: false, error: 'MOBILE_MISMATCH' });
+      res.status(400).json({ verified: false, error: 'MOBILE_MISMATCH', message: 'Mobile number does not match the OTP request.' });
       return;
     }
 
-    const attemptHash = crypto.createHmac('sha256', OTP_SECRET).update(`${mobile}:${otp}`).digest('hex');
+    const state = otpChallengeStates.get(payload.jti);
+    if (state?.used) {
+      res.status(400).json({ verified: false, error: 'INVALID_TOKEN', message: 'This OTP has already been used. Request a new code.' });
+      return;
+    }
+    if (state && state.attempts >= MAX_OTP_VERIFY_ATTEMPTS) {
+      res.status(429).json({
+        verified: false,
+        error: 'OTP_ATTEMPTS_EXCEEDED',
+        message: 'Too many incorrect OTP attempts. Please request a new code.',
+      });
+      return;
+    }
+
+    const attemptHash = crypto.createHmac('sha256', OTP_SECRET).update(`${payload.jti}:${mobile}:${otp}`).digest('hex');
     const attemptBuf = Buffer.from(attemptHash, 'hex');
     const storedBuf = Buffer.from(payload.otpHash, 'hex');
     if (attemptBuf.length !== storedBuf.length || !crypto.timingSafeEqual(attemptBuf, storedBuf)) {
-      res.status(400).json({ verified: false, error: 'INCORRECT_OTP' });
+      const nextAttempts = (state?.attempts ?? 0) + 1;
+      otpChallengeStates.set(payload.jti, {
+        attempts: nextAttempts,
+        used: false,
+        expiresAt: payload.expiresAt,
+      });
+      if (nextAttempts >= MAX_OTP_VERIFY_ATTEMPTS) {
+        res.status(429).json({
+          verified: false,
+          error: 'OTP_ATTEMPTS_EXCEEDED',
+          message: 'Maximum OTP attempts exceeded. Please request a new code.',
+        });
+        return;
+      }
+      res.status(400).json({
+        verified: false,
+        error: 'INCORRECT_OTP',
+        message: `Incorrect OTP. ${MAX_OTP_VERIFY_ATTEMPTS - nextAttempts} attempt(s) remaining.`,
+      });
       return;
     }
+
+    otpChallengeStates.set(payload.jti, {
+      attempts: state?.attempts ?? 0,
+      used: true,
+      expiresAt: payload.expiresAt,
+    });
 
     res.json({
       verified: true,

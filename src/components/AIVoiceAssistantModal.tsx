@@ -18,7 +18,10 @@ import {
   X,
 } from 'lucide-react';
 import { getVehicleTypeLabel } from '../data/vehicleTypes';
+import { useAuth } from '../contexts/AuthContext';
+import { getDistrictCoordinates, INDIA_STATES_DISTRICTS } from '../data/indiaLocations';
 import { useLanguage } from '../i18n/LanguageContext';
+import { callNotificationApi, createJobPosting } from '../lib/firestoreService';
 import type {
   AiHirePrefill,
   Language,
@@ -46,7 +49,10 @@ interface AiAssistantResponse {
   toLocation: string;
   tripType: string;
   urgency: string;
+  estimatedWage?: number;
   suggestedTitle: string;
+  followUpQuestion?: string;
+  readyToPublish?: boolean;
   replyText: string;
 }
 
@@ -105,8 +111,10 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
   onApplyPrefill,
 }) => {
   const { lang } = useLanguage();
+  const { user, employerProfile, customerPreference, signInWithGoogle } = useAuth();
 
   const [textInput, setTextInput] = useState('');
+  const [followUpInput, setFollowUpInput] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const [recordSeconds, setRecordSeconds] = useState(0);
   const [audioClip, setAudioClip] = useState<{ base64: string; mimeType: string; seconds: number } | null>(null);
@@ -115,6 +123,8 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
   const [aiResult, setAiResult] = useState<AiAssistantResponse | null>(null);
+  const [publishing, setPublishing] = useState(false);
+  const [publishedJobId, setPublishedJobId] = useState('');
 
   const [ttsLoading, setTtsLoading] = useState(false);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
@@ -124,6 +134,7 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
   const timerRef = useRef<number | null>(null);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const previewUrlRef = useRef<string | null>(null);
 
   useEffect(() => {
     return () => {
@@ -134,6 +145,10 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
       }
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         mediaRecorderRef.current.stop();
+      }
+      if (previewUrlRef.current) {
+        URL.revokeObjectURL(previewUrlRef.current);
+        previewUrlRef.current = null;
       }
     };
   }, []);
@@ -305,7 +320,11 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
       return;
     }
     const base64 = await blobToBase64(file);
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current);
+    }
     const previewUrl = URL.createObjectURL(file);
+    previewUrlRef.current = previewUrl;
     setPhotoData({
       base64,
       mimeType: file.type || 'image/jpeg',
@@ -314,9 +333,17 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
     setErrorMsg('');
   };
 
-  const handleSubmitAi = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    if (!textInput.trim() && !audioClip && !photoData) {
+  const clearPhotoData = () => {
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = null;
+    }
+    setPhotoData(null);
+  };
+
+  const submitToAssistant = async (overrideText?: string, contextSummary?: string) => {
+    const activeText = (overrideText ?? textInput).trim();
+    if (!activeText && !audioClip && !photoData) {
       setErrorMsg(
         tr(
           lang,
@@ -330,6 +357,7 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
 
     setLoading(true);
     setErrorMsg('');
+    setPublishedJobId('');
     stopAudioPlayback();
 
     try {
@@ -337,13 +365,14 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          text: textInput.trim(),
-          audioBase64: audioClip?.base64 || '',
+          text: activeText,
+          audioBase64: contextSummary ? '' : audioClip?.base64 || '',
           audioMimeType: audioClip?.mimeType || 'audio/webm',
           imageBase64: photoData?.base64 || '',
           imageMimeType: photoData?.mimeType || 'image/jpeg',
           language: lang,
           userLocation: userLocationHint,
+          ...(contextSummary ? { conversationContext: contextSummary } : {}),
         }),
       });
       const data = await res.json();
@@ -371,6 +400,72 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
       );
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSubmitAi = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    await submitToAssistant();
+  };
+
+  const handleFollowUpSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!followUpInput.trim() || !aiResult) return;
+    const contextSummary = `Previous request: "${aiResult.transcript}". Detected category: ${aiResult.matchedCategory || aiResult.vehicleType}. Previous location: ${aiResult.fromLocation || 'unknown'}. Assistant asked: "${aiResult.followUpQuestion || aiResult.replyText}".`;
+    const reply = followUpInput.trim();
+    setFollowUpInput('');
+    await submitToAssistant(reply, contextSummary);
+  };
+
+  const handleDirectPublishConfirmedJob = async () => {
+    if (!aiResult || aiResult.intent !== 'hire_worker') return;
+    if (!user) {
+      await signInWithGoogle();
+      return;
+    }
+    setPublishing(true);
+    setErrorMsg('');
+    try {
+      const stateName = customerPreference?.defaultState || employerProfile?.state || INDIA_STATES_DISTRICTS[0].name;
+      const distName =
+        aiResult.fromLocation.trim() ||
+        customerPreference?.defaultDistrict ||
+        employerProfile?.district ||
+        INDIA_STATES_DISTRICTS[0].districts[0].name;
+      const coords = getDistrictCoordinates(stateName, distName) || { lat: 21.1458, lng: 79.0882 };
+      const wage = Number(aiResult.estimatedWage) > 0 ? Math.min(500000, Number(aiResult.estimatedWage)) : 600;
+      const jobId = await createJobPosting({
+        employerUid: user.uid,
+        employerName: employerProfile?.businessName || user.displayName || 'ROJGAR SETU Customer',
+        title: (aiResult.suggestedTitle || aiResult.matchedCategory || 'Work Requirement').slice(0, 140),
+        category: aiResult.matchedCategory || 'Construction Workers',
+        description: (aiResult.transcript || textInput || aiResult.replyText).slice(0, 2000),
+        workersRequired: 1,
+        requiredSkills: [aiResult.matchedCategory || 'General Work'],
+        state: stateName,
+        district: distName,
+        cityOrVillage: aiResult.fromLocation.trim() || customerPreference?.defaultCityOrVillage || distName,
+        workLocationLabel: (aiResult.fromLocation.trim() || userLocationHint || distName).slice(0, 160),
+        lat: customerPreference?.defaultLat ?? coords.lat,
+        lng: customerPreference?.defaultLng ?? coords.lng,
+        jobDate: new Date().toISOString().split('T')[0],
+        startTime: '09:30',
+        duration: aiResult.urgency === 'tomorrow' ? 'Tomorrow' : 'Today / Urgent',
+        workType: 'daily_wage',
+        offeredWage: wage,
+        wageUnit: 'daily',
+        paymentTerms: 'Direct cash / UPI on work completion',
+        contactPreference: 'phone_after_confirm',
+        isWomenFriendly: false,
+        isAccessible: false,
+        biddingEnabled: true,
+      });
+      setPublishedJobId(jobId);
+      void callNotificationApi('/api/notifications/send-matching-job', { jobId }).catch(() => undefined);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to publish job directly.');
+    } finally {
+      setPublishing(false);
     }
   };
 
@@ -570,7 +665,7 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
                     </span>
                     <button
                       type="button"
-                      onClick={() => setPhotoData(null)}
+                      onClick={clearPhotoData}
                       aria-label="Remove photo"
                       className="text-red-700 hover:text-red-900 cursor-pointer"
                     >
@@ -778,19 +873,67 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
                 </div>
               )}
 
-              <button
-                type="button"
-                onClick={handleApplyAndOpenHire}
-                className="w-full py-3 px-4 rounded-md bg-[#E06D1B] text-white text-sm font-bold hover:bg-[#c55b10] flex items-center justify-center gap-2 cursor-pointer"
-              >
-                <CheckCircle2 className="w-4 h-4" />
-                <span>
-                  {aiResult.intent === 'rent_vehicle'
-                    ? tr(lang, 'Open Local Transport & Book →', 'लोकल ट्रांसपोर्ट खोलें और बुक करें →', 'लोकल ट्रान्सपोर्ट उघडा व बुक करा →')
-                    : tr(lang, 'Apply to Instant Hire & Book →', 'तुरंत हायर में लागू करें और बुक करें →', 'तात्काळ हायरमध्ये उघडा आणि बुक करा →')}
-                </span>
-                <ArrowRight className="w-4 h-4" />
-              </button>
+              <div className="flex flex-col sm:flex-row gap-2.5">
+                <button
+                  type="button"
+                  onClick={handleApplyAndOpenHire}
+                  className="flex-1 py-3 px-4 rounded-md bg-[#E06D1B] text-white text-sm font-bold hover:bg-[#c55b10] flex items-center justify-center gap-2 cursor-pointer"
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span>
+                    {aiResult.intent === 'rent_vehicle'
+                      ? tr(lang, 'Open Local Transport & Book →', 'लोकल ट्रांसपोर्ट खोलें और बुक करें →', 'लोकल ट्रान्सपोर्ट उघडा व बुक करा →')
+                      : tr(lang, 'Apply to Instant Hire & Book →', 'तुरंत हायर में लागू करें और बुक करें →', 'तात्काळ हायरमध्ये उघडा आणि बुक करा →')}
+                  </span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+
+                {aiResult.intent === 'hire_worker' && !publishedJobId && (
+                  <button
+                    type="button"
+                    disabled={publishing}
+                    onClick={handleDirectPublishConfirmedJob}
+                    className="py-3 px-4 rounded-md bg-[#15803D] text-white text-sm font-bold hover:bg-emerald-800 disabled:opacity-60 flex items-center justify-center gap-2 cursor-pointer whitespace-nowrap"
+                  >
+                    <CheckCircle2 className="w-4 h-4" />
+                    <span>
+                      {publishing
+                        ? tr(lang, 'Publishing...', 'प्रकाशित हो रहा है...', 'प्रकाशित होत आहे...')
+                        : tr(lang, 'Confirm & Publish Job Now', 'पुष्टि करें व जॉब प्रकाशित करें', 'निश्चित करा व काम प्रकाशित करा')}
+                    </span>
+                  </button>
+                )}
+              </div>
+
+              {publishedJobId && (
+                <div className="p-3 rounded bg-emerald-50 border border-emerald-200 text-xs font-semibold text-emerald-900">
+                  {tr(
+                    lang,
+                    `Job published to database (ID: ${publishedJobId}) and matching worker alerts dispatched.`,
+                    `काम डेटाबेस में प्रकाशित हो गया है (ID: ${publishedJobId}) और कामगारों को सूचना भेजी गई है।`,
+                    `काम डेटाबेसमध्ये प्रकाशित झाले आहे (ID: ${publishedJobId}) आणि कामगारांना सूचना पाठवल्या आहेत.`
+                  )}
+                </div>
+              )}
+
+              {aiResult.followUpQuestion && !publishedJobId && (
+                <form onSubmit={handleFollowUpSubmit} className="pt-2 border-t border-slate-200 flex gap-2">
+                  <input
+                    type="text"
+                    value={followUpInput}
+                    onChange={(e) => setFollowUpInput(e.target.value)}
+                    placeholder={aiResult.followUpQuestion}
+                    className="flex-1 px-3 py-2 border border-slate-300 rounded text-xs"
+                  />
+                  <button
+                    type="submit"
+                    disabled={loading || !followUpInput.trim()}
+                    className="px-3.5 py-2 rounded bg-[#0B3B75] text-white text-xs font-bold hover:bg-[#072A54] disabled:opacity-50 cursor-pointer shrink-0"
+                  >
+                    {tr(lang, 'Clarify', 'जवाब भेजें', 'उत्तर द्या')}
+                  </button>
+                </form>
+              )}
             </div>
           )}
         </div>

@@ -755,6 +755,7 @@ export function registerNotificationRoutes(
     const workerName = typeof req.body?.workerName === 'string' ? req.body.workerName.trim().slice(0, 100) : '';
     const jobTitle = typeof req.body?.jobTitle === 'string' ? req.body.jobTitle.trim().slice(0, 140) : '';
     const jobId = typeof req.body?.jobId === 'string' ? req.body.jobId.trim() : '';
+    const bookingId = typeof req.body?.bookingId === 'string' ? req.body.bookingId.trim() : '';
     const proposedWage = Number(req.body?.proposedWage) || 0;
     const targetRoute = typeof req.body?.targetRoute === 'string' ? req.body.targetRoute : 'employer-dashboard';
 
@@ -764,6 +765,52 @@ export function registerNotificationRoutes(
     }
 
     try {
+      if (!authUser.isAdmin) {
+        const callerUid = authUser.decoded.uid;
+        let authorized = false;
+
+        if (jobId) {
+          const jobSnap = await runtime.db.collection('jobs').doc(jobId).get();
+          if (jobSnap.exists) {
+            const jobData = jobSnap.data() as { employerUid?: string };
+            if (jobData.employerUid === callerUid) {
+              const appSnap = await runtime.db
+                .collection('applications')
+                .where('jobId', '==', jobId)
+                .where('workerUid', '==', recipientUid)
+                .limit(1)
+                .get();
+              authorized = !appSnap.empty;
+            } else if (jobData.employerUid === recipientUid) {
+              const appSnap = await runtime.db
+                .collection('applications')
+                .where('jobId', '==', jobId)
+                .where('workerUid', '==', callerUid)
+                .limit(1)
+                .get();
+              authorized = !appSnap.empty;
+            }
+          }
+        } else if (bookingId) {
+          const bookingSnap = await runtime.db.collection('vehicleBookings').doc(bookingId).get();
+          if (bookingSnap.exists) {
+            const bData = bookingSnap.data() as { ownerUid?: string; customerUid?: string };
+            authorized =
+              (bData.ownerUid === callerUid && bData.customerUid === recipientUid) ||
+              (bData.customerUid === callerUid && bData.ownerUid === recipientUid);
+          }
+        }
+
+        if (!authorized) {
+          res.status(403).json({
+            ok: false,
+            errorCode: 'FORBIDDEN',
+            message: 'Caller is not authorized to notify this recipient for the specified job or booking.',
+          });
+          return;
+        }
+      }
+
       const [prefSnap, tokenSnap] = await Promise.all([
         runtime.db.collection('notification_preferences').doc(recipientUid).get(),
         runtime.db

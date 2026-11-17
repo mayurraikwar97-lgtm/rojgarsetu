@@ -31,6 +31,11 @@ import type {
 import { EmploymentMap } from './EmploymentMap';
 import { PWAInstallButton } from './PWAControls';
 import { ResilientImage } from './ResilientImage';
+import heroIndiaWorkforceImg from '../assets/images/hero_india_workforce_1794635763585.jpg';
+import gandhiDignityLabourImg from '../assets/images/gandhi_dignity_labour_1794635762419.jpg';
+import skilledTradesIndiaImg from '../assets/images/skilled_trades_india_1794635764177.jpg';
+import ruralAgricultureIndiaImg from '../assets/images/rural_agriculture_india_1794635764633.jpg';
+import womenEnterpriseIndiaImg from '../assets/images/women_enterprise_india_1794635764453.jpg';
 
 interface HomeViewProps {
   onNavigate: (route: PageRoute, categoryFilter?: string) => void;
@@ -198,7 +203,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
             <div className="lg:col-span-7 flex flex-col rounded-md overflow-hidden border border-slate-200 bg-[#072A54] text-white">
               <div className="relative h-56 sm:h-64 w-full">
                 <ResilientImage
-                  src="/src/assets/images/hero_india_workforce_1794635763585.jpg"
+                  src={heroIndiaWorkforceImg}
                   alt={t.hero.imageCaption}
                   className="w-full h-full object-cover"
                 />
@@ -542,7 +547,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
             <div className="p-5 space-y-4">
               <div className="rounded overflow-hidden border border-slate-200 aspect-[3/4] max-w-[230px] mx-auto">
                 <ResilientImage
-                  src="/src/assets/images/gandhi_dignity_labour_1794635762419.jpg"
+                  src={gandhiDignityLabourImg}
                   alt="Archival portrait symbolizing dignity of labour and self-reliance"
                   className="w-full h-full object-cover"
                 />
@@ -716,7 +721,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
               </div>
               <div className="h-48 w-full">
                 <ResilientImage
-                  src="/src/assets/images/skilled_trades_india_1794635764177.jpg"
+                  src={skilledTradesIndiaImg}
                   alt={t.forWorkers.heading}
                   className="w-full h-full object-cover"
                 />
@@ -750,7 +755,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
               </div>
               <div className="h-48 w-full">
                 <ResilientImage
-                  src="/src/assets/images/rural_agriculture_india_1794635764633.jpg"
+                  src={ruralAgricultureIndiaImg}
                   alt={t.forEmployers.heading}
                   className="w-full h-full object-cover"
                 />
@@ -886,7 +891,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
           <div className="lg:col-span-5">
             <div className="rounded-md overflow-hidden border border-slate-200 h-full min-h-[260px]">
               <ResilientImage
-                src="/src/assets/images/women_enterprise_india_1794635764453.jpg"
+                src={womenEnterpriseIndiaImg}
                 alt={t.womenInclusive.heading}
                 className="w-full h-full object-cover"
               />

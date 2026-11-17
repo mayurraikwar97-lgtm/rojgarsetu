@@ -221,6 +221,7 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
     await updateVehicleBookingStatus(b.id, nextStatus);
     void callNotificationApi('/api/notifications/send-customer-event', {
       recipientUid: b.customerUid,
+      bookingId: b.id,
       eventType:
         nextStatus === 'accepted'
           ? 'booking_accepted'
@@ -994,12 +995,12 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
     }
   };
 
-  const handleCancelJob = async (job: JobPosting) => {
+  const handleUpdateJobStatus = async (job: JobPosting, nextStatus: 'completed' | 'cancelled') => {
     if (job.status === 'completed' || job.status === 'cancelled') return;
     setBusyId(job.id);
     try {
       await updateDoc(doc(db, 'jobs', job.id), {
-        status: 'cancelled',
+        status: nextStatus,
         updatedAt: serverTimestamp(),
       });
     } catch (err) {
@@ -1418,14 +1419,24 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
                   </p>
                 </div>
                 {job.status === 'open' && (
-                  <button
-                    type="button"
-                    disabled={busyId === job.id}
-                    onClick={() => handleCancelJob(job)}
-                    className="px-3 py-1.5 rounded-md border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer self-start sm:self-center"
-                  >
-                    {t.common.cancel}
-                  </button>
+                  <div className="flex flex-wrap gap-2 self-start sm:self-center">
+                    <button
+                      type="button"
+                      disabled={busyId === job.id}
+                      onClick={() => handleUpdateJobStatus(job, 'completed')}
+                      className="px-3 py-1.5 rounded-md bg-[#15803D] text-white text-xs font-semibold hover:bg-emerald-800 cursor-pointer"
+                    >
+                      {tr(lang, 'Mark Completed', 'पूर्ण चिह्नित करें', 'पूर्ण नोंदवा')}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busyId === job.id}
+                      onClick={() => handleUpdateJobStatus(job, 'cancelled')}
+                      className="px-3 py-1.5 rounded-md border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                    >
+                      {t.common.cancel}
+                    </button>
+                  </div>
                 )}
               </div>
             ))}
