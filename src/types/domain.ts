@@ -148,6 +148,8 @@ export interface JobPosting {
   isWomenFriendly: boolean;
   isAccessible: boolean;
   biddingEnabled: boolean;
+  photoAttachment?: string;
+  photoAnalyzed?: boolean;
   status: 'open' | 'in_progress' | 'completed' | 'cancelled' | 'flagged';
   applicationsCount: number;
   createdAt?: unknown;
@@ -312,6 +314,9 @@ export interface CustomerPreference {
 export interface AiHirePrefill {
   mode: 'workers' | 'transport';
   category?: string;
+  subcategory?: string;
+  requiredService?: string;
+  workersRequired?: number;
   vehicleType?: VehicleType | '';
   fromLocation?: string;
   toLocation?: string;
@@ -320,6 +325,8 @@ export interface AiHirePrefill {
   title?: string;
   note?: string;
   transcript?: string;
+  photoAttachment?: string;
+  photoAnalyzed?: boolean;
 }
 
 export type NotificationCategoryKey =

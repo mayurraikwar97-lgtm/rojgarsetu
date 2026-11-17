@@ -197,8 +197,8 @@ service cloud.firestore {
           'workersRequired', 'requiredSkills', 'state', 'district', 'cityOrVillage',
           'workLocationLabel', 'lat', 'lng', 'jobDate', 'startTime', 'duration',
           'workType', 'offeredWage', 'wageUnit', 'paymentTerms', 'contactPreference',
-          'isWomenFriendly', 'isAccessible', 'biddingEnabled', 'status',
-          'applicationsCount', 'createdAt', 'updatedAt'
+          'isWomenFriendly', 'isAccessible', 'biddingEnabled', 'photoAttachment',
+          'photoAnalyzed', 'status', 'applicationsCount', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.employerUid)
         && data.employerName is string && data.employerName.size() >= 2 && data.employerName.size() <= 160
@@ -224,6 +224,8 @@ service cloud.firestore {
         && data.isWomenFriendly is bool
         && data.isAccessible is bool
         && data.biddingEnabled is bool
+        && (!('photoAttachment' in data) || (data.photoAttachment is string && data.photoAttachment.size() <= 100000))
+        && (!('photoAnalyzed' in data) || data.photoAnalyzed is bool)
         && data.status in ['open', 'in_progress', 'completed', 'cancelled', 'flagged']
         && data.applicationsCount is number && data.applicationsCount >= 0 && data.applicationsCount <= 100000
         && data.createdAt is timestamp
@@ -764,7 +766,7 @@ service cloud.firestore {
               'workLocationLabel', 'lat', 'lng', 'jobDate', 'startTime',
               'duration', 'workType', 'offeredWage', 'wageUnit',
               'paymentTerms', 'contactPreference', 'isWomenFriendly',
-              'isAccessible', 'biddingEnabled', 'status', 'updatedAt'
+              'isAccessible', 'biddingEnabled', 'photoAttachment', 'photoAnalyzed', 'status', 'updatedAt'
             ])
           ) ||
           (

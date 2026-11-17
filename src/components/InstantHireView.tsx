@@ -192,6 +192,9 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
   const [wageUnit, setWageUnit] = useState<WageUnit>('daily');
   const [workersRequired, setWorkersRequired] = useState<number>(1);
   const [workNote, setWorkNote] = useState('');
+  const [prefillPhotoAttachment, setPrefillPhotoAttachment] = useState<string>('');
+  const [prefillPhotoAnalyzed, setPrefillPhotoAnalyzed] = useState<boolean>(false);
+  const [checkoutRequestId, setCheckoutRequestId] = useState<string>('');
   const [submitting, setSubmitting] = useState(false);
   const [checkoutError, setCheckoutError] = useState('');
   const [bookingResult, setBookingResult] = useState<{
@@ -238,6 +241,13 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
     if (aiPrefill.category) setSelectedCategory(aiPrefill.category);
     if (aiPrefill.title) setWorkTitle(aiPrefill.title);
     if (aiPrefill.note) setWorkNote(aiPrefill.note);
+    if (typeof aiPrefill.workersRequired === 'number' && aiPrefill.workersRequired >= 1) {
+      setWorkersRequired(aiPrefill.workersRequired);
+    }
+    if (aiPrefill.photoAttachment) {
+      setPrefillPhotoAttachment(aiPrefill.photoAttachment);
+      setPrefillPhotoAnalyzed(Boolean(aiPrefill.photoAnalyzed));
+    }
     if (aiPrefill.urgency === 'tomorrow') setTimingMode('tomorrow');
     else if (aiPrefill.urgency === 'scheduled') setTimingMode('scheduled');
     else setTimingMode('urgent');
@@ -554,7 +564,8 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
     );
     setOfferedWage(avgWage);
     setWageUnit(targetWorkers[0]?.wageUnit || 'daily');
-    setWorkersRequired(Math.max(1, targetWorkers.length));
+    setWorkersRequired((prev) => Math.max(1, targetWorkers.length || prev));
+    setCheckoutRequestId(`rsreq_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
     setLocality(
       locationPin?.label ||
         targetWorkers[0]?.cityOrVillage ||
@@ -666,9 +677,16 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
           isWomenFriendly: false,
           isAccessible: false,
           biddingEnabled: true,
+          ...(prefillPhotoAttachment
+            ? {
+                photoAttachment: prefillPhotoAttachment,
+                photoAnalyzed: Boolean(prefillPhotoAnalyzed),
+              }
+            : {}),
         },
         checkoutWorkers,
-        rawDesc || `${timingLabel} · ${safeLocality}, ${effDistrict}`
+        rawDesc || `${timingLabel} · ${safeLocality}, ${effDistrict}`,
+        checkoutRequestId || undefined
       );
 
       await recordCustomerOrderPreference(user.uid, {
@@ -692,6 +710,8 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
         title: safeTitle,
       });
       setSelectedWorkerIds([]);
+      setPrefillPhotoAttachment('');
+      setPrefillPhotoAnalyzed(false);
     } catch (err) {
       setCheckoutError(err instanceof Error ? err.message : 'Unable to send instant hire request.');
     } finally {
@@ -1106,6 +1126,19 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
               </p>
             </div>
             <div className="flex flex-wrap items-center justify-center gap-3">
+              {radiusKm > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setRadiusKm(radiusKm < 50 ? 50 : radiusKm < 150 ? 150 : 0)}
+                  className="px-4 py-2 rounded border border-[#0B3B75] bg-blue-50 text-xs font-bold text-[#0B3B75] hover:bg-blue-100 cursor-pointer"
+                >
+                  {radiusKm < 50
+                    ? tr(lang, 'Expand to 50 km', 'दायरा 50 किमी बढ़ाएं', 'अंतर 50 किमी वाढवा')
+                    : radiusKm < 150
+                    ? tr(lang, 'Expand to 150 km', 'दायरा 150 किमी बढ़ाएं', 'अंतर 150 किमी वाढवा')
+                    : tr(lang, 'Expand to All India', 'पूरा भारत करें', 'संपूर्ण भारत करा')}
+                </button>
+              )}
               {(selectedState || locationPin || radiusKm > 0) && (
                 <button
                   type="button"
@@ -1574,6 +1607,43 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
                     className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
                   />
                 </div>
+
+                {prefillPhotoAttachment && (
+                  <div className="bg-slate-50 border border-slate-200 rounded p-2.5 flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <img
+                        src={prefillPhotoAttachment}
+                        alt="Attached job site reference"
+                        className="w-12 h-12 rounded object-cover border border-slate-200 shrink-0"
+                      />
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-[#0B3B75] truncate">
+                          {tr(lang, 'Site Photo Attached', 'काम की फोटो संलग्न', 'कामाचा फोटो जोडलेला आहे')}
+                        </p>
+                        <p className="text-[11px] text-slate-600">
+                          {prefillPhotoAnalyzed
+                            ? tr(lang, 'Photo analyzed by AI', 'AI द्वारा जांची गई फोटो', 'AI ने फोटो तपासला')
+                            : tr(
+                                lang,
+                                'Saved as attachment only (not AI-analyzed)',
+                                'केवल संदर्भ फोटो (AI द्वारा नहीं जांची गई)',
+                                'फक्त संदर्भ फोटो जोडला (AI तपासणी नाही)'
+                              )}
+                        </p>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPrefillPhotoAttachment('');
+                        setPrefillPhotoAnalyzed(false);
+                      }}
+                      className="text-xs font-semibold text-red-700 hover:underline shrink-0 cursor-pointer"
+                    >
+                      {tr(lang, 'Remove', 'हटाएं', 'काढा')}
+                    </button>
+                  </div>
+                )}
 
                 {checkoutError && (
                   <p className="text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">

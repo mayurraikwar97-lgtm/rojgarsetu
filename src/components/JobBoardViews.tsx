@@ -275,6 +275,21 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
 
                   <p className="text-sm text-slate-600 leading-relaxed">{job.description}</p>
 
+                  {job.photoAttachment && (
+                    <div className="flex items-center gap-3 p-2 rounded bg-slate-50 border border-slate-200">
+                      <img
+                        src={job.photoAttachment}
+                        alt={`Work site photo for ${job.title}`}
+                        className="w-14 h-14 rounded object-cover border border-slate-200 shrink-0"
+                      />
+                      <span className="text-[11px] font-medium text-slate-600">
+                        {job.photoAnalyzed
+                          ? 'Site photo attached (AI-analyzed)'
+                          : 'Site photo attached by customer (not AI-analyzed)'}
+                      </span>
+                    </div>
+                  )}
+
                   <div className="text-xs text-slate-600 space-y-1 pt-1">
                     <div className="flex items-center gap-1.5">
                       <MapPin className="w-3.5 h-3.5 text-slate-400" />

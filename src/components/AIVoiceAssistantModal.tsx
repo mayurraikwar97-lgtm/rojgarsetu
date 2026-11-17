@@ -1,13 +1,17 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowRight,
   Bike,
   Camera,
   Car,
   CheckCircle2,
+  Compass,
   Loader2,
   MapPin,
   Mic,
+  RefreshCw,
+  Search,
   Send,
   Sparkles,
   Square,
@@ -17,10 +21,19 @@ import {
   VolumeX,
   X,
 } from 'lucide-react';
-import { getVehicleTypeLabel } from '../data/vehicleTypes';
 import { useAuth } from '../contexts/AuthContext';
-import { getDistrictCoordinates, INDIA_STATES_DISTRICTS } from '../data/indiaLocations';
+import { EMPLOYMENT_CATEGORIES } from '../data/categories';
+import {
+  calculateDistanceKm,
+  getDistrictCoordinates,
+  INDIA_STATES_DISTRICTS,
+} from '../data/indiaLocations';
+import { getVehicleTypeLabel, VEHICLE_TYPE_CATALOG } from '../data/vehicleTypes';
 import { useLanguage } from '../i18n/LanguageContext';
+import {
+  classifyRequestRuleBased,
+  type StructuredWorkClassification,
+} from '../lib/aiFallbackClassifier';
 import { callNotificationApi, createJobPosting } from '../lib/firestoreService';
 import type {
   AiHirePrefill,
@@ -40,21 +53,14 @@ interface AIVoiceAssistantModalProps {
   onApplyPrefill: (prefill: AiHirePrefill) => void;
 }
 
-interface AiAssistantResponse {
-  transcript: string;
-  intent: 'hire_worker' | 'rent_vehicle' | 'find_work' | 'general_help';
-  matchedCategory: string;
-  vehicleType: string;
-  fromLocation: string;
-  toLocation: string;
-  tripType: string;
-  urgency: string;
-  estimatedWage?: number;
-  suggestedTitle: string;
-  followUpQuestion?: string;
-  readyToPublish?: boolean;
-  replyText: string;
-}
+type AiNoticeState = {
+  type: 'SERVICE_UNAVAILABLE' | 'QUOTA_EXHAUSTED' | 'NOT_CONFIGURED' | 'NETWORK_ERROR';
+  userMessage: string;
+  dismissedForManual: boolean;
+} | null;
+
+const DEFAULT_FRIENDLY_AI_DOWN_MSG =
+  'AI सेवा सध्या तात्पुरती उपलब्ध नाही. काळजी करू नका! आम्ही तुमची कामाची मागणी सामान्य सर्च प्रणालीद्वारे शोधण्याचा प्रयत्न करत आहोत.';
 
 function tr(lang: Language, en: string, hi: string, mr: string): string {
   return lang === 'hi' ? hi : lang === 'mr' ? mr : en;
@@ -70,6 +76,45 @@ function blobToBase64(blob: Blob): Promise<string> {
     };
     reader.onerror = () => reject(new Error('Failed to read media file'));
     reader.readAsDataURL(blob);
+  });
+}
+
+/**
+ * Generates a compact JPEG data URL thumbnail (<= 75 KB) so uploaded job photos
+ * remain safely linked in Firestore job documents even when AI analysis fails.
+ */
+async function compressImageForJobAttachment(file: File): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const objUrl = URL.createObjectURL(file);
+    img.onload = () => {
+      try {
+        const maxEdge = 420;
+        const scale = Math.min(1, maxEdge / Math.max(img.width, img.height));
+        const width = Math.max(1, Math.round(img.width * scale));
+        const height = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve('');
+          return;
+        }
+        ctx.drawImage(img, 0, 0, width, height);
+        const compressed = canvas.toDataURL('image/jpeg', 0.62);
+        resolve(compressed.length <= 85000 ? compressed : '');
+      } catch {
+        resolve('');
+      } finally {
+        URL.revokeObjectURL(objUrl);
+      }
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objUrl);
+      resolve('');
+    };
+    img.src = objUrl;
   });
 }
 
@@ -102,6 +147,46 @@ function normalizeTripType(raw: string): VehicleTripType {
   return valid.includes(raw as VehicleTripType) ? (raw as VehicleTripType) : 'one_way';
 }
 
+function resolveCoordsForLocationName(locName: string): { lat: number; lng: number } | null {
+  const q = locName.trim().toLowerCase();
+  if (!q) return null;
+  for (const st of INDIA_STATES_DISTRICTS) {
+    for (const dist of st.districts) {
+      const shortName = dist.name.split('(')[0].trim().toLowerCase();
+      if (q.includes(shortName) || shortName.includes(q)) {
+        return { lat: dist.lat, lng: dist.lng };
+      }
+    }
+  }
+  return null;
+}
+
+function makeClientRequestId(): string {
+  return `rsreq_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+interface SpeechRecognitionAlternativeLike {
+  transcript: string;
+}
+interface SpeechRecognitionResultLike {
+  isFinal: boolean;
+  0: SpeechRecognitionAlternativeLike;
+}
+interface SpeechRecognitionEventLike {
+  resultIndex: number;
+  results: ArrayLike<SpeechRecognitionResultLike>;
+}
+interface SpeechRecognitionLike {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  onresult: ((e: SpeechRecognitionEventLike) => void) | null;
+  onerror: (() => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+}
+
 export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
   open,
   onClose,
@@ -117,26 +202,48 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
   const [followUpInput, setFollowUpInput] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const [recordSeconds, setRecordSeconds] = useState(0);
+  const [speechSupported, setSpeechSupported] = useState(false);
   const [audioClip, setAudioClip] = useState<{ base64: string; mimeType: string; seconds: number } | null>(null);
-  const [photoData, setPhotoData] = useState<{ base64: string; mimeType: string; previewUrl: string } | null>(null);
+  const [photoData, setPhotoData] = useState<{
+    base64: string;
+    mimeType: string;
+    previewUrl: string;
+    compressedAttachment: string;
+  } | null>(null);
 
   const [loading, setLoading] = useState(false);
-  const [errorMsg, setErrorMsg] = useState('');
-  const [aiResult, setAiResult] = useState<AiAssistantResponse | null>(null);
+  const [formErrorMsg, setFormErrorMsg] = useState('');
+  const [aiNotice, setAiNotice] = useState<AiNoticeState>(null);
+  const [aiResult, setAiResult] = useState<StructuredWorkClassification | null>(null);
+
+  // Editable details in result/fallback card (location, workers count, radius, category)
+  const [editedLocation, setEditedLocation] = useState('');
+  const [editedToLocation, setEditedToLocation] = useState('');
+  const [editedWorkersCount, setEditedWorkersCount] = useState<string>('');
+  const [searchRadiusKm, setSearchRadiusKm] = useState<number>(50);
+
   const [publishing, setPublishing] = useState(false);
   const [publishedJobId, setPublishedJobId] = useState('');
+  const [clientRequestId, setClientRequestId] = useState<string>(() => makeClientRequestId());
 
   const [ttsLoading, setTtsLoading] = useState(false);
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const speechRecRef = useRef<SpeechRecognitionLike | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<number | null>(null);
   const audioPlayerRef = useRef<HTMLAudioElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const previewUrlRef = useRef<string | null>(null);
+  const preSpeechTextRef = useRef<string>('');
 
   useEffect(() => {
+    const win = window as unknown as {
+      SpeechRecognition?: new () => SpeechRecognitionLike;
+      webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+    };
+    setSpeechSupported(Boolean(win.SpeechRecognition || win.webkitSpeechRecognition));
     return () => {
       if (timerRef.current) window.clearInterval(timerRef.current);
       if (audioPlayerRef.current) {
@@ -146,6 +253,11 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
       if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
         mediaRecorderRef.current.stop();
       }
+      try {
+        speechRecRef.current?.stop();
+      } catch {
+        // ignore stop errors
+      }
       if (previewUrlRef.current) {
         URL.revokeObjectURL(previewUrlRef.current);
         previewUrlRef.current = null;
@@ -153,10 +265,25 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
     };
   }, []);
 
+  const effectiveLocation = (editedLocation || aiResult?.fromLocation || userLocationHint || '').trim();
+  const effectiveReferenceCoords = useMemo(() => {
+    if (effectiveLocation) {
+      const resolved = resolveCoordsForLocationName(effectiveLocation);
+      if (resolved) return resolved;
+    }
+    if (typeof customerPreference?.defaultLat === 'number' && typeof customerPreference?.defaultLng === 'number') {
+      return { lat: customerPreference.defaultLat, lng: customerPreference.defaultLng };
+    }
+    return null;
+  }, [effectiveLocation, customerPreference]);
+
   const matchingWorkersPreview = useMemo(() => {
     if (!aiResult || aiResult.intent === 'rent_vehicle') return [];
     const catLower = (aiResult.matchedCategory || '').toLowerCase();
-    const locLower = (aiResult.fromLocation || '').toLowerCase();
+    const subLower = (aiResult.subcategory || '').toLowerCase();
+    const catObj = EMPLOYMENT_CATEGORIES.find((c) => c.en.toLowerCase() === catLower);
+    const locLower = effectiveLocation.toLowerCase();
+
     return workers
       .filter((w) => w.verificationStatus !== 'suspended')
       .filter((w) => {
@@ -164,33 +291,78 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
         return (
           w.primarySkill.toLowerCase().includes(catLower) ||
           catLower.includes(w.primarySkill.toLowerCase()) ||
-          w.skills.some((s) => catLower.includes(s.toLowerCase()) || s.toLowerCase().includes(catLower))
+          w.skills.some((s) => catLower.includes(s.toLowerCase()) || s.toLowerCase().includes(catLower)) ||
+          (subLower &&
+            (w.primarySkill.toLowerCase().includes(subLower) ||
+              w.skills.some((s) => s.toLowerCase().includes(subLower)))) ||
+          (catObj
+            ? catObj.skillsEn.some(
+                (cs) =>
+                  w.primarySkill.toLowerCase().includes(cs.toLowerCase()) ||
+                  w.skills.some((ws) => ws.toLowerCase().includes(cs.toLowerCase()))
+              )
+            : false)
+        );
+      })
+      .map((w) => {
+        const distKm =
+          effectiveReferenceCoords && typeof w.approxLat === 'number' && typeof w.approxLng === 'number'
+            ? calculateDistanceKm(effectiveReferenceCoords.lat, effectiveReferenceCoords.lng, w.approxLat, w.approxLng)
+            : null;
+        return { worker: w, distKm };
+      })
+      .filter(({ worker: w, distKm }) => {
+        if (searchRadiusKm === 0) return true;
+        if (distKm !== null) return distKm <= searchRadiusKm;
+        if (!locLower) return true;
+        return (
+          w.district.toLowerCase().includes(locLower) ||
+          w.cityOrVillage.toLowerCase().includes(locLower) ||
+          w.state.toLowerCase().includes(locLower)
         );
       })
       .sort((a, b) => {
-        const aLoc = locLower && (a.district.toLowerCase().includes(locLower) || a.cityOrVillage.toLowerCase().includes(locLower)) ? 1 : 0;
-        const bLoc = locLower && (b.district.toLowerCase().includes(locLower) || b.cityOrVillage.toLowerCase().includes(locLower)) ? 1 : 0;
-        if (aLoc !== bLoc) return bLoc - aLoc;
-        return b.ratingAvg - a.ratingAvg;
+        if (a.distKm !== null && b.distKm !== null && a.distKm !== b.distKm) {
+          return a.distKm - b.distKm;
+        }
+        return b.worker.ratingAvg - a.worker.ratingAvg;
       })
-      .slice(0, 3);
-  }, [aiResult, workers]);
+      .slice(0, 6);
+  }, [aiResult, workers, effectiveLocation, effectiveReferenceCoords, searchRadiusKm]);
 
   const matchingVehiclesPreview = useMemo(() => {
     if (!aiResult || aiResult.intent !== 'rent_vehicle') return [];
     const vType = normalizeVehicleType(aiResult.vehicleType, `${aiResult.transcript} ${textInput}`);
-    const locLower = (aiResult.fromLocation || '').toLowerCase();
+    const locLower = effectiveLocation.toLowerCase();
+
     return vehicles
       .filter((v) => v.verificationStatus !== 'suspended')
       .filter((v) => !vType || v.vehicleType === vType)
-      .sort((a, b) => {
-        const aLoc = locLower && (a.district.toLowerCase().includes(locLower) || a.cityOrVillage.toLowerCase().includes(locLower)) ? 1 : 0;
-        const bLoc = locLower && (b.district.toLowerCase().includes(locLower) || b.cityOrVillage.toLowerCase().includes(locLower)) ? 1 : 0;
-        if (aLoc !== bLoc) return bLoc - aLoc;
-        return a.ratePerKm - b.ratePerKm;
+      .map((v) => {
+        const distKm =
+          effectiveReferenceCoords && typeof v.approxLat === 'number' && typeof v.approxLng === 'number'
+            ? calculateDistanceKm(effectiveReferenceCoords.lat, effectiveReferenceCoords.lng, v.approxLat, v.approxLng)
+            : null;
+        return { vehicle: v, distKm };
       })
-      .slice(0, 3);
-  }, [aiResult, vehicles, textInput]);
+      .filter(({ vehicle: v, distKm }) => {
+        if (searchRadiusKm === 0) return true;
+        if (distKm !== null) return distKm <= searchRadiusKm;
+        if (!locLower) return true;
+        return (
+          v.district.toLowerCase().includes(locLower) ||
+          v.cityOrVillage.toLowerCase().includes(locLower) ||
+          v.state.toLowerCase().includes(locLower)
+        );
+      })
+      .sort((a, b) => {
+        if (a.distKm !== null && b.distKm !== null && a.distKm !== b.distKm) {
+          return a.distKm - b.distKm;
+        }
+        return a.vehicle.ratePerKm - b.vehicle.ratePerKm;
+      })
+      .slice(0, 6);
+  }, [aiResult, vehicles, textInput, effectiveLocation, effectiveReferenceCoords, searchRadiusKm]);
 
   if (!open) return null;
 
@@ -223,26 +395,60 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
       await audio.play();
       setIsPlayingAudio(true);
     } catch {
-      // Ignore autoplay errors silently; user can click Speak Reply button manually
+      // Never surface raw TTS errors to user
     } finally {
       setTtsLoading(false);
     }
   };
 
   const startRecording = async () => {
-    setErrorMsg('');
+    setFormErrorMsg('');
     stopAudioPlayback();
+
+    const win = window as unknown as {
+      SpeechRecognition?: new () => SpeechRecognitionLike;
+      webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+    };
+    const SpeechRecCtor = win.SpeechRecognition || win.webkitSpeechRecognition;
+    if (SpeechRecCtor) {
+      try {
+        preSpeechTextRef.current = textInput.trim();
+        const recognition = new SpeechRecCtor();
+        recognition.lang = lang === 'mr' ? 'mr-IN' : lang === 'hi' ? 'hi-IN' : 'en-IN';
+        recognition.interimResults = true;
+        recognition.continuous = true;
+        recognition.onresult = (event) => {
+          let captured = '';
+          for (let i = 0; i < event.results.length; i++) {
+            captured += event.results[i][0].transcript + ' ';
+          }
+          const combined = [preSpeechTextRef.current, captured.trim()].filter(Boolean).join(' ').trim();
+          setTextInput(combined);
+        };
+        recognition.onerror = () => {
+          // Audio MediaRecorder continues independently even if browser speech recognizer errors
+        };
+        recognition.start();
+        speechRecRef.current = recognition;
+      } catch {
+        speechRecRef.current = null;
+      }
+    }
+
     if (!navigator.mediaDevices?.getUserMedia) {
-      setErrorMsg(
-        tr(
-          lang,
-          'Microphone recording is unavailable in this browser. Please type your request below.',
-          'इस ब्राउज़र में माइक्रोफ़ोन उपलब्ध नहीं है। कृपया नीचे टाइप करें।',
-          'या ब्राउझरमध्ये मायक्रोफोन उपलब्ध नाही. कृपया खाली टाइप करा.'
-        )
-      );
+      if (!SpeechRecCtor) {
+        setFormErrorMsg(
+          tr(
+            lang,
+            'Microphone recording is unavailable in this browser. Please type your request below.',
+            'इस ब्राउज़र में माइक्रोफ़ोन उपलब्ध नहीं है। कृपया नीचे टाइप करें।',
+            'या ब्राउझरमध्ये मायक्रोफोन उपलब्ध नाही. कृपया खाली टाइप करा.'
+          )
+        );
+      }
       return;
     }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const preferredMime = MediaRecorder.isTypeSupported('audio/webm')
@@ -268,6 +474,12 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
           window.clearInterval(timerRef.current);
           timerRef.current = null;
         }
+        try {
+          speechRecRef.current?.stop();
+        } catch {
+          // ignore
+        }
+        speechRecRef.current = null;
         setIsRecording(false);
         const mimeType = recorder.mimeType || 'audio/webm';
         const blob = new Blob(chunksRef.current, { type: mimeType });
@@ -288,10 +500,15 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
         }
       }, 1000);
     } catch {
-      setErrorMsg(
+      try {
+        speechRecRef.current?.stop();
+      } catch {
+        // ignore
+      }
+      setFormErrorMsg(
         tr(
           lang,
-          'Microphone permission denied. Allow mic access or type your request.',
+          'Microphone permission denied. Allow mic access or type your request below.',
           'माइक्रोफ़ोन अनुमति अस्वीकृत। कृपया अनुमति दें या टाइप करें।',
           'मायक्रोफोन परवानगी नाकारली. परवानगी द्या किंवा खाली टाइप करा.'
         )
@@ -300,8 +517,15 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
   };
 
   const stopRecording = () => {
+    try {
+      speechRecRef.current?.stop();
+    } catch {
+      // ignore
+    }
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
       mediaRecorderRef.current.stop();
+    } else {
+      setIsRecording(false);
     }
   };
 
@@ -309,7 +533,7 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     if (file.size > 6 * 1024 * 1024) {
-      setErrorMsg(
+      setFormErrorMsg(
         tr(
           lang,
           'Photo must be under 6 MB.',
@@ -319,7 +543,10 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
       );
       return;
     }
-    const base64 = await blobToBase64(file);
+    const [base64, compressedAttachment] = await Promise.all([
+      blobToBase64(file),
+      compressImageForJobAttachment(file),
+    ]);
     if (previewUrlRef.current) {
       URL.revokeObjectURL(previewUrlRef.current);
     }
@@ -329,8 +556,9 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
       base64,
       mimeType: file.type || 'image/jpeg',
       previewUrl,
+      compressedAttachment,
     });
-    setErrorMsg('');
+    setFormErrorMsg('');
   };
 
   const clearPhotoData = () => {
@@ -341,10 +569,51 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
     setPhotoData(null);
   };
 
+  const applyClassificationToState = (resObj: StructuredWorkClassification) => {
+    setAiResult(resObj);
+    setEditedLocation(resObj.fromLocation || userLocationHint || '');
+    setEditedToLocation(resObj.toLocation || '');
+    setEditedWorkersCount(
+      resObj.workersRequired && resObj.workersRequired > 0 ? String(resObj.workersRequired) : ''
+    );
+    if (resObj.transcript && !textInput.trim()) {
+      setTextInput(resObj.transcript);
+    }
+  };
+
+  const runRuleBasedFallbackLocally = (
+    activeText: string,
+    noticeType: 'SERVICE_UNAVAILABLE' | 'QUOTA_EXHAUSTED' | 'NOT_CONFIGURED' | 'NETWORK_ERROR',
+    serverMsg?: string,
+    serverClassification?: StructuredWorkClassification
+  ) => {
+    const fallback =
+      serverClassification ||
+      classifyRequestRuleBased({
+        text: activeText,
+        language: lang,
+        userLocationHint,
+        hasPhoto: Boolean(photoData),
+      });
+
+    // Preserve text & photo strictly without ever pretending photo was AI analyzed
+    applyClassificationToState({
+      ...fallback,
+      photoAnalyzed: false,
+      classificationSource: 'rule_based_fallback',
+    });
+
+    setAiNotice({
+      type: noticeType,
+      userMessage: serverMsg || DEFAULT_FRIENDLY_AI_DOWN_MSG,
+      dismissedForManual: false,
+    });
+  };
+
   const submitToAssistant = async (overrideText?: string, contextSummary?: string) => {
     const activeText = (overrideText ?? textInput).trim();
     if (!activeText && !audioClip && !photoData) {
-      setErrorMsg(
+      setFormErrorMsg(
         tr(
           lang,
           'Speak with the mic, type a request, or attach a photo first.',
@@ -356,8 +625,10 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
     }
 
     setLoading(true);
-    setErrorMsg('');
+    setFormErrorMsg('');
+    setAiNotice(null);
     setPublishedJobId('');
+    setClientRequestId(makeClientRequestId());
     stopAudioPlayback();
 
     try {
@@ -375,29 +646,56 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
           ...(contextSummary ? { conversationContext: contextSummary } : {}),
         }),
       });
-      const data = await res.json();
-      if (!res.ok) {
-        setErrorMsg(data.message || 'AI Assistant could not process the request.');
+      const data = (await res.json().catch(() => ({}))) as {
+        aiUnavailable?: boolean;
+        errorType?: 'SERVICE_UNAVAILABLE' | 'QUOTA_EXHAUSTED' | 'NOT_CONFIGURED';
+        userMessage?: string;
+        fallbackClassification?: StructuredWorkClassification;
+        error?: string;
+        message?: string;
+      } & Partial<StructuredWorkClassification>;
+
+      if (!res.ok || data.aiUnavailable) {
+        // Fallback immediately without showing raw JSON/503 stack errors
+        const nType = data.errorType || (res.status === 429 ? 'QUOTA_EXHAUSTED' : 'SERVICE_UNAVAILABLE');
+        runRuleBasedFallbackLocally(
+          activeText,
+          nType,
+          data.userMessage || DEFAULT_FRIENDLY_AI_DOWN_MSG,
+          data.fallbackClassification
+        );
         return;
       }
 
-      const result = data as AiAssistantResponse;
-      setAiResult(result);
-      if (result.transcript && !textInput.trim()) {
-        setTextInput(result.transcript);
-      }
-      if (result.replyText) {
-        playTtsReply(result.replyText);
+      const normalized: StructuredWorkClassification = {
+        transcript: data.transcript || activeText || 'Work Request',
+        intent: data.intent || 'hire_worker',
+        matchedCategory: data.matchedCategory || 'Carpenters',
+        subcategory: data.subcategory || '',
+        requiredService: data.requiredService || '',
+        workersRequired: typeof data.workersRequired === 'number' && data.workersRequired > 0 ? data.workersRequired : null,
+        vehicleType: (normalizeVehicleType(String(data.vehicleType || ''), activeText) || '') as VehicleType | '',
+        fromLocation: data.fromLocation || '',
+        toLocation: data.toLocation || '',
+        tripType: data.tripType || '',
+        urgency: (data.urgency === 'tomorrow' || data.urgency === 'scheduled' ? data.urgency : 'today'),
+        estimatedWage: Number(data.estimatedWage) || 0,
+        suggestedTitle: data.suggestedTitle || data.matchedCategory || 'Work Requirement',
+        missingDetails: Array.isArray(data.missingDetails) ? data.missingDetails : [],
+        followUpQuestion: data.followUpQuestion || '',
+        readyToPublish: Boolean(data.readyToPublish),
+        replyText: data.replyText || '',
+        photoAnalyzed: Boolean(data.photoAnalyzed ?? photoData),
+        classificationSource: data.classificationSource || 'ai_primary',
+        modelUsed: data.modelUsed,
+      };
+
+      applyClassificationToState(normalized);
+      if (normalized.replyText) {
+        void playTtsReply(normalized.replyText);
       }
     } catch {
-      setErrorMsg(
-        tr(
-          lang,
-          'Network error reaching AI assistant.',
-          'AI सहायक से संपर्क करने में नेटवर्क त्रुटि।',
-          'AI सहाय्यकाशी संपर्क साधताना नेटवर्क त्रुटी आली.'
-        )
-      );
+      runRuleBasedFallbackLocally(activeText, 'NETWORK_ERROR', DEFAULT_FRIENDLY_AI_DOWN_MSG);
     } finally {
       setLoading(false);
     }
@@ -408,62 +706,129 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
     await submitToAssistant();
   };
 
+  const handleContinueWithoutAi = () => {
+    const fallback = classifyRequestRuleBased({
+      text: textInput.trim() || aiResult?.transcript || '',
+      language: lang,
+      userLocationHint: editedLocation || userLocationHint,
+      hasPhoto: Boolean(photoData),
+    });
+    if (!aiResult) {
+      applyClassificationToState(fallback);
+    }
+    setAiNotice((prev) => (prev ? { ...prev, dismissedForManual: true } : null));
+  };
+
   const handleFollowUpSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!followUpInput.trim() || !aiResult) return;
-    const contextSummary = `Previous request: "${aiResult.transcript}". Detected category: ${aiResult.matchedCategory || aiResult.vehicleType}. Previous location: ${aiResult.fromLocation || 'unknown'}. Assistant asked: "${aiResult.followUpQuestion || aiResult.replyText}".`;
     const reply = followUpInput.trim();
+    const combinedText = `${textInput.trim()} ${reply}`.trim();
+    setTextInput(combinedText);
     setFollowUpInput('');
+
+    if (aiResult.classificationSource === 'rule_based_fallback' || aiNotice) {
+      // Update classification directly via rule-based engine if currently in manual mode
+      const updated = classifyRequestRuleBased({
+        text: combinedText,
+        language: lang,
+        userLocationHint: editedLocation || userLocationHint,
+        hasPhoto: Boolean(photoData),
+      });
+      applyClassificationToState(updated);
+      return;
+    }
+
+    const contextSummary = `Previous request: "${aiResult.transcript}". Detected category: ${aiResult.matchedCategory || aiResult.vehicleType}. Previous location: ${editedLocation || aiResult.fromLocation || 'unknown'}. Assistant asked: "${aiResult.followUpQuestion || aiResult.replyText}".`;
     await submitToAssistant(reply, contextSummary);
   };
 
   const handleDirectPublishConfirmedJob = async () => {
-    if (!aiResult || aiResult.intent !== 'hire_worker') return;
+    if (!aiResult || aiResult.intent === 'rent_vehicle') return;
     if (!user) {
       await signInWithGoogle();
       return;
     }
+    if (publishing || publishedJobId) return;
+
+    const locVal = (editedLocation || aiResult.fromLocation || customerPreference?.defaultDistrict || '').trim();
+    if (locVal.length < 2) {
+      setFormErrorMsg(
+        tr(
+          lang,
+          'Please enter the city, village, or locality for this work request.',
+          'कृपया कार्य के लिए शहर, गाँव या क्षेत्र लिखें।',
+          'कृपया कामासाठी शहर, गाव किंवा पत्ता टाका.'
+        )
+      );
+      return;
+    }
+
     setPublishing(true);
-    setErrorMsg('');
+    setFormErrorMsg('');
     try {
       const stateName = customerPreference?.defaultState || employerProfile?.state || INDIA_STATES_DISTRICTS[0].name;
       const distName =
-        aiResult.fromLocation.trim() ||
+        locVal ||
         customerPreference?.defaultDistrict ||
         employerProfile?.district ||
         INDIA_STATES_DISTRICTS[0].districts[0].name;
-      const coords = getDistrictCoordinates(stateName, distName) || { lat: 21.1458, lng: 79.0882 };
+      const coords =
+        resolveCoordsForLocationName(distName) ||
+        getDistrictCoordinates(stateName, distName) || { lat: 21.1458, lng: 79.0882 };
       const wage = Number(aiResult.estimatedWage) > 0 ? Math.min(500000, Number(aiResult.estimatedWage)) : 600;
-      const jobId = await createJobPosting({
-        employerUid: user.uid,
-        employerName: employerProfile?.businessName || user.displayName || 'ROJGAR SETU Customer',
-        title: (aiResult.suggestedTitle || aiResult.matchedCategory || 'Work Requirement').slice(0, 140),
-        category: aiResult.matchedCategory || 'Construction Workers',
-        description: (aiResult.transcript || textInput || aiResult.replyText).slice(0, 2000),
-        workersRequired: 1,
-        requiredSkills: [aiResult.matchedCategory || 'General Work'],
-        state: stateName,
-        district: distName,
-        cityOrVillage: aiResult.fromLocation.trim() || customerPreference?.defaultCityOrVillage || distName,
-        workLocationLabel: (aiResult.fromLocation.trim() || userLocationHint || distName).slice(0, 160),
-        lat: customerPreference?.defaultLat ?? coords.lat,
-        lng: customerPreference?.defaultLng ?? coords.lng,
-        jobDate: new Date().toISOString().split('T')[0],
-        startTime: '09:30',
-        duration: aiResult.urgency === 'tomorrow' ? 'Tomorrow' : 'Today / Urgent',
-        workType: 'daily_wage',
-        offeredWage: wage,
-        wageUnit: 'daily',
-        paymentTerms: 'Direct cash / UPI on work completion',
-        contactPreference: 'phone_after_confirm',
-        isWomenFriendly: false,
-        isAccessible: false,
-        biddingEnabled: true,
-      });
+      const workersCount = Math.max(
+        1,
+        Math.min(500, Number(editedWorkersCount) || aiResult.workersRequired || 1)
+      );
+      const descParts = [
+        (textInput || aiResult.transcript || aiResult.suggestedTitle).trim(),
+        aiResult.requiredService ? `Service: ${aiResult.requiredService}` : '',
+        photoData && !aiResult.photoAnalyzed
+          ? 'Photo attached by customer as reference (not AI-analyzed).'
+          : '',
+      ]
+        .filter(Boolean)
+        .join(' · ')
+        .slice(0, 2000);
+
+      const jobId = await createJobPosting(
+        {
+          employerUid: user.uid,
+          employerName: employerProfile?.businessName || user.displayName || 'ROJGAR SETU Customer',
+          title: (aiResult.suggestedTitle || aiResult.matchedCategory || 'Work Requirement').slice(0, 140),
+          category: aiResult.matchedCategory || 'Construction Workers',
+          description: descParts.length >= 10 ? descParts : `${descParts} Work requirement in ${distName}`.slice(0, 2000),
+          workersRequired: workersCount,
+          requiredSkills: [
+            aiResult.subcategory || aiResult.matchedCategory || 'General Work',
+          ].slice(0, 15),
+          state: stateName,
+          district: distName.slice(0, 80),
+          cityOrVillage: locVal.slice(0, 100),
+          workLocationLabel: locVal.slice(0, 160),
+          lat: customerPreference?.defaultLat ?? coords.lat,
+          lng: customerPreference?.defaultLng ?? coords.lng,
+          jobDate: new Date().toISOString().split('T')[0],
+          startTime: '09:30',
+          duration: aiResult.urgency === 'tomorrow' ? 'Tomorrow' : 'Today / Urgent',
+          workType: 'daily_wage',
+          offeredWage: wage,
+          wageUnit: 'daily',
+          paymentTerms: 'Direct cash / UPI on work completion',
+          contactPreference: 'phone_after_confirm',
+          isWomenFriendly: false,
+          isAccessible: false,
+          biddingEnabled: true,
+          ...(photoData?.compressedAttachment ? { photoAttachment: photoData.compressedAttachment } : {}),
+          ...(photoData ? { photoAnalyzed: Boolean(aiResult.photoAnalyzed) } : {}),
+        },
+        clientRequestId
+      );
       setPublishedJobId(jobId);
       void callNotificationApi('/api/notifications/send-matching-job', { jobId }).catch(() => undefined);
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Unable to publish job directly.');
+      setFormErrorMsg(err instanceof Error ? err.message : 'Unable to save work request.');
     } finally {
       setPublishing(false);
     }
@@ -477,9 +842,12 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
     onApplyPrefill({
       mode: isVehicle ? 'transport' : 'workers',
       category: !isVehicle ? aiResult.matchedCategory : '',
+      subcategory: aiResult.subcategory || '',
+      requiredService: aiResult.requiredService || '',
+      workersRequired: Math.max(1, Number(editedWorkersCount) || aiResult.workersRequired || 1),
       vehicleType: isVehicle ? vType : '',
-      fromLocation: aiResult.fromLocation,
-      toLocation: aiResult.toLocation,
+      fromLocation: editedLocation || aiResult.fromLocation,
+      toLocation: editedToLocation || aiResult.toLocation,
       tripType: normalizeTripType(aiResult.tripType),
       urgency:
         aiResult.urgency === 'tomorrow'
@@ -488,18 +856,56 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
           ? 'scheduled'
           : 'today',
       title: aiResult.suggestedTitle,
-      note: aiResult.transcript || textInput,
-      transcript: aiResult.transcript,
+      note: textInput || aiResult.transcript,
+      transcript: aiResult.transcript || textInput,
+      photoAttachment: photoData?.compressedAttachment || undefined,
+      photoAnalyzed: photoData ? Boolean(aiResult.photoAnalyzed) : undefined,
     });
     onClose();
+  };
+
+  const handleManualSwitchMode = (nextMode: 'hire_worker' | 'rent_vehicle') => {
+    const base: StructuredWorkClassification = aiResult || {
+      transcript: textInput.trim() || 'Manual Work / Transport Search',
+      intent: nextMode,
+      matchedCategory: nextMode === 'hire_worker' ? 'Carpenters' : 'Bike Taxi / Two-Wheeler',
+      subcategory: '',
+      requiredService: '',
+      workersRequired: 1,
+      vehicleType: nextMode === 'rent_vehicle' ? 'bike_taxi' : '',
+      fromLocation: editedLocation || userLocationHint || '',
+      toLocation: editedToLocation || '',
+      tripType: nextMode === 'rent_vehicle' ? 'one_way' : '',
+      urgency: 'today',
+      estimatedWage: 600,
+      suggestedTitle: textInput.trim().slice(0, 80) || 'Work Request',
+      missingDetails: [],
+      followUpQuestion: '',
+      readyToPublish: true,
+      replyText: '',
+      photoAnalyzed: false,
+      classificationSource: 'rule_based_fallback',
+    };
+
+    setAiResult({
+      ...base,
+      intent: nextMode,
+      vehicleType: nextMode === 'rent_vehicle' ? (base.vehicleType || 'bike_taxi') : '',
+      matchedCategory:
+        nextMode === 'hire_worker'
+          ? EMPLOYMENT_CATEGORIES.some((c) => c.en === base.matchedCategory)
+            ? base.matchedCategory
+            : 'Carpenters'
+          : getVehicleTypeLabel(base.vehicleType || 'bike_taxi', lang),
+    });
   };
 
   const quickExamples = [
     tr(
       lang,
-      'Need a carpenter today for door fitting',
-      'मुझे दरवाजा फिट करने के लिए आज मिस्त्री चाहिए',
-      'मला आज दरवाजा बसवण्यासाठी सुतार पाहिजे'
+      'Need a carpenter today for door fitting.',
+      'मुझे दरवाजा फिट करने के लिए आज बढ़ई / सुतार चाहिए।',
+      'मला आज दरवाजा बसवण्यासाठी सुतार पाहिजे.'
     ),
     tr(
       lang,
@@ -509,9 +915,9 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
     ),
     tr(
       lang,
-      'Need Chhota Hathi / Trolley for local goods shifting',
-      'सामान ले जाने के लिए छोटा हाथी / ट्रॉली चाहिए',
-      'सामान नेण्यासाठी छोटा हत्ती किंवा लोकल ट्रॉली पाहिजे'
+      'Need Chhota Hathi / Auto or Tempo in Nagpur',
+      'नागपुर में सामान के लिए छोटा हाथी / ऑटो या टेम्पो चाहिए',
+      'नागपूरमध्ये सामानासाठी छोटा हत्ती / ऑटो किंवा टेम्पो पाहिजे'
     ),
     tr(
       lang,
@@ -520,6 +926,12 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
       'माझ्या घरातील वायरिंगचे काम करायचे आहे, इलेक्ट्रिशियन पाहिजे'
     ),
   ];
+
+  const expandRadius = () => {
+    if (searchRadiusKm === 25) setSearchRadiusKm(50);
+    else if (searchRadiusKm === 50) setSearchRadiusKm(150);
+    else setSearchRadiusKm(0);
+  };
 
   return (
     <div
@@ -547,9 +959,9 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
               <p className="text-[11px] text-blue-100">
                 {tr(
                   lang,
-                  'Workers, Bike Taxi, Auto, Car, Trolley & Tempo (No Heavy Trucks)',
-                  'कामगार, बाइक टैक्सी, ऑटो, कार, ट्रॉली व टेम्पो (ट्रक छोड़कर)',
-                  'कामगार, बाईक टॅक्सी, ऑटो, कार, ट्रॉली व टेम्पो (ट्रक सोडून)'
+                  'Workers, Bike Taxi, Auto, Car, Trolley, Chhota Hathi & Tempo (No Heavy Trucks)',
+                  'कामगार, बाइक टैक्सी, ऑटो, कार, ट्रॉली, छोटा हाथी व टेम्पो (ट्रक छोड़कर)',
+                  'कामगार, बाईक टॅक्सी, ऑटो, कार, ट्रॉली, छोटा हत्ती व टेम्पो (ट्रक सोडून)'
                 )}
               </p>
             </div>
@@ -578,7 +990,10 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
                 <button
                   key={ex}
                   type="button"
-                  onClick={() => setTextInput(ex)}
+                  onClick={() => {
+                    setTextInput(ex);
+                    setClientRequestId(makeClientRequestId());
+                  }}
                   className="text-left px-2.5 py-1.5 rounded border border-slate-200 bg-slate-50 hover:border-[#0B3B75] hover:bg-blue-50/40 text-xs text-slate-700 cursor-pointer"
                 >
                   “{ex}”
@@ -633,7 +1048,18 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
               />
             </div>
 
-            {/* Recorded Audio / Photo Attachments Preview */}
+            {speechSupported && isRecording && (
+              <p className="text-[11px] font-medium text-[#0B3B75]">
+                {tr(
+                  lang,
+                  'Live speech recognition active — spoken words will stay editable below.',
+                  'लाइव वॉइस टाइपिंग सक्रिय — आपके शब्द नीचे संपादित किए जा सकेंगे।',
+                  'थेट आवाज टायपिंग सुरू आहे — बोललेले शब्द खाली जतन होतील.'
+                )}
+              </p>
+            )}
+
+            {/* Recorded Audio / Photo Attachments Preview (Always Preserved on AI Failures) */}
             {(audioClip || photoData) && (
               <div className="flex flex-wrap items-center gap-3 pt-1">
                 {audioClip && (
@@ -688,24 +1114,54 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
               <textarea
                 rows={2}
                 value={textInput}
-                onChange={(e) => setTextInput(e.target.value)}
+                onChange={(e) => {
+                  setTextInput(e.target.value);
+                  setClientRequestId(makeClientRequestId());
+                }}
                 placeholder={tr(
                   lang,
-                  'e.g., "Need a plumber for leaking pipe" or "Need Auto from Chandrapur to Warora tomorrow"',
-                  'जैसे: "दरवाजा लगाने के लिए मिस्त्री चाहिए" या "ऑटो भाड़े पर चाहिए"',
-                  'उदा: "इलेक्ट्रिशियन पाहिजे" किंवा "चंद्रपूरसाठी ऑटो भाड्याने पाहिजे"'
+                  'e.g., "Need a carpenter today for door fitting" or "Need Auto from Chandrapur to Warora"',
+                  'जैसे: "दरवाजा लगाने के लिए आज बढ़ई चाहिए" या "ऑटो किराए पर चाहिए"',
+                  'उदा: "इलेक्ट्रिशियन पाहिजे" किंवा "चंद्रपूरसाठी बाईक टॅक्सी / ऑटो पाहिजे"'
                 )}
                 className="w-full px-3 py-2 bg-white border border-slate-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#0B3B75]"
               />
             </div>
 
-            {errorMsg && (
+            {formErrorMsg && (
               <p className="text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
-                {errorMsg}
+                {formErrorMsg}
               </p>
             )}
 
-            <div className="flex justify-end">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  if (!textInput.trim() && !photoData) {
+                    setFormErrorMsg(
+                      tr(
+                        lang,
+                        'Enter your work or transport requirement above to search directly.',
+                        'सीधे खोजने के लिए ऊपर काम या वाहन की आवश्यकता लिखें।',
+                        'थेट शोधण्यासाठी वर कामाची किंवा वाहनाची माहिती टाइप करा.'
+                      )
+                    );
+                    return;
+                  }
+                  runRuleBasedFallbackLocally(
+                    textInput.trim(),
+                    'SERVICE_UNAVAILABLE',
+                    DEFAULT_FRIENDLY_AI_DOWN_MSG
+                  );
+                  setAiNotice((prev) => (prev ? { ...prev, dismissedForManual: true } : null));
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded-md border border-slate-300 bg-white text-xs font-bold text-[#0B3B75] hover:bg-slate-50 cursor-pointer"
+              >
+                <Search className="w-3.5 h-3.5" />
+                {tr(lang, 'Normal Search (No AI)', 'सामान्य सर्च से खोजें', 'सामान्य सर्चने शोधा')}
+              </button>
+
               <button
                 type="submit"
                 disabled={loading || isRecording}
@@ -726,80 +1182,328 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
             </div>
           </form>
 
-          {/* AI Response & Live Matches */}
+          {/* Friendly AI Unavailable Banner with Retry + Continue Without AI (NO raw errors/503/JSON) */}
+          {aiNotice && !aiNotice.dismissedForManual && (
+            <div
+              role="status"
+              className="rounded-lg border-2 border-amber-400 bg-amber-50 p-4 space-y-3"
+            >
+              <div className="flex items-start gap-2.5">
+                <AlertTriangle className="w-5 h-5 text-amber-700 shrink-0 mt-0.5" />
+                <div className="space-y-1 text-xs sm:text-sm text-amber-950">
+                  <p className="font-bold leading-snug">{aiNotice.userMessage}</p>
+                  {aiNotice.type === 'QUOTA_EXHAUSTED' ? (
+                    <p className="text-xs text-amber-900">
+                      {tr(
+                        lang,
+                        'AI quota limit was temporarily reached. Normal database search is active below and your text/photo are preserved.',
+                        'AI सीमा अस्थायी रूप से पूरी हो गई है। नीचे सामान्य डेटाबेस खोज चालू है और आपका टेक्स्ट/फोटो सुरक्षित है।',
+                        'AI वापर मर्यादा तात्पुरती पूर्ण झाली आहे. खाली सामान्य डेटाबेस शोध सुरू आहे आणि तुमचा मजकूर/फोटो सुरक्षित आहे.'
+                      )}
+                    </p>
+                  ) : (
+                    <p className="text-xs text-amber-900">
+                      {tr(
+                        lang,
+                        'Normal keyword search & real database matching are active below. Your entered text and photo remain preserved.',
+                        'नीचे सामान्य सर्च और वास्तविक डेटाबेस मिलान सक्रिय है। आपका लिखा संदेश और फोटो सुरक्षित हैं।',
+                        'खाली सामान्य सर्च व प्रत्यक्ष डेटाबेस जुळणी सुरू आहे. तुमचा मजकूर व फोटो सुरक्षित ठेवले आहेत.'
+                      )}
+                    </p>
+                  )}
+                  {audioClip && !textInput.trim() && (
+                    <p className="text-xs font-semibold text-[#0B3B75]">
+                      {tr(
+                        lang,
+                        'Voice audio was recorded; please type a few keywords in the box above while AI voice transcription is unavailable.',
+                        'आवाज़ रिकॉर्ड हुई है; AI उपलब्ध न होने के कारण कृपया ऊपर कुछ शब्द टाइप करें।',
+                        'आवाज रेकॉर्ड झाला आहे; AI तात्पुरती बंद असल्याने कृपया वरील बॉक्समध्ये थोडक्यात टाइप करा.'
+                      )}
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  disabled={loading}
+                  onClick={() => void submitToAssistant()}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded bg-[#0B3B75] text-white text-xs font-bold hover:bg-[#072A54] disabled:opacity-60 cursor-pointer"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+                  {tr(lang, 'Retry AI', 'AI पुनः प्रयास करें', 'पुन्हा प्रयत्न करा (Retry)')}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleContinueWithoutAi}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded border border-[#15803D] bg-white text-[#15803D] text-xs font-bold hover:bg-emerald-50 cursor-pointer"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  {tr(lang, 'Continue Without AI', 'AI के बिना आगे बढ़ें', 'AI शिवाय पुढे जा (Continue Without AI)')}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Classification & Live Database Matches */}
           {aiResult && (
             <div className="border border-slate-200 rounded-lg overflow-hidden bg-white space-y-4 p-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-200">
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <Sparkles className="w-4 h-4 text-[#E06D1B]" />
                   <span className="text-xs font-bold uppercase tracking-wider text-[#0B3B75]">
                     {aiResult.intent === 'rent_vehicle'
-                      ? tr(lang, 'Local Transport Detected', 'लोकल वाहन आवश्यकता पहचानी गई', 'लोकल ट्रान्सपोर्टची गरज ओळखली')
-                      : tr(lang, 'Worker Requirement Detected', 'कामगार आवश्यकता पहचानी गई', 'कामगाराची गरज ओळखली')}
+                      ? tr(lang, 'Local Transport Detected', 'लोकल वाहन आवश्यकता', 'लोकल ट्रान्सपोर्ट गरज')
+                      : tr(lang, 'Work Requirement Detected', 'कामगार आवश्यकता', 'कामगाराची गरज')}
+                  </span>
+                  <span
+                    className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                      aiResult.classificationSource === 'rule_based_fallback'
+                        ? 'bg-emerald-100 text-emerald-900'
+                        : 'bg-blue-100 text-[#0B3B75]'
+                    }`}
+                  >
+                    {aiResult.classificationSource === 'rule_based_fallback'
+                      ? tr(lang, 'Normal Search Engine', 'सामान्य सर्च प्रणाली', 'सामान्य सर्च प्रणाली')
+                      : aiResult.classificationSource === 'ai_backup'
+                      ? `Backup AI (${aiResult.modelUsed || 'Flash-Lite'})`
+                      : `AI (${aiResult.modelUsed || 'Gemini'})`}
                   </span>
                 </div>
 
-                <button
-                  type="button"
-                  disabled={ttsLoading}
-                  onClick={() =>
-                    isPlayingAudio ? stopAudioPlayback() : playTtsReply(aiResult.replyText)
-                  }
-                  className="inline-flex items-center gap-1.5 px-3 py-1 rounded border border-slate-300 bg-slate-50 text-xs font-bold text-[#0B3B75] hover:bg-slate-100 cursor-pointer self-start sm:self-auto"
-                >
-                  {isPlayingAudio ? (
-                    <>
-                      <VolumeX className="w-3.5 h-3.5 text-red-600" />
-                      {tr(lang, 'Stop Voice', 'आवाज़ रोकें', 'आवाज थांबवा')}
-                    </>
-                  ) : (
-                    <>
-                      <Volume2 className="w-3.5 h-3.5 text-[#15803D]" />
-                      {ttsLoading
-                        ? tr(lang, 'Loading voice...', 'आवाज़ लोड...', 'आवाज लोड...')
-                        : tr(lang, 'Hear Reply', 'आवाज़ में सुनें', 'आवाजात ऐका')}
-                    </>
-                  )}
-                </button>
+                {aiResult.replyText && (
+                  <button
+                    type="button"
+                    disabled={ttsLoading}
+                    onClick={() =>
+                      isPlayingAudio ? stopAudioPlayback() : playTtsReply(aiResult.replyText)
+                    }
+                    className="inline-flex items-center gap-1.5 px-3 py-1 rounded border border-slate-300 bg-slate-50 text-xs font-bold text-[#0B3B75] hover:bg-slate-100 cursor-pointer self-start sm:self-auto"
+                  >
+                    {isPlayingAudio ? (
+                      <>
+                        <VolumeX className="w-3.5 h-3.5 text-red-600" />
+                        {tr(lang, 'Stop Voice', 'आवाज़ रोकें', 'आवाज थांबवा')}
+                      </>
+                    ) : (
+                      <>
+                        <Volume2 className="w-3.5 h-3.5 text-[#15803D]" />
+                        {ttsLoading
+                          ? tr(lang, 'Loading voice...', 'आवाज़ लोड...', 'आवाज लोड...')
+                          : tr(lang, 'Hear Reply', 'आवाज़ में सुनें', 'आवाजात ऐका')}
+                      </>
+                    )}
+                  </button>
+                )}
               </div>
 
-              <div className="bg-blue-50/70 border border-blue-200 rounded p-3.5 text-sm text-slate-900 leading-relaxed">
-                {aiResult.replyText}
+              {aiResult.replyText && (
+                <div className="bg-blue-50/70 border border-blue-200 rounded p-3 text-xs sm:text-sm text-slate-900 leading-relaxed">
+                  {aiResult.replyText}
+                </div>
+              )}
+
+              {/* Honest Photo Attachment Status */}
+              {photoData && (
+                <div
+                  className={`flex items-center gap-3 p-2.5 rounded border text-xs ${
+                    aiResult.photoAnalyzed
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
+                      : 'bg-slate-50 border-slate-300 text-slate-800'
+                  }`}
+                >
+                  <img
+                    src={photoData.previewUrl}
+                    alt="Attached work reference"
+                    className="w-11 h-11 object-cover rounded border border-slate-300 shrink-0"
+                  />
+                  <div>
+                    <div className="font-bold">
+                      {aiResult.photoAnalyzed
+                        ? tr(lang, 'Photo analyzed by AI & attached', 'फोटो AI द्वारा जांचा गया और संलग्न है', 'फोटो AI ने तपासला असून जोडलेला आहे')
+                        : tr(
+                            lang,
+                            'Photo saved & attached (not AI-analyzed)',
+                            'फोटो अनुरोध के साथ सुरक्षित है (AI विश्लेषण नहीं हुआ)',
+                            'फोटो विनंतीसोबत सुरक्षित जोडला आहे (AI तपासणी झाली नाही)'
+                          )}
+                    </div>
+                    <p className="text-[11px] text-slate-600">
+                      {aiResult.photoAnalyzed
+                        ? tr(lang, 'Your image will remain linked if you publish.', 'जॉब प्रकाशित करने पर यह फोटो जुड़ा रहेगा।', 'काम प्रकाशित केल्यावर हा फोटो सोबत जोडलेला राहील.')
+                        : tr(
+                            lang,
+                            'AI visual inspection was unavailable, so the image has NOT been analyzed. It remains linked to your manual job request.',
+                            'AI उपलब्ध न होने से फोटो का विश्लेषण नहीं किया गया है, लेकिन यह आपकी काम रिक्वेस्ट के साथ जुड़ा रहेगा।',
+                            'AI उपलब्ध नसल्याने फोटोचे विश्लेषण केलेले नाही; मात्र तो तुमच्या काम विनंतीसोबत सुरक्षित जोडलेला राहील.'
+                          )}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Structured Classification Breakdown + Manual Mode Toggle & Editable Fields */}
+              <div className="flex flex-wrap items-center gap-2 text-xs">
+                <button
+                  type="button"
+                  onClick={() => handleManualSwitchMode('hire_worker')}
+                  className={`px-3 py-1.5 rounded font-bold border cursor-pointer ${
+                    aiResult.intent !== 'rent_vehicle'
+                      ? 'bg-[#0B3B75] border-[#0B3B75] text-white'
+                      : 'bg-white border-slate-300 text-slate-700'
+                  }`}
+                >
+                  {tr(lang, 'Worker Search', 'कामगार खोज', 'कामगार शोध')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleManualSwitchMode('rent_vehicle')}
+                  className={`px-3 py-1.5 rounded font-bold border cursor-pointer ${
+                    aiResult.intent === 'rent_vehicle'
+                      ? 'bg-[#E06D1B] border-[#E06D1B] text-white'
+                      : 'bg-white border-slate-300 text-slate-700'
+                  }`}
+                >
+                  {tr(lang, 'Local Transport (No Trucks)', 'लोकल वाहन (ट्रक छोड़कर)', 'लोकल ट्रान्सपोर्ट (ट्रक सोडून)')}
+                </button>
               </div>
 
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
                 <div className="p-2.5 rounded bg-slate-50 border border-slate-200">
                   <div className="text-slate-500">{tr(lang, 'Category', 'श्रेणी', 'श्रेणी')}</div>
-                  <div className="font-bold text-[#0B3B75] mt-0.5 truncate">
-                    {aiResult.vehicleType
-                      ? getVehicleTypeLabel(
-                          normalizeVehicleType(aiResult.vehicleType, `${aiResult.transcript} ${textInput}`) || aiResult.vehicleType,
-                          lang
+                  {aiResult.intent === 'rent_vehicle' ? (
+                    <select
+                      aria-label="Vehicle Type"
+                      value={normalizeVehicleType(aiResult.vehicleType, textInput) || 'bike_taxi'}
+                      onChange={(e) =>
+                        setAiResult((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                vehicleType: e.target.value as VehicleType,
+                                matchedCategory: getVehicleTypeLabel(e.target.value, lang),
+                              }
+                            : prev
                         )
-                      : aiResult.matchedCategory || 'General'}
+                      }
+                      className="mt-1 w-full bg-white border border-slate-300 rounded px-1.5 py-1 text-xs font-bold text-[#0B3B75]"
+                    >
+                      {VEHICLE_TYPE_CATALOG.map((vt) => (
+                        <option key={vt.value} value={vt.value}>
+                          {lang === 'hi' ? vt.hi.split('(')[0].trim() : lang === 'mr' ? vt.mr.split('(')[0].trim() : vt.en.split('(')[0].trim()}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <select
+                      aria-label="Worker Category"
+                      value={aiResult.matchedCategory}
+                      onChange={(e) =>
+                        setAiResult((prev) =>
+                          prev ? { ...prev, matchedCategory: e.target.value } : prev
+                        )
+                      }
+                      className="mt-1 w-full bg-white border border-slate-300 rounded px-1.5 py-1 text-xs font-bold text-[#0B3B75]"
+                    >
+                      {EMPLOYMENT_CATEGORIES.map((c) => (
+                        <option key={c.id} value={c.en}>
+                          {c.en}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                <div className="p-2.5 rounded bg-slate-50 border border-slate-200">
+                  <div className="text-slate-500">{tr(lang, 'Subcategory / Service', 'उप-श्रेणी / कार्य', 'उप-प्रकार / सेवा')}</div>
+                  <div className="font-bold text-slate-800 mt-1 truncate">
+                    {aiResult.subcategory || aiResult.requiredService || '—'}
                   </div>
                 </div>
+
                 <div className="p-2.5 rounded bg-slate-50 border border-slate-200">
-                  <div className="text-slate-500">{tr(lang, 'Location', 'स्थान', 'ठिकाण')}</div>
-                  <div className="font-bold text-slate-800 mt-0.5 truncate">
-                    {aiResult.fromLocation || userLocationHint || tr(lang, 'Near you', 'आपके पास', 'तुमच्या जवळ')}
+                  <div className="text-slate-500">
+                    {tr(lang, 'Location', 'स्थान', 'ठिकाण')}
+                    {!editedLocation && (
+                      <span className="text-amber-700 font-bold ml-1">*</span>
+                    )}
                   </div>
+                  <input
+                    type="text"
+                    value={editedLocation}
+                    onChange={(e) => setEditedLocation(e.target.value)}
+                    placeholder={tr(lang, 'Enter city / town...', 'शहर / गाँव लिखें...', 'शहर / गाव टाका...')}
+                    className={`mt-1 w-full px-2 py-1 rounded border text-xs font-semibold ${
+                      !editedLocation ? 'border-amber-400 bg-amber-50' : 'border-slate-300 bg-white'
+                    }`}
+                  />
                 </div>
-                <div className="p-2.5 rounded bg-slate-50 border border-slate-200">
-                  <div className="text-slate-500">{tr(lang, 'Destination', 'गंतव्य', 'कुठे जायचे')}</div>
-                  <div className="font-bold text-slate-800 mt-0.5 truncate">
-                    {aiResult.toLocation || '—'}
+
+                {aiResult.intent === 'rent_vehicle' ? (
+                  <div className="p-2.5 rounded bg-slate-50 border border-slate-200">
+                    <div className="text-slate-500">{tr(lang, 'Destination', 'गंतव्य', 'कुठे जायचे')}</div>
+                    <input
+                      type="text"
+                      value={editedToLocation}
+                      onChange={(e) => setEditedToLocation(e.target.value)}
+                      placeholder={tr(lang, 'Drop point...', 'कहाँ जाना है...', 'कुठे जायचे...')}
+                      className="mt-1 w-full px-2 py-1 rounded border border-slate-300 bg-white text-xs font-semibold"
+                    />
                   </div>
-                </div>
-                <div className="p-2.5 rounded bg-slate-50 border border-slate-200">
-                  <div className="text-slate-500">{tr(lang, 'Timing', 'समय', 'वेळ')}</div>
-                  <div className="font-bold text-[#15803D] mt-0.5 uppercase">
-                    {aiResult.urgency || 'today'}
+                ) : (
+                  <div className="p-2.5 rounded bg-slate-50 border border-slate-200">
+                    <div className="text-slate-500">
+                      {tr(lang, 'Workers Needed', 'कामगार संख्या', 'कामगार संख्या')}
+                      {!editedWorkersCount && (
+                        <span className="text-amber-700 font-bold ml-1">?</span>
+                      )}
+                    </div>
+                    <input
+                      type="number"
+                      min={1}
+                      max={500}
+                      value={editedWorkersCount}
+                      onChange={(e) => setEditedWorkersCount(e.target.value)}
+                      placeholder={tr(lang, 'e.g. 1', 'जैसे 1', 'उदा. 1')}
+                      className={`mt-1 w-full px-2 py-1 rounded border text-xs font-mono-tabular font-semibold ${
+                        !editedWorkersCount ? 'border-amber-400 bg-amber-50' : 'border-slate-300 bg-white'
+                      }`}
+                    />
                   </div>
+                )}
+              </div>
+
+              {/* Search Radius Selector */}
+              <div className="flex flex-wrap items-center justify-between gap-2 text-xs bg-slate-50 border border-slate-200 rounded px-3 py-2">
+                <span className="font-bold text-slate-700 inline-flex items-center gap-1.5">
+                  <Compass className="w-3.5 h-3.5 text-[#0B3B75]" />
+                  {tr(lang, 'Database Search Radius:', 'डेटाबेस खोज दायरा:', 'डेटाबेस शोध अंतर:')}
+                </span>
+                <div className="flex flex-wrap gap-1.5">
+                  {[
+                    { km: 25, label: '25 km' },
+                    { km: 50, label: '50 km' },
+                    { km: 150, label: '150 km' },
+                    { km: 0, label: tr(lang, 'All India', 'पूरा भारत', 'संपूर्ण भारत') },
+                  ].map((opt) => (
+                    <button
+                      key={opt.km}
+                      type="button"
+                      onClick={() => setSearchRadiusKm(opt.km)}
+                      className={`px-2.5 py-1 rounded border text-xs font-bold cursor-pointer ${
+                        searchRadiusKm === opt.km
+                          ? 'bg-[#0B3B75] border-[#0B3B75] text-white'
+                          : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-100'
+                      }`}
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
                 </div>
               </div>
 
-              {/* Matching Results Preview */}
+              {/* Real Registered Matching Results (NEVER fake data) */}
               {aiResult.intent === 'rent_vehicle' ? (
                 <div className="space-y-2">
                   <div className="flex items-center gap-1.5 text-xs font-bold text-[#0B3B75]">
@@ -809,18 +1513,19 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
                       <Car className="w-4 h-4 text-[#E06D1B]" />
                     )}
                     <span>
-                      {tr(lang, 'Matching Local Transport Available', 'उपलब्ध स्थानीय वाहन', 'उपलब्ध लोकल वाहने')} (
+                      {tr(lang, 'Registered Local Transport Available', 'पंजीकृत स्थानीय वाहन उपलब्ध', 'नोंदणीकृत लोकल वाहने')} (
                       {matchingVehiclesPreview.length})
                     </span>
                   </div>
                   {matchingVehiclesPreview.length > 0 ? (
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                      {matchingVehiclesPreview.map((v) => (
+                      {matchingVehiclesPreview.map(({ vehicle: v, distKm }) => (
                         <div key={v.id} className="p-2.5 rounded border border-slate-200 bg-slate-50 text-xs space-y-1">
                           <div className="font-bold text-[#0B3B75] truncate">{v.vehicleTitle}</div>
                           <div className="text-slate-600 truncate">
                             <MapPin className="w-3 h-3 inline mr-1" />
                             {v.cityOrVillage}, {v.district}
+                            {distKm !== null ? ` · ${distKm} km` : ''}
                           </div>
                           <div className="font-mono-tabular font-bold text-[#15803D]">
                             ₹{v.ratePerKm}/km · ₹{v.ratePerDay}/day
@@ -829,14 +1534,26 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
                       ))}
                     </div>
                   ) : (
-                    <p className="text-xs text-slate-500">
-                      {tr(
-                        lang,
-                        'Proceed to Local Transport to view nearby Bike Taxi, Auto, Car, Trolley or Mini Tempo.',
-                        'नजदीकी बाइक टैक्सी, ऑटो, कार, ट्रॉली या टेम्पो देखने के लिए आगे बढ़ें।',
-                        'जवळची बाईक टॅक्सी, ऑटो, कार, ट्रॉली किंवा टेम्पो पाहण्यासाठी पुढे जा.'
+                    <div className="p-3 rounded border border-slate-200 bg-slate-50 text-xs text-slate-700 space-y-2">
+                      <p className="font-semibold">
+                        {tr(
+                          lang,
+                          `No registered ${getVehicleTypeLabel(aiResult.vehicleType || 'bike_taxi', 'en')} found${searchRadiusKm > 0 ? ` within ${searchRadiusKm} km` : ''}${effectiveLocation ? ` near ${effectiveLocation}` : ''}.`,
+                          `${effectiveLocation ? `${effectiveLocation} के पास ` : ''}${searchRadiusKm > 0 ? `${searchRadiusKm} किमी के भीतर ` : ''}कोई पंजीकृत वाहन नहीं मिला।`,
+                          `${effectiveLocation ? `${effectiveLocation} जवळ ` : ''}${searchRadiusKm > 0 ? `${searchRadiusKm} किमी मध्ये ` : ''}नोंदणीकृत वाहन सापडले नाही.`
+                        )}
+                      </p>
+                      {searchRadiusKm > 0 && (
+                        <button
+                          type="button"
+                          onClick={expandRadius}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded bg-white border border-[#0B3B75] text-[#0B3B75] font-bold hover:bg-blue-50 cursor-pointer"
+                        >
+                          <Compass className="w-3.5 h-3.5" />
+                          {tr(lang, 'Expand Search Radius', 'खोज दायरा बढ़ाएँ', 'शोध अंतर वाढवा')}
+                        </button>
                       )}
-                    </p>
+                    </div>
                   )}
                 </div>
               ) : (
@@ -844,31 +1561,46 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
                   <div className="flex items-center gap-1.5 text-xs font-bold text-[#0B3B75]">
                     <Users className="w-4 h-4 text-[#15803D]" />
                     <span>
-                      {tr(lang, 'Matching Workers Nearby', 'नजदीकी उपलब्ध कामगार', 'जवळचे उपलब्ध कामगार')} (
+                      {tr(lang, 'Registered Matching Workers', 'पंजीकृत उपलब्ध कामगार', 'नोंदणीकृत जुळणारे कामगार')} (
                       {matchingWorkersPreview.length})
                     </span>
                   </div>
                   {matchingWorkersPreview.length > 0 ? (
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                      {matchingWorkersPreview.map((w) => (
+                      {matchingWorkersPreview.map(({ worker: w, distKm }) => (
                         <div key={w.id} className="p-2.5 rounded border border-slate-200 bg-slate-50 text-xs space-y-1">
                           <div className="font-bold text-[#0B3B75] truncate">{w.displayName}</div>
                           <div className="text-[#C25E00] truncate">{w.primarySkill}</div>
                           <div className="font-mono-tabular font-bold text-[#15803D]">
                             ₹{w.expectedWage}/{w.wageUnit} · {w.district}
+                            {distKm !== null ? ` (${distKm} km)` : ''}
                           </div>
                         </div>
                       ))}
                     </div>
                   ) : (
-                    <p className="text-xs text-slate-500">
-                      {tr(
-                        lang,
-                        'Apply this search in Instant Hire to view workers or broadcast an instant request.',
-                        'तुरंत हायर में जाकर उपलब्ध कामगार देखें या तुरंत रिक्वेस्ट भेजें।',
-                        'तात्काळ हायरमध्ये जाऊन कामगार पहा किंवा विनंती पाठवा.'
-                      )}
-                    </p>
+                    <div className="p-3 rounded border border-slate-200 bg-slate-50 text-xs text-slate-700 space-y-2">
+                      <p className="font-semibold">
+                        {tr(
+                          lang,
+                          `No registered ${aiResult.matchedCategory} found${searchRadiusKm > 0 ? ` within ${searchRadiusKm} km` : ''}${effectiveLocation ? ` near ${effectiveLocation}` : ''}.`,
+                          `${effectiveLocation ? `${effectiveLocation} के पास ` : ''}${searchRadiusKm > 0 ? `${searchRadiusKm} किमी के भीतर ` : ''}${aiResult.matchedCategory} वर्ग में कोई पंजीकृत कामगार नहीं मिला।`,
+                          `${effectiveLocation ? `${effectiveLocation} जवळ ` : ''}${searchRadiusKm > 0 ? `${searchRadiusKm} किमी मध्ये ` : ''}${aiResult.matchedCategory} श्रेणीत नोंदणीकृत कामगार सापडले नाहीत.`
+                        )}
+                      </p>
+                      <div className="flex flex-wrap gap-2">
+                        {searchRadiusKm > 0 && (
+                          <button
+                            type="button"
+                            onClick={expandRadius}
+                            className="inline-flex items-center gap-1 px-3 py-1.5 rounded bg-white border border-[#0B3B75] text-[#0B3B75] font-bold hover:bg-blue-50 cursor-pointer"
+                          >
+                            <Compass className="w-3.5 h-3.5" />
+                            {tr(lang, 'Expand Search Radius', 'खोज दायरा बढ़ाएँ', 'शोध अंतर वाढवा (Expand Radius)')}
+                          </button>
+                        )}
+                      </div>
+                    </div>
                   )}
                 </div>
               )}
@@ -888,7 +1620,7 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
                   <ArrowRight className="w-4 h-4" />
                 </button>
 
-                {aiResult.intent === 'hire_worker' && !publishedJobId && (
+                {aiResult.intent !== 'rent_vehicle' && !publishedJobId && (
                   <button
                     type="button"
                     disabled={publishing}
@@ -898,8 +1630,8 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
                     <CheckCircle2 className="w-4 h-4" />
                     <span>
                       {publishing
-                        ? tr(lang, 'Publishing...', 'प्रकाशित हो रहा है...', 'प्रकाशित होत आहे...')
-                        : tr(lang, 'Confirm & Publish Job Now', 'पुष्टि करें व जॉब प्रकाशित करें', 'निश्चित करा व काम प्रकाशित करा')}
+                        ? tr(lang, 'Saving Request...', 'अनुरोध सहेजा जा रहा है...', 'विनंती जतन होत आहे...')
+                        : tr(lang, 'Save & Publish Job Request', 'जॉब अनुरोध सहेजें व प्रकाशित करें', 'कामाची विनंती जतन व प्रकाशित करा')}
                     </span>
                   </button>
                 )}
@@ -909,9 +1641,9 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
                 <div className="p-3 rounded bg-emerald-50 border border-emerald-200 text-xs font-semibold text-emerald-900">
                   {tr(
                     lang,
-                    `Job published to database (ID: ${publishedJobId}) and matching worker alerts dispatched.`,
-                    `काम डेटाबेस में प्रकाशित हो गया है (ID: ${publishedJobId}) और कामगारों को सूचना भेजी गई है।`,
-                    `काम डेटाबेसमध्ये प्रकाशित झाले आहे (ID: ${publishedJobId}) आणि कामगारांना सूचना पाठवल्या आहेत.`
+                    `Job request saved to database (ID: ${publishedJobId})${photoData ? ' with photo attachment' : ''} and matching worker alerts dispatched.`,
+                    `काम अनुरोध डेटाबेस में सहेजा गया (ID: ${publishedJobId}) और कामगारों को सूचना भेजी गई।`,
+                    `कामाची विनंती डेटाबेसमध्ये जतन झाली आहे (ID: ${publishedJobId}) आणि कामगारांना सूचना पाठवल्या आहेत.`
                   )}
                 </div>
               )}

@@ -164,6 +164,8 @@
         "isWomenFriendly": { "type": "boolean" },
         "isAccessible": { "type": "boolean" },
         "biddingEnabled": { "type": "boolean" },
+        "photoAttachment": { "type": "string", "maxLength": 100000 },
+        "photoAnalyzed": { "type": "boolean" },
         "status": { "type": "string", "enum": ["open", "in_progress", "completed", "cancelled", "flagged"] },
         "applicationsCount": { "type": "number" },
         "createdAt": { "type": "string", "format": "date-time" },

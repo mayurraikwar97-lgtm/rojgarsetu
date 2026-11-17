@@ -284,10 +284,28 @@ export async function saveEmployerRegistration(
 }
 
 export async function createJobPosting(
-  payload: Omit<JobPosting, 'id' | 'status' | 'applicationsCount' | 'createdAt' | 'updatedAt'>
+  payload: Omit<JobPosting, 'id' | 'status' | 'applicationsCount' | 'createdAt' | 'updatedAt'>,
+  idempotencyKey?: string
 ): Promise<string> {
   const path = 'jobs';
+  const safeKey = idempotencyKey ? idempotencyKey.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120) : '';
   try {
+    if (safeKey && safeKey.length >= 8) {
+      const targetRef = doc(db, path, safeKey);
+      const existingSnap = await getDoc(targetRef);
+      if (existingSnap.exists()) {
+        return existingSnap.id;
+      }
+      await setDoc(targetRef, {
+        ...payload,
+        status: 'open',
+        applicationsCount: 0,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      return safeKey;
+    }
+
     const ref = await addDoc(collection(db, path), {
       ...payload,
       status: 'open',
@@ -304,14 +322,26 @@ export async function createJobPosting(
 export async function createInstantHireRequest(
   jobPayload: Omit<JobPosting, 'id' | 'status' | 'applicationsCount' | 'createdAt' | 'updatedAt'>,
   selectedWorkers: PublicWorkerProfile[],
-  inviteNote?: string
+  inviteNote?: string,
+  idempotencyKey?: string
 ): Promise<{ jobId: string; invitedCount: number }> {
+  const safeKey = idempotencyKey ? idempotencyKey.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120) : '';
+  let alreadyExisted = false;
+  if (safeKey && safeKey.length >= 8) {
+    try {
+      const snap = await getDoc(doc(db, 'jobs', safeKey));
+      alreadyExisted = snap.exists();
+    } catch {
+      alreadyExisted = false;
+    }
+  }
+
   // Create job document first so Firestore security rule `get(/databases/.../jobs/$(jobId))`
   // resolves cleanly when creating invited applications immediately afterward.
-  const jobId = await createJobPosting(jobPayload);
+  const jobId = await createJobPosting(jobPayload, safeKey || undefined);
 
-  if (selectedWorkers.length === 0) {
-    return { jobId, invitedCount: 0 };
+  if (selectedWorkers.length === 0 || alreadyExisted) {
+    return { jobId, invitedCount: alreadyExisted ? selectedWorkers.length : 0 };
   }
 
   const batch = writeBatch(db);
