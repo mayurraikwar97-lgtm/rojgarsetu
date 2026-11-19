@@ -833,6 +833,15 @@ service cloud.firestore {
       );
     }
 
+    function isValidMobileUniquenessLock(data) {
+      return data.keys().hasAll(['ownerUid', 'role', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerUid', 'role', 'createdAt', 'updatedAt'])
+        && isValidId(data.ownerUid)
+        && data.role in ['worker', 'employer']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
     // Collection Rules
 
     match /users/{userId} {
@@ -1602,6 +1611,26 @@ service cloud.firestore {
         && isAcceptedJobGrantValid(incoming())
         && isValidTimestampOnUpdate();
       allow delete: if isValidId(grantId)
+        && isVerifiedUser()
+        && (isOwner(existing().ownerUid) || isAdmin());
+    }
+
+    match /mobileUniquenessLocks/{lockId} {
+      allow get: if isValidId(lockId) && isVerifiedUser();
+      allow list: if isAdmin();
+      allow create: if isValidId(lockId)
+        && isVerifiedUser()
+        && isOwner(incoming().ownerUid)
+        && isValidMobileUniquenessLock(incoming())
+        && !exists(/databases/$(database)/documents/mobileUniquenessLocks/$(lockId))
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(lockId)
+        && isVerifiedUser()
+        && isOwner(existing().ownerUid)
+        && incoming().ownerUid == existing().ownerUid
+        && isValidMobileUniquenessLock(incoming())
+        && isValidTimestampOnUpdate();
+      allow delete: if isValidId(lockId)
         && isVerifiedUser()
         && (isOwner(existing().ownerUid) || isAdmin());
     }

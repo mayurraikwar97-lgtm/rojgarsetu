@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Car, CheckCircle2, Crosshair, Lock, MapPin, ShieldCheck } from 'lucide-react';
+import { AlertCircle, Car, CheckCircle2, Crosshair, Lock, MapPin, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import {
   getDistrictCoordinates,
@@ -7,6 +7,7 @@ import {
 } from '../data/indiaLocations';
 import { VEHICLE_TYPE_CATALOG } from '../data/vehicleTypes';
 import { useLanguage } from '../i18n/LanguageContext';
+import { formatUiError } from '../lib/firebase';
 import { saveVehicleListing } from '../lib/firestoreService';
 import { detectBestGpsLocation } from '../lib/locationService';
 import type { Language, PageRoute, VehicleType, VerificationMethod } from '../types/domain';
@@ -25,7 +26,7 @@ const VEHICLE_TYPE_OPTIONS = VEHICLE_TYPE_CATALOG;
 
 export const VehicleRegistrationForm: React.FC<VehicleRegistrationFormProps> = ({ onNavigate }) => {
   const { lang, t } = useLanguage();
-  const { user, signInWithGoogle } = useAuth();
+  const { user, authError, clearAuthError, signInWithGoogle } = useAuth();
 
   const [ownerDisplayName, setOwnerDisplayName] = useState(user?.displayName || '');
   const [vehicleType, setVehicleType] = useState<VehicleType>('auto_rickshaw');
@@ -136,7 +137,27 @@ export const VehicleRegistrationForm: React.FC<VehicleRegistrationFormProps> = (
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
-    if (!user) return;
+    clearAuthError();
+    if (!user) {
+      setErrorMsg(t.common.signInRequired || 'Please sign in with Google before submitting.');
+      return;
+    }
+    if (!user.emailVerified) {
+      setErrorMsg('Please sign in with a verified Google account to register a vehicle.');
+      return;
+    }
+    if (ownerDisplayName.trim().length < 2) {
+      setErrorMsg('Please enter Owner / Driver Name (minimum 2 characters).');
+      return;
+    }
+    if (vehicleTitle.trim().length < 2 || vehicleNumberMasked.trim().length < 4) {
+      setErrorMsg('Please enter Vehicle Model Name and Vehicle Plate Number.');
+      return;
+    }
+    if (!/^[6-9]\d{9}$/.test(mobile.trim())) {
+      setErrorMsg('Please enter a valid 10-digit Indian mobile number.');
+      return;
+    }
     if (!mobileVerified) {
       setErrorMsg(
         tr(
@@ -194,7 +215,7 @@ export const VehicleRegistrationForm: React.FC<VehicleRegistrationFormProps> = (
       );
       setSuccessRegId(regId);
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Unable to register vehicle.');
+      setErrorMsg(formatUiError(err, 'Unable to register vehicle.'));
     } finally {
       setSubmitting(false);
     }
@@ -209,13 +230,21 @@ export const VehicleRegistrationForm: React.FC<VehicleRegistrationFormProps> = (
             {tr(lang, 'Register Bike Taxi, Auto, Car or Local Goods Vehicle', 'बाइक टैक्सी, ऑटो, कार या स्थानीय मालगाड़ी जोड़ें', 'बाईक टॅक्सी, ऑटो, कार किंवा लोकल मालवाहू गाडी नोंदवा')}
           </h1>
           <p className="text-sm text-slate-600">{t.common.signInRequired}</p>
-          <button
-            type="button"
-            onClick={signInWithGoogle}
-            className="px-5 py-2.5 rounded-md bg-[#0B3B75] text-white text-sm font-semibold hover:bg-slate-800 cursor-pointer"
-          >
-            {t.nav.signIn}
-          </button>
+          {authError && (
+            <p className="inline-flex items-start gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2 font-medium">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>{authError}</span>
+            </p>
+          )}
+          <div>
+            <button
+              type="button"
+              onClick={signInWithGoogle}
+              className="px-5 py-2.5 rounded-md bg-[#0B3B75] text-white text-sm font-semibold hover:bg-slate-800 cursor-pointer"
+            >
+              {t.nav.signIn}
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -286,7 +315,7 @@ export const VehicleRegistrationForm: React.FC<VehicleRegistrationFormProps> = (
           </div>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-5">
+        <form noValidate onSubmit={handleSubmit} className="p-6 space-y-5">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1">
@@ -605,6 +634,8 @@ export const VehicleRegistrationForm: React.FC<VehicleRegistrationFormProps> = (
             </label>
             <OtpVerificationBox
               mobile={mobile}
+              allowTestPinFallback={false}
+              onOpenDemoMode={() => onNavigate('demo-testing')}
               onMobileChange={(val) => {
                 setMobile(val);
                 setMobileVerified(false);

@@ -5,7 +5,7 @@ import {
   serverTimestamp,
   setDoc,
 } from 'firebase/firestore';
-import { auth, db } from './firebase';
+import { auth, db, handleFirestoreError, OperationType } from './firebase';
 import type { AcceptedCustomerPhotoRecord, ProfilePhotoRecord } from '../types/domain';
 import {
   ALLOWED_PHOTO_EXTENSIONS,
@@ -161,26 +161,30 @@ export async function uploadProfilePhotoRecord(params: {
   photoData: string;
 }): Promise<string> {
   const ref = doc(db, 'profilePhotos', params.photoId);
-  const existingSnap = await getDoc(ref);
-  const createdAtValue = existingSnap.exists()
-    ? (existingSnap.data() as ProfilePhotoRecord).createdAt || serverTimestamp()
-    : serverTimestamp();
+  try {
+    const existingSnap = await getDoc(ref);
+    const createdAtValue = existingSnap.exists()
+      ? (existingSnap.data() as ProfilePhotoRecord).createdAt || serverTimestamp()
+      : serverTimestamp();
 
-  const payload: ProfilePhotoRecord = {
-    ownerUid: params.ownerUid,
-    subjectId: params.subjectId,
-    role: params.role,
-    mimeType: params.mimeType,
-    sizeBytes: params.sizeBytes,
-    photoData: params.photoData,
-    createdAt: createdAtValue,
-    updatedAt: serverTimestamp(),
-  };
+    const payload: ProfilePhotoRecord = {
+      ownerUid: params.ownerUid,
+      subjectId: params.subjectId,
+      role: params.role,
+      mimeType: params.mimeType,
+      sizeBytes: params.sizeBytes,
+      photoData: params.photoData,
+      createdAt: createdAtValue,
+      updatedAt: serverTimestamp(),
+    };
 
-  await setDoc(ref, payload);
-  photoCache.set(scopedKey('profile', params.photoId), params.photoData);
-  notifyPhotoUpdate(params.photoId);
-  return params.photoId;
+    await setDoc(ref, payload);
+    photoCache.set(scopedKey('profile', params.photoId), params.photoData);
+    notifyPhotoUpdate(params.photoId);
+    return params.photoId;
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, `profilePhotos/${params.photoId}`);
+  }
 }
 
 export async function deleteProfilePhotoRecord(photoId: string): Promise<void> {

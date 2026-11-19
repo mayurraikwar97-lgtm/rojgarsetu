@@ -788,6 +788,18 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["ownerUid", "workerUid", "sourceType", "sourceId", "photoData", "createdAt", "updatedAt"]
+    },
+    "MobileUniquenessLock": {
+      "title": "MobileUniquenessLock",
+      "description": "Privacy-preserving SHA-256 salted mobile hash lock preventing duplicate mobile registrations across public Worker and Customer accounts without exposing PII.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "role": { "type": "string", "enum": ["worker", "employer"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "role", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -914,6 +926,10 @@
     "/acceptedCustomerPhotos/{grantId}": {
       "schema": { "$ref": "#/entities/AcceptedCustomerPhotoRecord" },
       "description": "Accepted-job customer photo grants readable strictly by the customer, accepted worker, and admin."
+    },
+    "/mobileUniquenessLocks/{lockId}": {
+      "schema": { "$ref": "#/entities/MobileUniquenessLock" },
+      "description": "Privacy-preserving mobile uniqueness locks keyed by salted SHA-256 digest of normalized 10-digit mobile numbers."
     }
   }
 }

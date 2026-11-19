@@ -766,18 +766,15 @@ export async function dispatchDemoNotificationToUser(input: {
         fcmPushStatus?: ChannelDispatchDiagnostic['fcmPushStatus'];
         reason?: string;
       }>('/api/notifications/demo-push', {
-        method: 'POST',
-        body: {
-          orderId: input.orderId,
-          recipientOwnerUid: input.recipient.ownerUid,
-          recipientDemoUserId: input.recipient.id,
-          recipientName: input.recipient.displayName,
-          recipientRole: input.recipient.role,
-          title: input.title,
-          body: input.body,
-          dedupeKey: cleanDedupe,
-          eventType: input.eventType,
-        },
+        orderId: input.orderId,
+        recipientOwnerUid: input.recipient.ownerUid,
+        recipientDemoUserId: input.recipient.id,
+        recipientName: input.recipient.displayName,
+        recipientRole: input.recipient.role,
+        title: input.title,
+        body: input.body,
+        dedupeKey: cleanDedupe,
+        eventType: input.eventType,
       });
       if (apiRes.data?.fcmPushStatus) {
         fcmPushStatus = apiRes.data.fcmPushStatus;

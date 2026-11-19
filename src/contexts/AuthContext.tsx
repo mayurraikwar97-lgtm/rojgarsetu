@@ -34,6 +34,8 @@ interface AuthContextValue {
   employerPrivate: EmployerPrivateInfo | null;
   customerPreference: CustomerPreference | null;
   isAdmin: boolean;
+  authError: string;
+  clearAuthError: () => void;
   signInWithGoogle: () => Promise<void>;
   logout: () => Promise<void>;
   refreshUserProfiles: () => Promise<void>;
@@ -53,6 +55,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [employerPrivate, setEmployerPrivate] = useState<EmployerPrivateInfo | null>(null);
   const [customerPreference, setCustomerPreference] = useState<CustomerPreference | null>(null);
   const [isAdminDoc, setIsAdminDoc] = useState(false);
+  const [authError, setAuthError] = useState('');
 
   const loadProfiles = async (firebaseUser: User) => {
     const uid = firebaseUser.uid;
@@ -139,11 +142,34 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, [user?.uid, user?.emailVerified]);
 
   const signInWithGoogle = async () => {
-    await signInWithPopup(auth, googleProvider);
+    setAuthError('');
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (err: unknown) {
+      const code = (err as { code?: string })?.code || '';
+      if (code === 'auth/popup-closed-by-user') {
+        setAuthError('Google sign-in popup was closed before finishing. Click Sign In again.');
+      } else if (code === 'auth/popup-blocked') {
+        setAuthError('Your browser blocked the Google sign-in popup. Please enable popups and retry.');
+      } else if (code === 'auth/unauthorized-domain') {
+        setAuthError('Sign-in failed: this domain is not listed in Firebase Authorized Domains.');
+      } else if (code === 'auth/network-request-failed') {
+        setAuthError('Network error during Google sign-in. Check your internet connection and retry.');
+      } else {
+        setAuthError(
+          err instanceof Error && err.message
+            ? err.message
+            : 'Unable to complete Google sign-in. Please retry.'
+        );
+      }
+    }
   };
+
+  const clearAuthError = () => setAuthError('');
 
   const logout = async () => {
     clearPhotoCache();
+    setAuthError('');
     await signOut(auth);
   };
 
@@ -170,6 +196,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         employerPrivate,
         customerPreference,
         isAdmin,
+        authError,
+        clearAuthError,
         signInWithGoogle,
         logout,
         refreshUserProfiles,

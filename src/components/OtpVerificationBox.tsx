@@ -39,6 +39,7 @@ interface OtpVerificationBoxProps {
   onVerified: (mobile: string, meta?: OtpVerificationMeta) => void;
   allowTestPinFallback?: boolean;
   verifiedMethod?: VerificationMethod;
+  onOpenDemoMode?: () => void;
 }
 
 interface OtpConfigState {
@@ -67,8 +68,9 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
   onMobileChange,
   verified,
   onVerified,
-  allowTestPinFallback = true,
+  allowTestPinFallback = false,
   verifiedMethod,
+  onOpenDemoMode,
 }) => {
   const { lang, t } = useLanguage();
   const [challengeToken, setChallengeToken] = useState<string>('');
@@ -80,7 +82,7 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
   const [cooldownSeconds, setCooldownSeconds] = useState<number>(0);
   const [otpConfig, setOtpConfig] = useState<OtpConfigState>({
     checked: false,
-    smsProviderConfigured: true,
+    smsProviderConfigured: false,
     firebasePhoneAuthEnabled: isFirebasePhoneAuthEnvEnabled(),
   });
 
@@ -151,11 +153,19 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
     const serverMsg = typeof data?.message === 'string' ? data.message : '';
 
     if (status === 404) {
+      if (allowTestPinFallback && isDemoModeEnvEnabled()) {
+        return tr(
+          lang,
+          'SMS OTP endpoint unavailable on this deployment. You can use Pre-Launch Test PIN verification below.',
+          'इस सर्वर पर SMS OTP सेवा उपलब्ध नहीं है। आप नीचे दिए गए प्री-लॉन्च Test PIN से मोबाइल सत्यापित कर सकते हैं।',
+          'या सर्व्हरवर SMS OTP सेवा उपलब्ध नाही. तुम्ही खालील Pre-Launch Test PIN वापरून मोबाईल पडताळणी करू शकता.'
+        );
+      }
       return tr(
         lang,
-        'SMS OTP endpoint unavailable on this deployment. You can use Pre-Launch Test PIN verification below.',
-        'इस सर्वर पर SMS OTP सेवा उपलब्ध नहीं है। आप नीचे दिए गए प्री-लॉन्च Test PIN से मोबाइल सत्यापित कर सकते हैं।',
-        'या सर्व्हरवर SMS OTP सेवा उपलब्ध नाही. तुम्ही खालील Pre-Launch Test PIN वापरून मोबाईल पडताळणी करू शकता.'
+        'Real SMS OTP service is currently unavailable. Authorized test accounts may use Demo Registration Mode.',
+        'असली SMS OTP सेवा अभी उपलब्ध नहीं है। अधिकृत टेस्ट खाते Demo Registration Mode का उपयोग कर सकते हैं।',
+        'खरी SMS OTP सेवा सध्या उपलब्ध नाही. अधिकृत चाचणी खात्यांसाठी Demo Registration Mode वापरावा.'
       );
     }
 
@@ -169,11 +179,19 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
         );
       case 'SMS_PROVIDER_NOT_CONFIGURED':
       case 'SMS_GATEWAY_NOT_CONFIGURED':
+        if (allowTestPinFallback && isDemoModeEnvEnabled()) {
+          return tr(
+            lang,
+            'SMS Gateway is not configured yet. Please complete verification using the 4–6 digit Security PIN below.',
+            'SMS गेटवे अभी सेट नहीं है। कृपया नीचे दिए गए 4–6 अंकों के सिक्योरिटी PIN से सत्यापन पूरा करें।',
+            'SMS गेटवे अद्याप सेट नाही. कृपया खालील ४ ते ६ अंकी सुरक्षा PIN वापरून पडताळणी पूर्ण करा.'
+          );
+        }
         return tr(
           lang,
-          'SMS Gateway is not configured yet. Please complete verification using the 4–6 digit Security PIN below.',
-          'SMS गेटवे अभी सेट नहीं है। कृपया नीचे दिए गए 4–6 अंकों के सिक्योरिटी PIN से सत्यापन पूरा करें।',
-          'SMS गेटवे अद्याप सेट नाही. कृपया खालील ४ ते ६ अंकी सुरक्षा PIN वापरून पडताळणी पूर्ण करा.'
+          'Real SMS OTP is not active yet because SMS gateway / DLT setup is pending. Public registration requires verified OTP; authorized pre-launch testers can use Demo Registration Mode.',
+          'SMS गेटवे / DLT सेटअप लंबित होने के कारण लाइव OTP अभी सक्रिय नहीं है। पब्लिक रजिस्ट्रेशन के लिए OTP ज़रूरी है; टेस्टिंग के लिए Demo Registration Mode का उपयोग करें।',
+          'SMS गेटवे / DLT सेटअप बाकी असल्यामुळे थेट OTP अद्याप सुरू नाही. सार्वजनिक नोंदणीसाठी OTP आवश्यक आहे; चाचणीसाठी Demo Registration Mode वापरा.'
         );
       case 'OTP_COOLDOWN_ACTIVE': {
         const wait = typeof data?.retryAfterSeconds === 'number' ? data.retryAfterSeconds : 45;
@@ -334,15 +352,24 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
     } catch {
       if (allowTestPinFallback && isDemoModeEnvEnabled()) {
         setForcePinFallback(true);
+        setErrorMsg(
+          tr(
+            lang,
+            'SMS service temporarily unavailable. Use the Security PIN verification below.',
+            'SMS सेवा अनुपलब्ध है। कृपया नीचे दिए गए सिक्योरिटी PIN से सत्यापन करें।',
+            'SMS सेवा उपलब्ध नाही. कृपया खालील सुरक्षा PIN ने पडताळणी करा.'
+          )
+        );
+      } else {
+        setErrorMsg(
+          tr(
+            lang,
+            'Unable to reach OTP service right now. Please check your connection and try again.',
+            'OTP सेवा से संपर्क नहीं हो पा रहा है। कृपया अपना इंटरनेट जांचें और पुनः प्रयास करें।',
+            'OTP सेवेशी संपर्क होऊ शकत नाही. कृपया इंटरनेट तपासा आणि पुन्हा प्रयत्न करा.'
+          )
+        );
       }
-      setErrorMsg(
-        tr(
-          lang,
-          'SMS service temporarily unavailable. Use the Security PIN verification below.',
-          'SMS सेवा अनुपलब्ध है। कृपया नीचे दिए गए सिक्योरिटी PIN से सत्यापन करें।',
-          'SMS सेवा उपलब्ध नाही. कृपया खालील सुरक्षा PIN ने पडताळणी करा.'
-        )
-      );
     } finally {
       setLoading(false);
     }
@@ -705,14 +732,30 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
       )}
 
       {otpConfig.checked && !otpConfig.smsProviderConfigured && !otpConfig.firebasePhoneAuthEnabled && !verified && !showTestPinMode && !errorMsg && (
-        <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2.5 py-1.5">
-          {tr(
-            lang,
-            'SMS Gateway configuration pending on server. Administrator must configure MSG91 / Fast2SMS / Twilio / DLT credentials or Firebase Phone Auth to deliver real SMS OTPs.',
-            'सर्वर पर SMS गेटवे सेटिंग अधूरी है। असली OTP SMS भेजने के लिए एडमिन को MSG91 / Fast2SMS / Twilio / DLT या Firebase Phone Auth सेट करना होगा।',
-            'सर्व्हरवर SMS गेटवे सेटिंग बाकी आहे. खरा OTP SMS पाठवण्यासाठी अ‍ॅडमिनने MSG91 / Fast2SMS / Twilio / DLT किंवा Firebase Phone Auth सेट करणे आवश्यक आहे.'
+        <div className="text-[11px] text-amber-900 bg-amber-50 border border-amber-200 rounded px-3 py-2 space-y-1.5">
+          <p>
+            {tr(
+              lang,
+              'Live SMS OTP requires active server SMS Gateway / DLT configuration (TWOFACTOR_API_KEY, MSG91, Fast2SMS, or Firebase Phone Auth). Public registration does not allow OTP bypass.',
+              'लाइव SMS OTP के लिए सर्वर पर सक्रिय SMS गेटवे / DLT (TWOFACTOR_API_KEY, MSG91, Fast2SMS या Firebase Phone Auth) आवश्यक है। सार्वजनिक पंजीकरण में OTP बायपास की अनुमति नहीं है।',
+              'थेट SMS OTP साठी सर्व्हरवर सक्रिय SMS गेटवे / DLT (TWOFACTOR_API_KEY, MSG91, Fast2SMS किंवा Firebase Phone Auth) आवश्यक आहे. सार्वजनिक नोंदणीमध्ये OTP बायपास करता येत नाही.'
+            )}
+          </p>
+          {onOpenDemoMode && isDemoModeEnvEnabled() && (
+            <button
+              type="button"
+              onClick={onOpenDemoMode}
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-[#0B3B75] text-white font-semibold text-[11px] hover:bg-slate-800 cursor-pointer"
+            >
+              {tr(
+                lang,
+                'Open Authorized Demo Test Mode →',
+                'अधिकृत डेमो टेस्ट मोड खोलें →',
+                'अधिकृत डेमो टेस्ट मोड उघडा →'
+              )}
+            </button>
           )}
-        </p>
+        </div>
       )}
     </div>
   );

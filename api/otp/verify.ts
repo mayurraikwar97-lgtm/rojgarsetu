@@ -1,6 +1,6 @@
-import type { ServerlessRequest, ServerlessResponse } from '../_utils.ts';
-import { extractClientIp, readJsonBody, sendJson } from '../_utils.ts';
-import { handleOtpVerify } from '../../src/server/otpEngine.ts';
+import type { ServerlessRequest, ServerlessResponse } from '../_utils.js';
+import { extractClientIp, readJsonBody, sendJson } from '../_utils.js';
+import { handleOtpVerify } from '../../src/server/otpEngine.js';
 
 export default async function handler(req: ServerlessRequest, res: ServerlessResponse): Promise<void> {
   if (req.method === 'OPTIONS') {

@@ -64,6 +64,7 @@ import {
   upsertDemoLocationShare,
   verifyTestAccountPinLogin,
 } from '../lib/demoService';
+import { formatUiError } from '../lib/firebase';
 import { callNotificationApi } from '../lib/firestoreService';
 import { detectBestGpsLocation } from '../lib/locationService';
 import {
@@ -109,7 +110,7 @@ const STATUS_BADGE_MAP: Record<DemoWorkOrder['status'], { label: string; cls: st
 
 export const DemoTestingCenter: React.FC<DemoTestingCenterProps> = ({ onNavigate }) => {
   const { lang } = useLanguage();
-  const { user, isAdmin, signInWithGoogle } = useAuth();
+  const { user, isAdmin, authError, clearAuthError, signInWithGoogle } = useAuth();
 
   const [config, setConfig] = useState<DemoModeConfig | null>(null);
   const [demoUsers, setDemoUsers] = useState<DemoUserProfile[]>([]);
@@ -121,6 +122,8 @@ export const DemoTestingCenter: React.FC<DemoTestingCenterProps> = ({ onNavigate
   const [activeDemoUserId, setActiveDemoUserId] = useState<string>('');
   const [busy, setBusy] = useState(false);
   const [banner, setBanner] = useState<{ kind: 'ok' | 'err' | 'info'; text: string } | null>(null);
+  const [regError, setRegError] = useState('');
+  const [lastRegisteredDemoUser, setLastRegisteredDemoUser] = useState<DemoUserProfile | null>(null);
 
   // Mobile + Test PIN Login state
   const [loginMobile, setLoginMobile] = useState('');
@@ -358,7 +361,7 @@ export const DemoTestingCenter: React.FC<DemoTestingCenterProps> = ({ onNavigate
     } catch (err) {
       setBanner({
         kind: 'err',
-        text: err instanceof Error ? err.message : 'Test PIN login failed.',
+        text: formatUiError(err, 'Test PIN login failed.'),
       });
     } finally {
       setBusy(false);
@@ -366,7 +369,13 @@ export const DemoTestingCenter: React.FC<DemoTestingCenterProps> = ({ onNavigate
   };
 
   const handleEnableAndProvision = async () => {
-    if (!user) return;
+    if (!user || !user.emailVerified) {
+      setBanner({
+        kind: 'err',
+        text: 'Please sign in with a verified Google account before provisioning test accounts.',
+      });
+      return;
+    }
     setBusy(true);
     setBanner(null);
     try {
@@ -381,7 +390,7 @@ export const DemoTestingCenter: React.FC<DemoTestingCenterProps> = ({ onNavigate
     } catch (err) {
       setBanner({
         kind: 'err',
-        text: err instanceof Error ? err.message : 'Unable to provision 5 test users.',
+        text: formatUiError(err, 'Unable to provision 5 test users.'),
       });
     } finally {
       setBusy(false);
@@ -436,45 +445,71 @@ export const DemoTestingCenter: React.FC<DemoTestingCenterProps> = ({ onNavigate
 
   const handleRegisterSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user) return;
+    setRegError('');
+    setBanner(null);
+    clearAuthError();
+
+    if (!user || !user.emailVerified) {
+      const msg = 'Please sign in with a verified Google account first to save a Test Mode account in Firestore.';
+      setRegError(msg);
+      setBanner({ kind: 'err', text: msg });
+      return;
+    }
     if (demoUsers.length >= 5) {
-      setBanner({
-        kind: 'err',
-        text: 'Maximum 5 test accounts allowed in Temporary Test Mode. Delete or reset a test slot to register another number.',
-      });
+      const msg = 'Maximum 5 test accounts allowed in Temporary Test Mode. Delete or reset a test slot to register another number.';
+      setRegError(msg);
+      setBanner({ kind: 'err', text: msg });
+      return;
+    }
+    if (regName.trim().length < 2) {
+      const msg = 'Please enter Full Name (minimum 2 characters).';
+      setRegError(msg);
+      setBanner({ kind: 'err', text: msg });
+      return;
+    }
+    if (!/^[6-9]\d{9}$/.test(regMobile.trim())) {
+      const msg = 'Please enter a valid 10-digit Indian mobile number starting with 6, 7, 8, or 9.';
+      setRegError(msg);
+      setBanner({ kind: 'err', text: msg });
+      return;
+    }
+    if (regCity.trim().length < 2) {
+      const msg = 'Please enter a valid City / Ward name (minimum 2 characters).';
+      setRegError(msg);
+      setBanner({ kind: 'err', text: msg });
       return;
     }
     const pinCheck = validateSecurityPin(regPin, regConfirmPin);
     if (!pinCheck.ok) {
-      setBanner({
-        kind: 'err',
-        text:
-          pinCheck.code === 'PIN_MISMATCH'
-            ? 'Security PIN and Confirm PIN do not match.'
-            : 'Please enter a valid 4-to-6 digit Security PIN.',
-      });
+      const msg =
+        pinCheck.code === 'PIN_MISMATCH'
+          ? 'Security PIN and Confirm PIN do not match.'
+          : 'Please enter a valid 4-to-6 digit Security PIN.';
+      setRegError(msg);
+      setBanner({ kind: 'err', text: msg });
       return;
     }
     if (!regTestVerifyAck) {
-      setBanner({ kind: 'err', text: 'Please acknowledge test-only demo verification.' });
+      const msg = 'Please acknowledge test-only demo verification.';
+      setRegError(msg);
+      setBanner({ kind: 'err', text: msg });
       return;
     }
 
     setBusy(true);
-    setBanner(null);
     try {
       const created = await registerDemoUser({
         ownerUid: user.uid,
         role: regRole,
         category: regRole === 'customer' ? 'Customer' : regCategory,
-        displayName: regName,
-        mobile: regMobile,
+        displayName: regName.trim(),
+        mobile: regMobile.trim(),
         pin: pinCheck.cleanPin,
         slotLabel: regSlotLabel,
         deviceLabel: regDeviceLabel,
         state: regState,
         district: regDistrict,
-        cityOrVillage: regCity,
+        cityOrVillage: regCity.trim(),
         lat: regLat,
         lng: regLng,
         accuracyMeters: regAccuracy,
@@ -498,26 +533,26 @@ export const DemoTestingCenter: React.FC<DemoTestingCenterProps> = ({ onNavigate
           await updateDemoUserPhoto(created.id, photoDocId);
           photoMsg = ' Profile photo saved securely.';
         } catch (photoErr) {
-          photoMsg =
-            photoErr instanceof Error
-              ? ` (Account created, but photo upload failed: ${photoErr.message})`
-              : ' (Account created, but photo upload failed)';
+          photoMsg = ` (Account created, but photo upload failed: ${formatUiError(photoErr, 'Photo save error')})`;
         }
       }
 
       setActiveDemoUserId(created.id);
+      setLastRegisteredDemoUser(created);
       setRegName('');
       setRegMobile('');
       setRegSelectedPhoto(null);
       setActiveTab('workspace');
       setBanner({
         kind: 'ok',
-        text: `Registered [TEST MODE] ${created.role.toUpperCase()} "${created.displayName}" (${created.uniqueUserId}) on ${created.deviceLabel || 'this device'}! Mobile +91 ${created.mobile10} locked against duplicates.${photoMsg}`,
+        text: `Registration Successful (Test Mode): ${created.role.toUpperCase()} "${created.displayName}" (${created.uniqueUserId}) saved on ${created.deviceLabel || 'this device'}. Mobile +91 ${created.mobile10} locked against duplicates.${photoMsg}`,
       });
     } catch (err) {
+      const msg = formatUiError(err, 'Demo user registration failed.');
+      setRegError(msg);
       setBanner({
         kind: 'err',
-        text: err instanceof Error ? err.message : 'Demo user registration failed.',
+        text: msg,
       });
     } finally {
       setBusy(false);
@@ -961,11 +996,19 @@ export const DemoTestingCenter: React.FC<DemoTestingCenterProps> = ({ onNavigate
           </p>
           <button
             type="button"
-            onClick={signInWithGoogle}
+            onClick={() => {
+              clearAuthError();
+              void signInWithGoogle();
+            }}
             className="px-6 py-3 rounded-md bg-[#0B3B75] text-white text-sm font-bold hover:bg-slate-800 cursor-pointer"
           >
             Sign In with Google to Enter Test Mode
           </button>
+          {authError && (
+            <div role="alert" className="max-w-md mx-auto p-3 rounded border border-red-200 bg-red-50 text-xs font-medium text-red-900">
+              {authError}
+            </div>
+          )}
         </div>
       </div>
     );
@@ -1090,6 +1133,49 @@ export const DemoTestingCenter: React.FC<DemoTestingCenterProps> = ({ onNavigate
             <UserCheck className="w-4 h-4 shrink-0 mt-0.5 text-[#0B3B75]" />
           )}
           <span>{banner.text}</span>
+        </div>
+      )}
+
+      {lastRegisteredDemoUser && (
+        <div
+          role="status"
+          className="bg-emerald-50 border-2 border-[#15803D] rounded-lg p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+        >
+          <div className="space-y-1">
+            <div className="inline-flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[#15803D]">
+              <CheckCircle2 className="w-4 h-4" />
+              Registration Successful (Test Mode)
+            </div>
+            <h3 className="font-display text-lg font-bold text-[#0B3B75]">
+              {lastRegisteredDemoUser.displayName} ({lastRegisteredDemoUser.uniqueUserId})
+            </h3>
+            <p className="text-xs text-slate-700 font-mono-tabular">
+              Role: {lastRegisteredDemoUser.role.toUpperCase()} · Category: {lastRegisteredDemoUser.category} · Mobile: +91 {lastRegisteredDemoUser.mobile10} · GPS: {lastRegisteredDemoUser.lat.toFixed(4)}, {lastRegisteredDemoUser.lng.toFixed(4)}
+            </p>
+          </div>
+          <div className="flex flex-wrap gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                setActiveDemoUserId(lastRegisteredDemoUser.id);
+                setActiveTab('workspace');
+                setLastRegisteredDemoUser(null);
+              }}
+              className="px-3.5 py-2 rounded bg-[#0B3B75] text-white text-xs font-bold hover:bg-slate-800 cursor-pointer"
+            >
+              Continue to Active Workspace
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setActiveTab('registration');
+                setLastRegisteredDemoUser(null);
+              }}
+              className="px-3.5 py-2 rounded border border-emerald-300 bg-white text-[#15803D] text-xs font-bold hover:bg-emerald-100 cursor-pointer"
+            >
+              Register Another Test Account
+            </button>
+          </div>
         </div>
       )}
 
@@ -2045,6 +2131,7 @@ export const DemoTestingCenter: React.FC<DemoTestingCenterProps> = ({ onNavigate
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* Manual Demo Registration Form */}
           <form
+            noValidate
             onSubmit={handleRegisterSubmit}
             className="lg:col-span-5 bg-white border border-slate-200 rounded-lg p-6 space-y-4 text-xs"
           >
@@ -2297,6 +2384,16 @@ export const DemoTestingCenter: React.FC<DemoTestingCenterProps> = ({ onNavigate
                 Mark account as <strong>Test-Only Verified (Demo Mode)</strong> without faking real SMS OTP.
               </span>
             </label>
+
+            {regError && (
+              <div
+                role="alert"
+                className="bg-red-50 border border-red-200 rounded p-2.5 text-red-900 font-medium flex items-start gap-2"
+              >
+                <AlertTriangle className="w-4 h-4 text-red-700 shrink-0 mt-0.5" />
+                <span>{regError}</span>
+              </div>
+            )}
 
             <button
               type="submit"

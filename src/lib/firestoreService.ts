@@ -9,6 +9,7 @@ import {
   onSnapshot,
   orderBy,
   query,
+  runTransaction,
   serverTimestamp,
   setDoc,
   updateDoc,
@@ -17,6 +18,7 @@ import {
 } from 'firebase/firestore';
 import { auth, db, handleFirestoreError, OperationType } from './firebase';
 import { grantAcceptedCustomerPhoto } from './photoStorageService';
+import { normalizeTenDigitIndianMobile } from './pinAuth';
 import type {
   AppNotificationRecord,
   AuditLog,
@@ -165,149 +167,294 @@ export function subscribeAdminAuditLogs(onData: (items: AuditLog[]) => void): ()
   );
 }
 
+export async function computeMobileLockId(rawMobile: string): Promise<string> {
+  const clean10 = normalizeTenDigitIndianMobile(rawMobile);
+  const input = `rojgar-setu-mobile-lock-v1:${clean10}`;
+  if (typeof globalThis !== 'undefined' && globalThis.crypto?.subtle) {
+    const encoded = new TextEncoder().encode(input);
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', encoded);
+    const hex = Array.from(new Uint8Array(digest))
+      .map((b) => b.toString(16).padStart(2, '0'))
+      .join('');
+    return `mob_${hex}`;
+  }
+  let h1 = 0x811c9dc5;
+  let h2 = 0x9e3779b9;
+  for (let i = 0; i < input.length; i++) {
+    const code = input.charCodeAt(i);
+    h1 ^= code;
+    h1 = Math.imul(h1, 0x01000193);
+    h2 ^= code;
+    h2 = Math.imul(h2, 0x85ebca6b);
+  }
+  return `mob_${(h1 >>> 0).toString(16).padStart(8, '0')}${(h2 >>> 0).toString(16).padStart(8, '0')}`;
+}
+
 export async function saveWorkerRegistration(
   uid: string,
-  isExisting: boolean,
+  _isExisting: boolean,
   publicData: Omit<PublicWorkerProfile, 'id' | 'createdAt' | 'updatedAt'>,
   privateData: Omit<WorkerPrivateInfo, 'createdAt' | 'updatedAt'>
 ): Promise<void> {
   const pubRef = doc(db, 'publicWorkers', uid);
   const privRef = doc(db, 'workerPrivate', uid);
-  const batch = writeBatch(db);
+  const normalizedMobile = normalizeTenDigitIndianMobile(privateData.mobile);
+  const newLockId = await computeMobileLockId(normalizedMobile);
+  const newLockRef = doc(db, 'mobileUniquenessLocks', newLockId);
 
-  if (!isExisting) {
-    const cleanPub = { ...publicData };
-    if (!cleanPub.photoDocId) delete cleanPub.photoDocId;
-    const cleanPriv = { ...privateData };
-    if (!cleanPriv.photoDocId) delete cleanPriv.photoDocId;
-
-    batch.set(pubRef, {
-      ...cleanPub,
-      verificationStatus: 'pending',
-      completedJobsCount: 0,
-      ratingAvg: 0,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-    batch.set(privRef, {
-      ...cleanPriv,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-  } else {
-    batch.update(pubRef, {
-      displayName: publicData.displayName,
-      primarySkill: publicData.primarySkill,
-      skills: publicData.skills,
-      experienceYears: publicData.experienceYears,
-      expectedWage: publicData.expectedWage,
-      wageUnit: publicData.wageUnit,
-      preferredWorkType: publicData.preferredWorkType,
-      availabilityStatus: publicData.availabilityStatus,
-      state: publicData.state,
-      district: publicData.district,
-      cityOrVillage: publicData.cityOrVillage,
-      approxLat: publicData.approxLat,
-      approxLng: publicData.approxLng,
-      languagesKnown: publicData.languagesKnown,
-      ...(publicData.gender ? { gender: publicData.gender } : {}),
-      ...(publicData.education ? { education: publicData.education } : {}),
-      ...(typeof publicData.isWomenEnterprise === 'boolean' ? { isWomenEnterprise: publicData.isWomenEnterprise } : {}),
-      ...(publicData.photoDocId === ''
-        ? { photoDocId: deleteField() }
-        : publicData.photoDocId
-          ? { photoDocId: publicData.photoDocId }
-          : {}),
-      updatedAt: serverTimestamp(),
-    });
-    batch.update(privRef, {
-      fullName: privateData.fullName,
-      mobile: privateData.mobile,
-      mobileVerified: privateData.mobileVerified,
-      ...(privateData.verificationMethod ? { verificationMethod: privateData.verificationMethod } : {}),
-      ...(privateData.testPinHash ? { testPinHash: privateData.testPinHash } : {}),
-      ...(privateData.email ? { email: privateData.email } : {}),
-      ageConfirmed: privateData.ageConfirmed,
-      ...(privateData.preferredWorkLocation ? { preferredWorkLocation: privateData.preferredWorkLocation } : {}),
-      liveLocationConsent: privateData.liveLocationConsent,
-      privacyConsent: privateData.privacyConsent,
-      idVerificationStatus: privateData.idVerificationStatus,
-      ...(privateData.certificateNotes ? { certificateNotes: privateData.certificateNotes } : {}),
-      ...(privateData.photoUrl ? { photoUrl: privateData.photoUrl } : {}),
-      ...(privateData.photoDocId === ''
-        ? { photoDocId: deleteField() }
-        : privateData.photoDocId
-          ? { photoDocId: privateData.photoDocId }
-          : {}),
-      updatedAt: serverTimestamp(),
-    });
+  let oldLockId: string | null = null;
+  try {
+    const existingPrivSnap = await getDoc(privRef);
+    const prevMobile = existingPrivSnap.exists() ? (existingPrivSnap.data()?.mobile as string | undefined) : undefined;
+    if (prevMobile) {
+      const candidateOld = await computeMobileLockId(prevMobile);
+      if (candidateOld !== newLockId) {
+        oldLockId = candidateOld;
+      }
+    }
+  } catch {
+    oldLockId = null;
   }
 
   try {
-    await batch.commit();
+    await runTransaction(db, async (tx) => {
+      const oldLockRef = oldLockId ? doc(db, 'mobileUniquenessLocks', oldLockId) : null;
+      const [pubSnap, privSnap, newLockSnap, oldLockSnap] = await Promise.all([
+        tx.get(pubRef),
+        tx.get(privRef),
+        tx.get(newLockRef),
+        oldLockRef ? tx.get(oldLockRef) : Promise.resolve(null),
+      ]);
+
+      if (newLockSnap.exists()) {
+        const lockOwner = (newLockSnap.data() as { ownerUid?: string } | undefined)?.ownerUid;
+        if (lockOwner && lockOwner !== uid) {
+          throw new Error(
+            `DUPLICATE_MOBILE: Mobile number +91 ${normalizedMobile} is already registered with another account.`
+          );
+        }
+      }
+
+      const cleanPub = { ...publicData };
+      if (!cleanPub.photoDocId) delete cleanPub.photoDocId;
+      const cleanPriv = { ...privateData, mobile: normalizedMobile };
+      if (!cleanPriv.photoDocId) delete cleanPriv.photoDocId;
+
+      if (!pubSnap.exists()) {
+        tx.set(pubRef, {
+          ...cleanPub,
+          verificationStatus: 'pending',
+          completedJobsCount: 0,
+          ratingAvg: 0,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        tx.update(pubRef, {
+          displayName: cleanPub.displayName,
+          primarySkill: cleanPub.primarySkill,
+          skills: cleanPub.skills,
+          experienceYears: cleanPub.experienceYears,
+          expectedWage: cleanPub.expectedWage,
+          wageUnit: cleanPub.wageUnit,
+          preferredWorkType: cleanPub.preferredWorkType,
+          availabilityStatus: cleanPub.availabilityStatus,
+          state: cleanPub.state,
+          district: cleanPub.district,
+          cityOrVillage: cleanPub.cityOrVillage,
+          approxLat: cleanPub.approxLat,
+          approxLng: cleanPub.approxLng,
+          languagesKnown: cleanPub.languagesKnown,
+          ...(cleanPub.gender ? { gender: cleanPub.gender } : {}),
+          ...(cleanPub.education ? { education: cleanPub.education } : {}),
+          ...(typeof cleanPub.isWomenEnterprise === 'boolean' ? { isWomenEnterprise: cleanPub.isWomenEnterprise } : {}),
+          ...(publicData.photoDocId === ''
+            ? { photoDocId: deleteField() }
+            : cleanPub.photoDocId
+              ? { photoDocId: cleanPub.photoDocId }
+              : {}),
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      if (!privSnap.exists()) {
+        tx.set(privRef, {
+          ...cleanPriv,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        tx.update(privRef, {
+          fullName: cleanPriv.fullName,
+          mobile: cleanPriv.mobile,
+          mobileVerified: cleanPriv.mobileVerified,
+          ...(cleanPriv.verificationMethod ? { verificationMethod: cleanPriv.verificationMethod } : {}),
+          ...(cleanPriv.testPinHash ? { testPinHash: cleanPriv.testPinHash } : {}),
+          ...(cleanPriv.email ? { email: cleanPriv.email } : {}),
+          ageConfirmed: cleanPriv.ageConfirmed,
+          ...(cleanPriv.preferredWorkLocation ? { preferredWorkLocation: cleanPriv.preferredWorkLocation } : {}),
+          liveLocationConsent: cleanPriv.liveLocationConsent,
+          privacyConsent: cleanPriv.privacyConsent,
+          idVerificationStatus: cleanPriv.idVerificationStatus,
+          ...(cleanPriv.certificateNotes ? { certificateNotes: cleanPriv.certificateNotes } : {}),
+          ...(cleanPriv.photoUrl ? { photoUrl: cleanPriv.photoUrl } : {}),
+          ...(privateData.photoDocId === ''
+            ? { photoDocId: deleteField() }
+            : cleanPriv.photoDocId
+              ? { photoDocId: cleanPriv.photoDocId }
+              : {}),
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      if (newLockSnap.exists()) {
+        tx.update(newLockRef, {
+          role: 'worker',
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        tx.set(newLockRef, {
+          ownerUid: uid,
+          role: 'worker',
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      if (oldLockRef && oldLockSnap?.exists()) {
+        const oldOwner = (oldLockSnap.data() as { ownerUid?: string } | undefined)?.ownerUid;
+        if (oldOwner === uid) {
+          tx.delete(oldLockRef);
+        }
+      }
+    });
   } catch (err) {
+    if (err instanceof Error && err.message.startsWith('DUPLICATE_MOBILE:')) {
+      throw err;
+    }
     handleFirestoreError(err, OperationType.WRITE, `publicWorkers/${uid}`);
   }
 }
 
 export async function saveEmployerRegistration(
   uid: string,
-  isExisting: boolean,
+  _isExisting: boolean,
   publicData: Omit<PublicEmployerProfile, 'id' | 'createdAt' | 'updatedAt'>,
   privateData: Omit<EmployerPrivateInfo, 'createdAt' | 'updatedAt'>
 ): Promise<void> {
   const pubRef = doc(db, 'publicEmployers', uid);
   const privRef = doc(db, 'employerPrivate', uid);
-  const batch = writeBatch(db);
+  const normalizedMobile = normalizeTenDigitIndianMobile(privateData.mobile);
+  const newLockId = await computeMobileLockId(normalizedMobile);
+  const newLockRef = doc(db, 'mobileUniquenessLocks', newLockId);
 
-  if (!isExisting) {
-    const cleanPriv = { ...privateData };
-    if (!cleanPriv.photoDocId) delete cleanPriv.photoDocId;
-
-    batch.set(pubRef, {
-      ...publicData,
-      verificationStatus: 'pending',
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-    batch.set(privRef, {
-      ...cleanPriv,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
-  } else {
-    batch.update(pubRef, {
-      businessName: publicData.businessName,
-      businessType: publicData.businessType,
-      industryCategory: publicData.industryCategory,
-      state: publicData.state,
-      district: publicData.district,
-      requiredCategories: publicData.requiredCategories,
-      updatedAt: serverTimestamp(),
-    });
-    batch.update(privRef, {
-      contactPerson: privateData.contactPerson,
-      mobile: privateData.mobile,
-      mobileVerified: privateData.mobileVerified,
-      ...(privateData.verificationMethod ? { verificationMethod: privateData.verificationMethod } : {}),
-      ...(privateData.testPinHash ? { testPinHash: privateData.testPinHash } : {}),
-      email: privateData.email,
-      businessAddress: privateData.businessAddress,
-      ...(privateData.gstNumber ? { gstNumber: privateData.gstNumber } : {}),
-      ...(privateData.establishmentDetails ? { establishmentDetails: privateData.establishmentDetails } : {}),
-      ...(privateData.workforceNotes ? { workforceNotes: privateData.workforceNotes } : {}),
-      ...(privateData.photoDocId === ''
-        ? { photoDocId: deleteField() }
-        : privateData.photoDocId
-          ? { photoDocId: privateData.photoDocId }
-          : {}),
-      updatedAt: serverTimestamp(),
-    });
+  let oldLockId: string | null = null;
+  try {
+    const existingPrivSnap = await getDoc(privRef);
+    const prevMobile = existingPrivSnap.exists() ? (existingPrivSnap.data()?.mobile as string | undefined) : undefined;
+    if (prevMobile) {
+      const candidateOld = await computeMobileLockId(prevMobile);
+      if (candidateOld !== newLockId) {
+        oldLockId = candidateOld;
+      }
+    }
+  } catch {
+    oldLockId = null;
   }
 
   try {
-    await batch.commit();
+    await runTransaction(db, async (tx) => {
+      const oldLockRef = oldLockId ? doc(db, 'mobileUniquenessLocks', oldLockId) : null;
+      const [pubSnap, privSnap, newLockSnap, oldLockSnap] = await Promise.all([
+        tx.get(pubRef),
+        tx.get(privRef),
+        tx.get(newLockRef),
+        oldLockRef ? tx.get(oldLockRef) : Promise.resolve(null),
+      ]);
+
+      if (newLockSnap.exists()) {
+        const lockOwner = (newLockSnap.data() as { ownerUid?: string } | undefined)?.ownerUid;
+        if (lockOwner && lockOwner !== uid) {
+          throw new Error(
+            `DUPLICATE_MOBILE: Mobile number +91 ${normalizedMobile} is already registered with another account.`
+          );
+        }
+      }
+
+      const cleanPriv = { ...privateData, mobile: normalizedMobile };
+      if (!cleanPriv.photoDocId) delete cleanPriv.photoDocId;
+
+      if (!pubSnap.exists()) {
+        tx.set(pubRef, {
+          ...publicData,
+          verificationStatus: 'pending',
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        tx.update(pubRef, {
+          businessName: publicData.businessName,
+          businessType: publicData.businessType,
+          industryCategory: publicData.industryCategory,
+          state: publicData.state,
+          district: publicData.district,
+          requiredCategories: publicData.requiredCategories,
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      if (!privSnap.exists()) {
+        tx.set(privRef, {
+          ...cleanPriv,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        tx.update(privRef, {
+          contactPerson: cleanPriv.contactPerson,
+          mobile: cleanPriv.mobile,
+          mobileVerified: cleanPriv.mobileVerified,
+          ...(cleanPriv.verificationMethod ? { verificationMethod: cleanPriv.verificationMethod } : {}),
+          ...(cleanPriv.testPinHash ? { testPinHash: cleanPriv.testPinHash } : {}),
+          email: cleanPriv.email,
+          businessAddress: cleanPriv.businessAddress,
+          ...(cleanPriv.gstNumber ? { gstNumber: cleanPriv.gstNumber } : {}),
+          ...(cleanPriv.establishmentDetails ? { establishmentDetails: cleanPriv.establishmentDetails } : {}),
+          ...(cleanPriv.workforceNotes ? { workforceNotes: cleanPriv.workforceNotes } : {}),
+          ...(privateData.photoDocId === ''
+            ? { photoDocId: deleteField() }
+            : cleanPriv.photoDocId
+              ? { photoDocId: cleanPriv.photoDocId }
+              : {}),
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      if (newLockSnap.exists()) {
+        tx.update(newLockRef, {
+          role: 'employer',
+          updatedAt: serverTimestamp(),
+        });
+      } else {
+        tx.set(newLockRef, {
+          ownerUid: uid,
+          role: 'employer',
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+      }
+
+      if (oldLockRef && oldLockSnap?.exists()) {
+        const oldOwner = (oldLockSnap.data() as { ownerUid?: string } | undefined)?.ownerUid;
+        if (oldOwner === uid) {
+          tx.delete(oldLockRef);
+        }
+      }
+    });
   } catch (err) {
+    if (err instanceof Error && err.message.startsWith('DUPLICATE_MOBILE:')) {
+      throw err;
+    }
     handleFirestoreError(err, OperationType.WRITE, `publicEmployers/${uid}`);
   }
 }

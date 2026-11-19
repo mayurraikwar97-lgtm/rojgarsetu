@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
-import { CheckCircle2 } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { AlertCircle, CheckCircle2 } from 'lucide-react';
 import { EMPLOYMENT_CATEGORIES } from '../data/categories';
 import { INDIA_STATES_DISTRICTS } from '../data/indiaLocations';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../i18n/LanguageContext';
+import { formatUiError } from '../lib/firebase';
 import { saveEmployerRegistration } from '../lib/firestoreService';
 import {
   buildCustomerPhotoDocId,
@@ -23,7 +24,9 @@ interface EmployerRegistrationFormProps {
 
 export const EmployerRegistrationForm: React.FC<EmployerRegistrationFormProps> = ({ onNavigate }) => {
   const { lang, t } = useLanguage();
-  const { user, employerProfile, employerPrivate, signInWithGoogle, refreshUserProfiles } = useAuth();
+  const { user, authError, clearAuthError, employerProfile, employerPrivate, signInWithGoogle, refreshUserProfiles } = useAuth();
+  const authBannerRef = useRef<HTMLDivElement | null>(null);
+  const errorBoxRef = useRef<HTMLDivElement | null>(null);
 
   const [businessName, setBusinessName] = useState('');
   const [contactPerson, setContactPerson] = useState('');
@@ -86,28 +89,56 @@ export const EmployerRegistrationForm: React.FC<EmployerRegistrationFormProps> =
     });
   };
 
+  const failValidation = (msg: string, targetRef: React.RefObject<HTMLElement | null> = errorBoxRef) => {
+    setErrorMsg(msg);
+    window.setTimeout(() => {
+      targetRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 20);
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
+    clearAuthError();
 
     if (!user) {
-      setErrorMsg(t.common.signInRequired);
+      failValidation(
+        t.common.signInRequired || 'Please sign in with Google before submitting customer registration.',
+        authBannerRef
+      );
+      return;
+    }
+    if (!user.emailVerified) {
+      failValidation(
+        'Your Google account email is not verified. Please sign in with a verified Google account to register.',
+        authBannerRef
+      );
       return;
     }
     if (businessName.trim().length < 2 || contactPerson.trim().length < 2) {
-      setErrorMsg('Please fill out business name and contact person.');
+      failValidation('Please fill out business / hirer name and contact person (minimum 2 characters each).');
       return;
     }
     if (!/^[6-9]\d{9}$/.test(mobile.trim())) {
-      setErrorMsg('Please enter a valid 10-digit Indian mobile number.');
+      failValidation('Please enter a valid 10-digit Indian mobile number starting with 6–9.');
       return;
     }
     if (!mobileVerified) {
-      setErrorMsg('Please complete mobile OTP verification.');
+      failValidation(
+        'Please complete mobile OTP verification before submitting. (If live SMS is unavailable, use authorized Demo Registration Mode for pre-launch testing.)'
+      );
+      return;
+    }
+    if (email.trim().length < 3 || !email.includes('@')) {
+      failValidation('Please enter a valid email address.');
       return;
     }
     if (businessAddress.trim().length < 4) {
-      setErrorMsg('Please enter a valid worksite or business address.');
+      failValidation('Please enter a valid worksite or business address (minimum 4 characters).');
+      return;
+    }
+    if (requiredCategories.length === 0) {
+      failValidation('Please select at least one worker category you need to hire.');
       return;
     }
 
@@ -174,7 +205,10 @@ export const EmployerRegistrationForm: React.FC<EmployerRegistrationFormProps> =
       setShowSuccessScreen(true);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Failed to save employer registration.');
+      setErrorMsg(formatUiError(err, 'Failed to save customer / employer registration. Please review your details and retry.'));
+      window.setTimeout(() => {
+        errorBoxRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 20);
     } finally {
       setSaving(false);
     }
@@ -190,20 +224,31 @@ export const EmployerRegistrationForm: React.FC<EmployerRegistrationFormProps> =
       </div>
 
       {!user && (
-        <div className="mb-8 bg-slate-50 border border-slate-200 rounded-lg p-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <div>
-            <h2 className="font-display text-base font-bold text-[#0B3B75]">
-              {t.workerForm.authRequiredTitle}
-            </h2>
-            <p className="text-sm text-slate-600 mt-1">{t.common.signInRequired}</p>
+        <div
+          ref={authBannerRef}
+          className="mb-8 bg-slate-50 border border-slate-200 rounded-lg p-6 space-y-3"
+        >
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div>
+              <h2 className="font-display text-base font-bold text-[#0B3B75]">
+                {t.workerForm.authRequiredTitle}
+              </h2>
+              <p className="text-sm text-slate-600 mt-1">{t.common.signInRequired}</p>
+            </div>
+            <button
+              type="button"
+              onClick={signInWithGoogle}
+              className="px-5 py-2.5 rounded-md bg-[#0B3B75] text-white text-sm font-semibold hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              {t.workerForm.signInBtn}
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={signInWithGoogle}
-            className="px-5 py-2.5 rounded-md bg-[#0B3B75] text-white text-sm font-semibold hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
-          >
-            {t.workerForm.signInBtn}
-          </button>
+          {authError && (
+            <p className="flex items-start gap-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2 font-medium">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>{authError}</span>
+            </p>
+          )}
         </div>
       )}
 
@@ -307,7 +352,7 @@ export const EmployerRegistrationForm: React.FC<EmployerRegistrationFormProps> =
       )}
 
       {!showSuccessScreen && (
-      <form onSubmit={handleSubmit} className="bg-white border border-slate-200 rounded-lg p-6 sm:p-8 space-y-6">
+      <form noValidate onSubmit={handleSubmit} className="bg-white border border-slate-200 rounded-lg p-6 sm:p-8 space-y-6">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
@@ -342,6 +387,8 @@ export const EmployerRegistrationForm: React.FC<EmployerRegistrationFormProps> =
             </label>
             <OtpVerificationBox
               mobile={mobile}
+              allowTestPinFallback={false}
+              onOpenDemoMode={() => onNavigate('demo-testing')}
               onMobileChange={(v) => {
                 setMobile(v);
                 setMobileVerified(false);
@@ -548,18 +595,38 @@ export const EmployerRegistrationForm: React.FC<EmployerRegistrationFormProps> =
         </div>
 
         {errorMsg && (
-          <div className="p-3 rounded-md bg-red-50 border border-red-200 text-sm text-red-800">
-            {errorMsg}
+          <div
+            ref={errorBoxRef}
+            role="alert"
+            className="p-3.5 rounded-md bg-red-50 border border-red-200 text-sm text-red-800 flex items-start gap-2"
+          >
+            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-700" />
+            <span>{errorMsg}</span>
+          </div>
+        )}
+
+        {!user && (
+          <div className="p-3.5 rounded-md bg-amber-50 border border-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-950">
+            <span>
+              <strong>Sign-In Required:</strong> Sign in with Google before clicking Submit so your Customer registration can be saved securely.
+            </span>
+            <button
+              type="button"
+              onClick={signInWithGoogle}
+              className="px-4 py-2 rounded-md bg-[#0B3B75] text-white font-semibold hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
+            >
+              {t.workerForm.signInBtn}
+            </button>
           </div>
         )}
 
         <div className="flex justify-end pt-2">
           <button
             type="submit"
-            disabled={saving || !user}
+            disabled={saving}
             className="px-6 py-3 rounded-md bg-[#0B3B75] text-white text-sm font-bold hover:bg-slate-800 disabled:opacity-50 cursor-pointer"
           >
-            {saving ? t.common.loading : t.employerForm.submitBtn}
+            {saving ? t.common.loading : employerProfile ? (lang === 'hi' ? 'प्रोफ़ाइल अपडेट करें' : lang === 'mr' ? 'माहिती अपडेट करा' : 'Update Customer Profile') : t.employerForm.submitBtn}
           </button>
         </div>
       </form>

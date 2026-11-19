@@ -94,3 +94,65 @@ export async function testFirestoreConnection(): Promise<{ online: boolean }> {
     return { online: true };
   }
 }
+
+export function formatUiError(err: unknown, fallback = 'Something went wrong. Please try again.'): string {
+  const raw = err instanceof Error ? err.message : typeof err === 'string' ? err : '';
+  if (!raw) return fallback;
+
+  if (raw.startsWith('DUPLICATE_MOBILE:')) {
+    return raw.replace(/^DUPLICATE_MOBILE:\s*/i, '').trim();
+  }
+
+  let effectiveMsg = raw;
+  let errorPath = '';
+  let emailVerified: boolean | null | undefined;
+
+  if (raw.trim().startsWith('{')) {
+    try {
+      const parsed = JSON.parse(raw) as Partial<FirestoreErrorInfo>;
+      if (typeof parsed.error === 'string' && parsed.error) {
+        effectiveMsg = parsed.error;
+      }
+      if (typeof parsed.path === 'string') {
+        errorPath = parsed.path;
+      }
+      emailVerified = parsed.authInfo?.emailVerified;
+    } catch {
+      // keep raw message
+    }
+  }
+
+  if (effectiveMsg.startsWith('DUPLICATE_MOBILE:')) {
+    return effectiveMsg.replace(/^DUPLICATE_MOBILE:\s*/i, '').trim();
+  }
+
+  const lower = effectiveMsg.toLowerCase();
+  if (lower.includes('permission-denied') || lower.includes('missing or insufficient permissions')) {
+    if (emailVerified === false) {
+      return 'Your signed-in Google email is not verified. Please sign in with a verified Google account to submit registration.';
+    }
+    if (errorPath.includes('mobileUniquenessLocks') || errorPath.includes('demo_mobile_registry')) {
+      return 'This mobile number is already registered with another account. Duplicate mobile numbers are not allowed.';
+    }
+    if (errorPath.includes('profilePhotos')) {
+      return 'Unable to save profile photo due to security/size checks. Please try a JPG/PNG/WebP image under 5 MB or submit without a photo.';
+    }
+    return 'Registration could not be saved due to account permission or field validation rules. Verify that you are signed in with a verified Google account and all required fields are complete.';
+  }
+
+  if (lower.includes('client is offline') || lower.includes('unavailable') || lower.includes('network')) {
+    return 'Network connection error while contacting ROJGAR SETU servers. Please check your internet and try again.';
+  }
+
+  if (lower.includes('auth/popup-closed-by-user')) {
+    return 'Sign-in window was closed before completion. Click Sign In again to continue.';
+  }
+  if (lower.includes('auth/popup-blocked')) {
+    return 'Browser blocked the Google Sign-In popup. Please allow popups for this site and try again.';
+  }
+  if (lower.includes('auth/unauthorized-domain')) {
+    return 'This domain is not yet authorized in Firebase Authentication settings.';
+  }
+
+  return effectiveMsg;
+}

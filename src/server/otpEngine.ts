@@ -4,7 +4,7 @@ export const OTP_TTL_SECONDS = 300; // 5 minutes
 export const OTP_COOLDOWN_SECONDS = 45; // resend cooldown
 export const MAX_OTP_VERIFY_ATTEMPTS = 5;
 
-export type SmsProviderKind = 'msg91' | 'fast2sms' | 'twilio_verify' | 'twilio_sms' | 'webhook';
+export type SmsProviderKind = '2factor' | 'msg91' | 'fast2sms' | 'twilio_verify' | 'twilio_sms' | 'webhook';
 
 export interface NormalizedIndianMobile {
   valid: boolean;
@@ -58,6 +58,7 @@ let ephemeralSecretFallback: string | null = null;
 
 function getProviderSecretMaterial(): string {
   return (
+    process.env.TWOFACTOR_API_KEY ||
     process.env.MSG91_AUTH_KEY ||
     process.env.FAST2SMS_API_KEY ||
     process.env.TWILIO_AUTH_TOKEN ||
@@ -196,6 +197,9 @@ export function resolveSmsProviderConfig(): ResolvedSmsProvider {
   const twilioFrom = (process.env.TWILIO_FROM_NUMBER || '').trim();
   const twilioMessagingSid = (process.env.TWILIO_MESSAGING_SERVICE_SID || '').trim();
 
+  const twoFactorKey = (process.env.TWOFACTOR_API_KEY || '').trim();
+  const twoFactorTemplate = (process.env.TWOFACTOR_TEMPLATE_NAME || process.env.SMS_DLT_TEMPLATE_ID || '').trim();
+
   const msg91Key = (process.env.MSG91_AUTH_KEY || '').trim();
   const msg91Template = (process.env.MSG91_TEMPLATE_ID || process.env.SMS_DLT_TEMPLATE_ID || '').trim();
 
@@ -203,6 +207,18 @@ export function resolveSmsProviderConfig(): ResolvedSmsProvider {
 
   const webhookKey = (process.env.SMS_PROVIDER_API_KEY || '').trim();
   const webhookUrl = (process.env.SMS_GATEWAY_WEBHOOK_URL || '').trim();
+
+  if (explicitProvider === '2factor' || (!explicitProvider && twoFactorKey)) {
+    const missing: string[] = [];
+    if (!twoFactorKey) missing.push('TWOFACTOR_API_KEY');
+    return {
+      configured: missing.length === 0,
+      provider: '2factor',
+      providerLabel: '2Factor.in OTP SMS Gateway',
+      dltConfigured: Boolean(twoFactorTemplate || dltConfigured),
+      missingConfig: missing,
+    };
+  }
 
   if (explicitProvider === 'msg91' || (!explicitProvider && msg91Key)) {
     const missing: string[] = [];
@@ -269,7 +285,7 @@ export function resolveSmsProviderConfig(): ResolvedSmsProvider {
     providerLabel: 'Not Configured',
     dltConfigured: false,
     missingConfig: [
-      'SMS_PROVIDER (msg91 | fast2sms | twilio | webhook) + provider credentials, OR Firebase Phone Authentication (VITE_FIREBASE_PHONE_AUTH_ENABLED=true)',
+      'TWOFACTOR_API_KEY or SMS_PROVIDER (2factor | msg91 | fast2sms | twilio | webhook) + credentials, OR Firebase Phone Authentication (VITE_FIREBASE_PHONE_AUTH_ENABLED=true)',
     ],
   };
 }
@@ -336,6 +352,50 @@ async function dispatchSmsViaConfiguredProvider(
   const message = buildOtpMessage(otp);
 
   try {
+    if (provider === '2factor') {
+      const apiKey = (process.env.TWOFACTOR_API_KEY || '').trim();
+      const templateName = (process.env.TWOFACTOR_TEMPLATE_NAME || '').trim();
+      if (!apiKey) {
+        return {
+          ok: false,
+          errorCode: 'SMS_PROVIDER_NOT_CONFIGURED',
+          message: '2Factor API key is missing on the server.',
+        };
+      }
+
+      const encodedKey = encodeURIComponent(apiKey);
+      const encodedPhone = encodeURIComponent(mobile.e164);
+      const encodedOtp = encodeURIComponent(otp);
+      const endpoint = templateName
+        ? `https://2factor.in/API/V1/${encodedKey}/SMS/${encodedPhone}/${encodedOtp}/${encodeURIComponent(templateName)}`
+        : `https://2factor.in/API/V1/${encodedKey}/SMS/${encodedPhone}/${encodedOtp}`;
+
+      const res = await fetchWithTimeout(endpoint, { method: 'GET' });
+      const text = await res.text();
+      let parsed: { Status?: string; Details?: string } = {};
+      try {
+        parsed = JSON.parse(text) as { Status?: string; Details?: string };
+      } catch {
+        parsed = {};
+      }
+
+      if (!res.ok || parsed.Status !== 'Success') {
+        const detail = typeof parsed.Details === 'string' ? parsed.Details.slice(0, 200) : text.slice(0, 200);
+        console.error('[OTP 2Factor] Dispatch failed status=', res.status, 'detail=', detail);
+        return {
+          ok: false,
+          errorCode: 'SMS_DISPATCH_FAILED',
+          message:
+            '2Factor SMS delivery failed. Verify DLT template approval, account credits, or retry in a moment.',
+        };
+      }
+
+      return {
+        ok: true,
+        providerMessageId: typeof parsed.Details === 'string' ? parsed.Details : undefined,
+      };
+    }
+
     if (provider === 'msg91') {
       const authKey = (process.env.MSG91_AUTH_KEY || '').trim();
       const templateId = (process.env.MSG91_TEMPLATE_ID || dltTemplateId).trim();
@@ -645,7 +705,7 @@ export async function handleOtpRequest(
       body: {
         error: 'SMS_PROVIDER_NOT_CONFIGURED',
         message:
-          'SMS provider configuration missing. Real OTP SMS cannot be sent until a server SMS gateway (MSG91, Fast2SMS, Twilio, or DLT Webhook) or Firebase Phone Auth is configured.',
+          'SMS provider configuration missing. Real OTP SMS cannot be sent until a server SMS gateway (2Factor, MSG91, Fast2SMS, Twilio, or DLT Webhook) or Firebase Phone Auth is configured.',
         missingConfig: providerConfig.missingConfig,
       },
     };
@@ -689,6 +749,7 @@ export async function handleOtpRequest(
       ok: true,
       mode: providerConfig.provider,
       providerLabel: providerConfig.providerLabel,
+      deliveryStatus: 'dispatched',
       mobile: normalized.national10,
       e164: normalized.e164,
       challengeToken,
