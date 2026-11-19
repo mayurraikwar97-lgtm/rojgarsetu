@@ -86,7 +86,7 @@ service cloud.firestore {
           'experienceYears', 'expectedWage', 'wageUnit', 'preferredWorkType',
           'availabilityStatus', 'state', 'district', 'cityOrVillage',
           'approxLat', 'approxLng', 'languagesKnown', 'gender', 'education',
-          'verificationStatus', 'isWomenEnterprise', 'completedJobsCount',
+          'verificationStatus', 'isWomenEnterprise', 'photoDocId', 'completedJobsCount',
           'ratingAvg', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.ownerUid)
@@ -109,6 +109,7 @@ service cloud.firestore {
         && (!('education' in data) || (data.education is string && data.education.size() <= 100))
         && data.verificationStatus in ['pending', 'verified', 'suspended']
         && (!('isWomenEnterprise' in data) || data.isWomenEnterprise is bool)
+        && (!('photoDocId' in data) || isValidId(data.photoDocId))
         && data.completedJobsCount is number && data.completedJobsCount >= 0 && data.completedJobsCount <= 100000
         && data.ratingAvg is number && data.ratingAvg >= 0 && data.ratingAvg <= 5
         && data.createdAt is timestamp
@@ -122,14 +123,17 @@ service cloud.firestore {
           'createdAt', 'updatedAt'
         ])
         && data.keys().hasOnly([
-          'ownerUid', 'fullName', 'mobile', 'mobileVerified', 'email', 'ageConfirmed',
-          'preferredWorkLocation', 'liveLocationConsent', 'privacyConsent',
-          'idVerificationStatus', 'certificateNotes', 'photoUrl', 'createdAt', 'updatedAt'
+          'ownerUid', 'fullName', 'mobile', 'mobileVerified', 'verificationMethod',
+          'testPinHash', 'email', 'ageConfirmed', 'preferredWorkLocation',
+          'liveLocationConsent', 'privacyConsent', 'idVerificationStatus',
+          'certificateNotes', 'photoUrl', 'photoDocId', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.ownerUid)
         && data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 120
         && data.mobile is string && data.mobile.size() >= 10 && data.mobile.size() <= 20
         && data.mobileVerified is bool
+        && (!('verificationMethod' in data) || data.verificationMethod in ['sms_otp', 'firebase_phone', 'test_pin'])
+        && (!('testPinHash' in data) || (data.testPinHash is string && data.testPinHash.size() <= 128))
         && (!('email' in data) || (data.email is string && data.email.size() <= 200))
         && data.ageConfirmed is bool
         && (!('preferredWorkLocation' in data) || (data.preferredWorkLocation is string && data.preferredWorkLocation.size() <= 160))
@@ -138,6 +142,7 @@ service cloud.firestore {
         && data.idVerificationStatus in ['not_submitted', 'voluntary_pending', 'verified']
         && (!('certificateNotes' in data) || (data.certificateNotes is string && data.certificateNotes.size() <= 500))
         && (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 1000))
+        && (!('photoDocId' in data) || isValidId(data.photoDocId))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -172,19 +177,22 @@ service cloud.firestore {
           'email', 'businessAddress', 'createdAt', 'updatedAt'
         ])
         && data.keys().hasOnly([
-          'ownerUid', 'contactPerson', 'mobile', 'mobileVerified',
-          'email', 'businessAddress', 'gstNumber', 'establishmentDetails',
-          'workforceNotes', 'createdAt', 'updatedAt'
+          'ownerUid', 'contactPerson', 'mobile', 'mobileVerified', 'verificationMethod',
+          'testPinHash', 'email', 'businessAddress', 'gstNumber', 'establishmentDetails',
+          'workforceNotes', 'photoDocId', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.ownerUid)
         && data.contactPerson is string && data.contactPerson.size() >= 2 && data.contactPerson.size() <= 120
         && data.mobile is string && data.mobile.size() >= 10 && data.mobile.size() <= 20
         && data.mobileVerified is bool
+        && (!('verificationMethod' in data) || data.verificationMethod in ['sms_otp', 'firebase_phone', 'test_pin'])
+        && (!('testPinHash' in data) || (data.testPinHash is string && data.testPinHash.size() <= 128))
         && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
         && data.businessAddress is string && data.businessAddress.size() >= 4 && data.businessAddress.size() <= 300
         && (!('gstNumber' in data) || (data.gstNumber is string && data.gstNumber.size() <= 30))
         && (!('establishmentDetails' in data) || (data.establishmentDetails is string && data.establishmentDetails.size() <= 600))
         && (!('workforceNotes' in data) || (data.workforceNotes is string && data.workforceNotes.size() <= 600))
+        && (!('photoDocId' in data) || isValidId(data.photoDocId))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -245,7 +253,7 @@ service cloud.firestore {
         ])
         && data.keys().hasOnly([
           'jobId', 'jobTitle', 'employerUid', 'workerUid', 'workerRegistrationId',
-          'workerName', 'workerPrimarySkill', 'proposedWage', 'note', 'status',
+          'workerName', 'workerPrimarySkill', 'workerPhotoDocId', 'proposedWage', 'note', 'status',
           'liveTrackingAuthorized', 'workerRating', 'employerFeedback',
           'createdAt', 'updatedAt'
         ])
@@ -256,6 +264,7 @@ service cloud.firestore {
         && data.workerRegistrationId is string && data.workerRegistrationId.size() >= 5 && data.workerRegistrationId.size() <= 40
         && data.workerName is string && data.workerName.size() >= 2 && data.workerName.size() <= 120
         && data.workerPrimarySkill is string && data.workerPrimarySkill.size() >= 2 && data.workerPrimarySkill.size() <= 80
+        && (!('workerPhotoDocId' in data) || isValidId(data.workerPhotoDocId))
         && data.proposedWage is number && data.proposedWage >= 0 && data.proposedWage <= 500000
         && (!('note' in data) || (data.note is string && data.note.size() <= 600))
         && data.status in ['applied', 'invited', 'accepted', 'declined', 'work_completed']
@@ -395,13 +404,15 @@ service cloud.firestore {
           'ownerUid', 'ownerName', 'mobile', 'mobileVerified', 'createdAt', 'updatedAt'
         ])
         && data.keys().hasOnly([
-          'ownerUid', 'ownerName', 'mobile', 'mobileVerified', 'email',
-          'rcOrLicenseNotes', 'createdAt', 'updatedAt'
+          'ownerUid', 'ownerName', 'mobile', 'mobileVerified', 'verificationMethod',
+          'testPinHash', 'email', 'rcOrLicenseNotes', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.ownerUid)
         && data.ownerName is string && data.ownerName.size() >= 2 && data.ownerName.size() <= 120
         && data.mobile is string && data.mobile.size() >= 10 && data.mobile.size() <= 20
         && data.mobileVerified is bool
+        && (!('verificationMethod' in data) || data.verificationMethod in ['sms_otp', 'firebase_phone', 'test_pin'])
+        && (!('testPinHash' in data) || (data.testPinHash is string && data.testPinHash.size() <= 128))
         && (!('email' in data) || (data.email is string && data.email.size() <= 200))
         && (!('rcOrLicenseNotes' in data) || (data.rcOrLicenseNotes is string && data.rcOrLicenseNotes.size() <= 500))
         && data.createdAt is timestamp
@@ -618,7 +629,7 @@ service cloud.firestore {
           'role', 'category', 'displayName', 'mobile10',
           'maskedMobile', 'testVerificationStatus', 'availabilityStatus', 'state',
           'district', 'cityOrVillage', 'lat', 'lng', 'accuracyMeters',
-          'locationPermissionStatus', 'locationSource', 'pushEnabled', 'isDemo',
+          'locationPermissionStatus', 'locationSource', 'photoDocId', 'pushEnabled', 'isDemo',
           'lastActiveAt', 'createdAt', 'updatedAt'
         ])
         && data.uniqueUserId is string && data.uniqueUserId.size() >= 6 && data.uniqueUserId.size() <= 48 && data.uniqueUserId.matches('^RS-DEMO-[A-Z0-9\\-]+$')
@@ -641,6 +652,7 @@ service cloud.firestore {
         && data.accuracyMeters is number && data.accuracyMeters >= 0 && data.accuracyMeters <= 200000
         && data.locationPermissionStatus in ['granted', 'denied', 'prompt', 'manual_fallback']
         && data.locationSource in ['gps', 'search', 'manual_test']
+        && (!('photoDocId' in data) || isValidId(data.photoDocId))
         && (!('pushEnabled' in data) || data.pushEnabled is bool)
         && data.isDemo == true
         && data.lastActiveAt is timestamp
@@ -672,7 +684,7 @@ service cloud.firestore {
           'requestLat', 'requestLng', 'offeredWage', 'wageUnit', 'status',
           'matchedWorkerIds', 'matchedWorkerOwnerUids', 'rejectedWorkerIds',
           'acceptedWorkerId', 'acceptedWorkerOwnerUid', 'acceptedWorkerName', 'acceptedWorkerUniqueId',
-          'customerConfirmedAt', 'completedAt', 'closedAt',
+          'acceptedWorkerPhotoDocId', 'customerConfirmedAt', 'completedAt', 'closedAt',
           'customerLocationSharing', 'workerLocationSharing',
           'completionNotes', 'workerRating', 'isDemo', 'createdAt', 'updatedAt'
         ])
@@ -702,6 +714,7 @@ service cloud.firestore {
         && (!('acceptedWorkerOwnerUid' in data) || isValidId(data.acceptedWorkerOwnerUid))
         && (!('acceptedWorkerName' in data) || (data.acceptedWorkerName is string && data.acceptedWorkerName.size() <= 120))
         && (!('acceptedWorkerUniqueId' in data) || (data.acceptedWorkerUniqueId is string && data.acceptedWorkerUniqueId.size() <= 48))
+        && (!('acceptedWorkerPhotoDocId' in data) || isValidId(data.acceptedWorkerPhotoDocId))
         && (!('customerConfirmedAt' in data) || data.customerConfirmedAt is timestamp)
         && (!('completedAt' in data) || data.completedAt is timestamp)
         && (!('closedAt' in data) || data.closedAt is timestamp)
@@ -777,6 +790,49 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidProfilePhoto(data) {
+      return data.keys().hasAll(['ownerUid', 'subjectId', 'role', 'mimeType', 'sizeBytes', 'photoData', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerUid', 'subjectId', 'role', 'mimeType', 'sizeBytes', 'photoData', 'createdAt', 'updatedAt'])
+        && isValidId(data.ownerUid)
+        && isValidId(data.subjectId)
+        && data.role in ['worker', 'customer']
+        && data.mimeType in ['image/jpeg', 'image/png', 'image/webp']
+        && data.sizeBytes is number && data.sizeBytes > 0 && data.sizeBytes <= 5242880
+        && data.photoData is string && data.photoData.size() >= 30 && data.photoData.size() <= 480000
+        && data.photoData[0:11] == 'data:image/'
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAcceptedCustomerPhoto(data) {
+      return data.keys().hasAll(['ownerUid', 'workerUid', 'sourceType', 'sourceId', 'photoData', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerUid', 'workerUid', 'sourceType', 'sourceId', 'photoData', 'createdAt', 'updatedAt'])
+        && isValidId(data.ownerUid)
+        && isValidId(data.workerUid)
+        && data.sourceType in ['job_application', 'demo_work_order']
+        && isValidId(data.sourceId)
+        && data.photoData is string && data.photoData.size() >= 30 && data.photoData.size() <= 480000
+        && data.photoData[0:11] == 'data:image/'
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isAcceptedJobGrantValid(data) {
+      return (
+        data.sourceType == 'job_application'
+        && exists(/databases/$(database)/documents/applications/$(data.sourceId))
+        && get(/databases/$(database)/documents/applications/$(data.sourceId)).data.employerUid == data.ownerUid
+        && get(/databases/$(database)/documents/applications/$(data.sourceId)).data.workerUid == data.workerUid
+        && get(/databases/$(database)/documents/applications/$(data.sourceId)).data.status in ['accepted', 'work_completed']
+      ) || (
+        data.sourceType == 'demo_work_order'
+        && exists(/databases/$(database)/documents/demo_work_orders/$(data.sourceId))
+        && get(/databases/$(database)/documents/demo_work_orders/$(data.sourceId)).data.ownerUid == data.ownerUid
+        && get(/databases/$(database)/documents/demo_work_orders/$(data.sourceId)).data.acceptedWorkerOwnerUid == data.workerUid
+        && get(/databases/$(database)/documents/demo_work_orders/$(data.sourceId)).data.status in ['accepted', 'customer_confirmed', 'in_progress', 'completed', 'closed']
+      );
+    }
+
     // Collection Rules
 
     match /users/{userId} {
@@ -836,7 +892,7 @@ service cloud.firestore {
               'displayName', 'primarySkill', 'skills', 'experienceYears',
               'expectedWage', 'wageUnit', 'preferredWorkType', 'availabilityStatus',
               'state', 'district', 'cityOrVillage', 'approxLat', 'approxLng',
-              'languagesKnown', 'gender', 'education', 'isWomenEnterprise', 'updatedAt'
+              'languagesKnown', 'gender', 'education', 'isWomenEnterprise', 'photoDocId', 'updatedAt'
             ])
           )
         );
@@ -864,9 +920,10 @@ service cloud.firestore {
             isOwner(existing().ownerUid)
             && incoming().mobileVerified == true
             && incoming().diff(existing()).affectedKeys().hasOnly([
-              'fullName', 'mobile', 'mobileVerified', 'email', 'ageConfirmed',
-              'preferredWorkLocation', 'liveLocationConsent', 'privacyConsent',
-              'idVerificationStatus', 'certificateNotes', 'photoUrl', 'updatedAt'
+              'fullName', 'mobile', 'mobileVerified', 'verificationMethod', 'testPinHash',
+              'email', 'ageConfirmed', 'preferredWorkLocation', 'liveLocationConsent',
+              'privacyConsent', 'idVerificationStatus', 'certificateNotes', 'photoUrl',
+              'photoDocId', 'updatedAt'
             ])
             && incoming().idVerificationStatus in ['not_submitted', 'voluntary_pending']
           )
@@ -923,9 +980,9 @@ service cloud.firestore {
             isOwner(existing().ownerUid)
             && incoming().mobileVerified == true
             && incoming().diff(existing()).affectedKeys().hasOnly([
-              'contactPerson', 'mobile', 'mobileVerified', 'email',
-              'businessAddress', 'gstNumber', 'establishmentDetails',
-              'workforceNotes', 'updatedAt'
+              'contactPerson', 'mobile', 'mobileVerified', 'verificationMethod', 'testPinHash',
+              'email', 'businessAddress', 'gstNumber', 'establishmentDetails',
+              'workforceNotes', 'photoDocId', 'updatedAt'
             ])
           )
         );
@@ -1126,7 +1183,8 @@ service cloud.firestore {
             isOwner(existing().ownerUid)
             && incoming().mobileVerified == true
             && incoming().diff(existing()).affectedKeys().hasOnly([
-              'ownerName', 'mobile', 'mobileVerified', 'email', 'rcOrLicenseNotes', 'updatedAt'
+              'ownerName', 'mobile', 'mobileVerified', 'verificationMethod', 'testPinHash',
+              'email', 'rcOrLicenseNotes', 'updatedAt'
             ])
           )
         );
@@ -1495,6 +1553,57 @@ service cloud.firestore {
       allow delete: if isValidId(notifId)
         && isVerifiedUser()
         && (existing().ownerUid == request.auth.uid || existing().recipientOwnerUid == request.auth.uid || isAdmin());
+    }
+
+    match /profilePhotos/{photoId} {
+      allow get: if isValidId(photoId)
+        && isVerifiedUser()
+        && (isOwner(existing().ownerUid) || isAdmin() || existing().role == 'worker');
+      allow list: if isVerifiedUser()
+        && (existing().ownerUid == request.auth.uid || isAdmin() || existing().role == 'worker');
+      allow create: if isValidId(photoId)
+        && isVerifiedUser()
+        && isOwner(incoming().ownerUid)
+        && isValidProfilePhoto(incoming())
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(photoId)
+        && isVerifiedUser()
+        && isOwner(existing().ownerUid)
+        && isValidProfilePhoto(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().subjectId == existing().subjectId
+        && incoming().role == existing().role;
+      allow delete: if isValidId(photoId)
+        && isVerifiedUser()
+        && (isOwner(existing().ownerUid) || isAdmin());
+    }
+
+    match /acceptedCustomerPhotos/{grantId} {
+      allow get: if isValidId(grantId)
+        && isVerifiedUser()
+        && (isAdmin() || existing().ownerUid == request.auth.uid || existing().workerUid == request.auth.uid);
+      allow list: if isVerifiedUser()
+        && (isAdmin() || existing().ownerUid == request.auth.uid || existing().workerUid == request.auth.uid);
+      allow create: if isValidId(grantId)
+        && isVerifiedUser()
+        && isOwner(incoming().ownerUid)
+        && isValidAcceptedCustomerPhoto(incoming())
+        && isAcceptedJobGrantValid(incoming())
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(grantId)
+        && isVerifiedUser()
+        && isOwner(existing().ownerUid)
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().workerUid == existing().workerUid
+        && incoming().sourceType == existing().sourceType
+        && incoming().sourceId == existing().sourceId
+        && isValidAcceptedCustomerPhoto(incoming())
+        && isAcceptedJobGrantValid(incoming())
+        && isValidTimestampOnUpdate();
+      allow delete: if isValidId(grantId)
+        && isVerifiedUser()
+        && (isOwner(existing().ownerUid) || isAdmin());
     }
   }
 }

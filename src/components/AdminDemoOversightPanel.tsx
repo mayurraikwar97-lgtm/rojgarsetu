@@ -36,6 +36,7 @@ import type {
   DemoWorkOrder,
   PageRoute,
 } from '../types/domain';
+import { SecureAvatar } from './SecureAvatar';
 
 interface AdminDemoOversightPanelProps {
   onNavigate?: (route: PageRoute) => void;
@@ -345,8 +346,18 @@ export const AdminDemoOversightPanel: React.FC<AdminDemoOversightPanelProps> = (
                       {u.uniqueUserId}
                     </td>
                     <td className="py-2.5 pr-3">
-                      <div className="font-semibold text-slate-900">{u.displayName}</div>
-                      <div className="font-mono-tabular text-slate-500">+91 {u.mobile10}</div>
+                      <div className="flex items-center gap-2.5">
+                        <SecureAvatar
+                          name={u.displayName}
+                          photoDocId={u.photoDocId}
+                          sizeClass="w-8 h-8"
+                          textSizeClass="text-[11px]"
+                        />
+                        <div>
+                          <div className="font-semibold text-slate-900">{u.displayName}</div>
+                          <div className="font-mono-tabular text-slate-500">+91 {u.mobile10}</div>
+                        </div>
+                      </div>
                     </td>
                     <td className="py-2.5 pr-3">
                       <span className={`px-2 py-0.5 rounded font-bold uppercase text-[10px] ${

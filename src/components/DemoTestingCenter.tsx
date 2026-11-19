@@ -7,6 +7,8 @@ import {
   ClipboardCheck,
   Crosshair,
   ExternalLink,
+  Eye,
+  EyeOff,
   FlaskConical,
   Hammer,
   KeyRound,
@@ -57,12 +59,22 @@ import {
   touchDemoUserLastActive,
   updateDemoUserAvailability,
   updateDemoUserLocation,
+  updateDemoUserPhoto,
   updateDemoUserPushStatus,
   upsertDemoLocationShare,
   verifyTestAccountPinLogin,
 } from '../lib/demoService';
 import { callNotificationApi } from '../lib/firestoreService';
 import { detectBestGpsLocation } from '../lib/locationService';
+import {
+  buildAcceptedDemoOrderGrantId,
+  buildDemoUserPhotoDocId,
+  deleteProfilePhotoRecord,
+  grantAcceptedCustomerPhoto,
+  isCustomerPhotoVisibleForJobStatus,
+  uploadProfilePhotoRecord,
+} from '../lib/photoStorageService';
+import { validateSecurityPin } from '../lib/pinAuth';
 import type {
   DemoLiveLocationShare,
   DemoLocationPermissionStatus,
@@ -75,12 +87,14 @@ import type {
   WageUnit,
 } from '../types/domain';
 import { NotificationOptInButton } from './NotificationOptInButton';
+import { ProfilePhotoUploader, type SelectedProfilePhoto } from './ProfilePhotoUploader';
+import { SecureAvatar } from './SecureAvatar';
 
 interface DemoTestingCenterProps {
   onNavigate: (route: PageRoute) => void;
 }
 
-const DEMO_CATEGORIES = ['Electrician', 'Plumber', 'Carpenter'];
+const DEMO_CATEGORIES = ['Electrician', 'Plumber', 'Carpenter', 'Driver'];
 
 const STATUS_BADGE_MAP: Record<DemoWorkOrder['status'], { label: string; cls: string }> = {
   requested: { label: 'NEW REQUEST', cls: 'bg-amber-100 text-[#C25E00]' },
@@ -110,7 +124,8 @@ export const DemoTestingCenter: React.FC<DemoTestingCenterProps> = ({ onNavigate
 
   // Mobile + Test PIN Login state
   const [loginMobile, setLoginMobile] = useState('');
-  const [loginPin, setLoginPin] = useState('1234');
+  const [loginPin, setLoginPin] = useState('');
+  const [showLoginPin, setShowLoginPin] = useState(false);
 
   // Registration Form state
   const [regRole, setRegRole] = useState<DemoUserRole>('worker');
@@ -120,6 +135,10 @@ export const DemoTestingCenter: React.FC<DemoTestingCenterProps> = ({ onNavigate
   const [regName, setRegName] = useState('');
   const [regMobile, setRegMobile] = useState('');
   const [regPin, setRegPin] = useState('1234');
+  const [regConfirmPin, setRegConfirmPin] = useState('1234');
+  const [showRegPin, setShowRegPin] = useState(false);
+  const [regSelectedPhoto, setRegSelectedPhoto] = useState<SelectedProfilePhoto | null>(null);
+  const [photoUpdating, setPhotoUpdating] = useState(false);
   const [regState, setRegState] = useState('Maharashtra');
   const [regDistrict, setRegDistrict] = useState('Chandrapur');
   const [regCity, setRegCity] = useState('Chandrapur');
@@ -130,6 +149,7 @@ export const DemoTestingCenter: React.FC<DemoTestingCenterProps> = ({ onNavigate
   const [regSource, setRegSource] = useState<'gps' | 'search' | 'manual_test'>('manual_test');
   const [regTestVerifyAck, setRegTestVerifyAck] = useState(true);
   const [gpsDetecting, setGpsDetecting] = useState(false);
+  const syncedPhotoGrantsRef = useRef<Set<string>>(new Set());
 
   // Customer Job Request Form state
   const [jobCategory, setJobCategory] = useState('Electrician');
@@ -249,6 +269,32 @@ export const DemoTestingCenter: React.FC<DemoTestingCenterProps> = ({ onNavigate
     );
   }, [workOrders, activeUser]);
 
+  // Automatically grant accepted worker access to Customer's private profile photo once an order reaches accepted+ stage
+  useEffect(() => {
+    if (!activeUser || activeUser.role !== 'customer' || !activeUser.photoDocId || !activeUserCanAct) {
+      return;
+    }
+    for (const order of activeUserOrders) {
+      if (
+        isCustomerPhotoVisibleForJobStatus(order.status) &&
+        order.acceptedWorkerOwnerUid
+      ) {
+        const key = `${order.id}:${activeUser.photoDocId}:${order.acceptedWorkerOwnerUid}`;
+        if (syncedPhotoGrantsRef.current.has(key)) continue;
+        syncedPhotoGrantsRef.current.add(key);
+        void grantAcceptedCustomerPhoto({
+          customerUid: activeUser.ownerUid,
+          workerUid: order.acceptedWorkerOwnerUid,
+          sourceType: 'demo_work_order',
+          sourceId: order.id,
+          customerPhotoDocId: activeUser.photoDocId,
+        }).catch(() => {
+          syncedPhotoGrantsRef.current.delete(key);
+        });
+      }
+    }
+  }, [activeUser, activeUserCanAct, activeUserOrders]);
+
   // Tests 1, 2, 3 live progress summary
   const scenarioProgress = useMemo(() => {
     const specs = [
@@ -351,6 +397,9 @@ export const DemoTestingCenter: React.FC<DemoTestingCenterProps> = ({ onNavigate
     setRegDeviceLabel(preset.deviceLabel);
     setRegName(preset.displayName);
     setRegMobile(preset.mobile10);
+    setRegPin('1234');
+    setRegConfirmPin('1234');
+    setRegSelectedPhoto(null);
     setRegCity(preset.cityOrVillage);
     setRegLat(Number((19.9615 + preset.latOffset).toFixed(6)));
     setRegLng(Number((79.2961 + preset.lngOffset).toFixed(6)));
@@ -395,6 +444,17 @@ export const DemoTestingCenter: React.FC<DemoTestingCenterProps> = ({ onNavigate
       });
       return;
     }
+    const pinCheck = validateSecurityPin(regPin, regConfirmPin);
+    if (!pinCheck.ok) {
+      setBanner({
+        kind: 'err',
+        text:
+          pinCheck.code === 'PIN_MISMATCH'
+            ? 'Security PIN and Confirm PIN do not match.'
+            : 'Please enter a valid 4-to-6 digit Security PIN.',
+      });
+      return;
+    }
     if (!regTestVerifyAck) {
       setBanner({ kind: 'err', text: 'Please acknowledge test-only demo verification.' });
       return;
@@ -409,7 +469,7 @@ export const DemoTestingCenter: React.FC<DemoTestingCenterProps> = ({ onNavigate
         category: regRole === 'customer' ? 'Customer' : regCategory,
         displayName: regName,
         mobile: regMobile,
-        pin: regPin,
+        pin: pinCheck.cleanPin,
         slotLabel: regSlotLabel,
         deviceLabel: regDeviceLabel,
         state: regState,
@@ -421,13 +481,38 @@ export const DemoTestingCenter: React.FC<DemoTestingCenterProps> = ({ onNavigate
         locationPermissionStatus: regPermission,
         locationSource: regSource,
       });
+
+      let photoMsg = '';
+      if (regSelectedPhoto) {
+        try {
+          const photoDocId = buildDemoUserPhotoDocId(created.id);
+          await uploadProfilePhotoRecord({
+            photoId: photoDocId,
+            ownerUid: user.uid,
+            subjectId: created.id,
+            role: created.role === 'customer' ? 'customer' : 'worker',
+            mimeType: regSelectedPhoto.mimeType,
+            sizeBytes: regSelectedPhoto.sizeBytes,
+            photoData: regSelectedPhoto.photoData,
+          });
+          await updateDemoUserPhoto(created.id, photoDocId);
+          photoMsg = ' Profile photo saved securely.';
+        } catch (photoErr) {
+          photoMsg =
+            photoErr instanceof Error
+              ? ` (Account created, but photo upload failed: ${photoErr.message})`
+              : ' (Account created, but photo upload failed)';
+        }
+      }
+
       setActiveDemoUserId(created.id);
       setRegName('');
       setRegMobile('');
+      setRegSelectedPhoto(null);
       setActiveTab('workspace');
       setBanner({
         kind: 'ok',
-        text: `Registered [TEST MODE] ${created.role.toUpperCase()} "${created.displayName}" (${created.uniqueUserId}) on ${created.deviceLabel || 'this device'}! Mobile +91 ${created.mobile10} locked against duplicates.`,
+        text: `Registered [TEST MODE] ${created.role.toUpperCase()} "${created.displayName}" (${created.uniqueUserId}) on ${created.deviceLabel || 'this device'}! Mobile +91 ${created.mobile10} locked against duplicates.${photoMsg}`,
       });
     } catch (err) {
       setBanner({
@@ -436,6 +521,62 @@ export const DemoTestingCenter: React.FC<DemoTestingCenterProps> = ({ onNavigate
       });
     } finally {
       setBusy(false);
+    }
+  };
+
+  const handleActiveUserPhotoSelect = async (photo: SelectedProfilePhoto) => {
+    if (!activeUser || !user || !activeUserCanAct) return;
+    setPhotoUpdating(true);
+    setBanner(null);
+    try {
+      const photoDocId = buildDemoUserPhotoDocId(activeUser.id);
+      await uploadProfilePhotoRecord({
+        photoId: photoDocId,
+        ownerUid: activeUser.ownerUid,
+        subjectId: activeUser.id,
+        role: activeUser.role === 'customer' ? 'customer' : 'worker',
+        mimeType: photo.mimeType,
+        sizeBytes: photo.sizeBytes,
+        photoData: photo.photoData,
+      });
+      await updateDemoUserPhoto(activeUser.id, photoDocId);
+      setBanner({
+        kind: 'ok',
+        text:
+          activeUser.role === 'customer'
+            ? 'Customer profile photo updated! Strictly visible ONLY to you, Admin, and Workers who accept your job.'
+            : 'Worker profile photo updated securely!',
+      });
+    } catch (err) {
+      setBanner({
+        kind: 'err',
+        text: err instanceof Error ? err.message : 'Failed to update profile photo.',
+      });
+    } finally {
+      setPhotoUpdating(false);
+    }
+  };
+
+  const handleActiveUserPhotoRemove = async () => {
+    if (!activeUser || !user || !activeUserCanAct) return;
+    setPhotoUpdating(true);
+    setBanner(null);
+    try {
+      if (activeUser.photoDocId) {
+        await deleteProfilePhotoRecord(activeUser.photoDocId);
+      }
+      await updateDemoUserPhoto(activeUser.id, null);
+      setBanner({
+        kind: 'info',
+        text: `Removed profile photo for ${activeUser.displayName}.`,
+      });
+    } catch (err) {
+      setBanner({
+        kind: 'err',
+        text: err instanceof Error ? err.message : 'Failed to remove profile photo.',
+      });
+    } finally {
+      setPhotoUpdating(false);
     }
   };
 
@@ -1056,15 +1197,26 @@ export const DemoTestingCenter: React.FC<DemoTestingCenterProps> = ({ onNavigate
               onChange={(e) => setLoginMobile(e.target.value.replace(/\D/g, '').slice(0, 10))}
               className="flex-1 min-w-[170px] px-2.5 py-1.5 border border-slate-300 rounded font-mono-tabular bg-white"
             />
-            <input
-              type="password"
-              required
-              maxLength={6}
-              placeholder="Test PIN (1234)"
-              value={loginPin}
-              onChange={(e) => setLoginPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
-              className="w-28 px-2.5 py-1.5 border border-slate-300 rounded font-mono-tabular bg-white"
-            />
+            <div className="relative flex items-center">
+              <input
+                type={showLoginPin ? 'text' : 'password'}
+                required
+                minLength={4}
+                maxLength={6}
+                placeholder="4–6 digit PIN (e.g. 1234)"
+                value={loginPin}
+                onChange={(e) => setLoginPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                className="w-44 pl-2.5 pr-8 py-1.5 border border-slate-300 rounded font-mono-tabular bg-white"
+              />
+              <button
+                type="button"
+                onClick={() => setShowLoginPin((v) => !v)}
+                aria-label={showLoginPin ? 'Hide PIN' : 'Show PIN'}
+                className="absolute right-2 text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                {showLoginPin ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+              </button>
+            </div>
             <button
               type="submit"
               disabled={busy}
@@ -1135,11 +1287,21 @@ export const DemoTestingCenter: React.FC<DemoTestingCenterProps> = ({ onNavigate
                       </span>
                     )}
                   </div>
-                  <div className={`font-display text-xs font-bold mt-1.5 truncate ${isSelected ? 'text-white' : 'text-[#0B3B75]'}`}>
-                    {u.displayName}
-                  </div>
-                  <div className={`text-[11px] font-mono-tabular mt-0.5 ${isSelected ? 'text-blue-200' : 'text-slate-500'}`}>
-                    +91 {u.mobile10}
+                  <div className="flex items-center gap-2 mt-1.5">
+                    <SecureAvatar
+                      name={u.displayName}
+                      photoDocId={u.photoDocId}
+                      sizeClass="w-8 h-8"
+                      textSizeClass="text-[11px]"
+                    />
+                    <div className="min-w-0">
+                      <div className={`font-display text-xs font-bold truncate ${isSelected ? 'text-white' : 'text-[#0B3B75]'}`}>
+                        {u.displayName}
+                      </div>
+                      <div className={`text-[11px] font-mono-tabular ${isSelected ? 'text-blue-200' : 'text-slate-500'}`}>
+                        +91 {u.mobile10}
+                      </div>
+                    </div>
                   </div>
                   <div className={`text-[10px] mt-1 flex items-center justify-between ${isSelected ? 'text-blue-100' : 'text-slate-500'}`}>
                     <span>{u.deviceLabel || (isOwnedHere ? 'This Phone' : 'Other Phone')}</span>
@@ -1173,24 +1335,32 @@ export const DemoTestingCenter: React.FC<DemoTestingCenterProps> = ({ onNavigate
               )}
 
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div>
-                  <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono-tabular">
-                    <span className="px-2 py-0.5 rounded bg-amber-100 text-[#C25E00] font-bold">
-                      TEST MODE · VERIFIED
-                    </span>
-                    <span className="font-bold text-[#0B3B75]">{activeUser.uniqueUserId}</span>
-                    {activeUser.deviceLabel && (
-                      <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-bold">
-                        {activeUser.deviceLabel}
+                <div className="flex items-start gap-3">
+                  <SecureAvatar
+                    name={activeUser.displayName}
+                    photoDocId={activeUser.photoDocId}
+                    sizeClass="w-14 h-14"
+                    textSizeClass="text-lg"
+                  />
+                  <div>
+                    <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono-tabular">
+                      <span className="px-2 py-0.5 rounded bg-amber-100 text-[#C25E00] font-bold">
+                        TEST MODE · VERIFIED
                       </span>
-                    )}
+                      <span className="font-bold text-[#0B3B75]">{activeUser.uniqueUserId}</span>
+                      {activeUser.deviceLabel && (
+                        <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-700 font-bold">
+                          {activeUser.deviceLabel}
+                        </span>
+                      )}
+                    </div>
+                    <h2 className="font-display text-lg font-bold text-[#0B3B75] mt-1">
+                      {activeUser.displayName}
+                    </h2>
+                    <p className="text-xs text-slate-600">
+                      Role: <strong>{activeUser.role.toUpperCase()}</strong> · Category: <strong>{activeUser.category}</strong> · Mobile: <span className="font-mono-tabular">+91 {activeUser.mobile10}</span>
+                    </p>
                   </div>
-                  <h2 className="font-display text-lg font-bold text-[#0B3B75] mt-1">
-                    {activeUser.displayName}
-                  </h2>
-                  <p className="text-xs text-slate-600">
-                    Role: <strong>{activeUser.role.toUpperCase()}</strong> · Category: <strong>{activeUser.category}</strong> · Mobile: <span className="font-mono-tabular">+91 {activeUser.mobile10}</span>
-                  </p>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
@@ -1244,6 +1414,28 @@ export const DemoTestingCenter: React.FC<DemoTestingCenterProps> = ({ onNavigate
                   </div>
                 </div>
               </div>
+
+              {activeUserCanAct && (
+                <div className="pt-1">
+                  <ProfilePhotoUploader
+                    existingPhotoDocId={activeUser.photoDocId}
+                    selectedPhoto={null}
+                    onSelectPhoto={(photo) => void handleActiveUserPhotoSelect(photo)}
+                    onRemovePhoto={() => void handleActiveUserPhotoRemove()}
+                    compact={true}
+                    roleLabel={
+                      photoUpdating
+                        ? 'Saving profile photo...'
+                        : `Profile Photo (${activeUser.displayName})`
+                    }
+                    privacyNote={
+                      activeUser.role === 'customer'
+                        ? 'Private Customer Photo: visible only to you, Admin, and the Worker after job acceptance.'
+                        : 'Optional Worker Photo: displayed to customers and Admin.'
+                    }
+                  />
+                </div>
+              )}
             </section>
 
             {/* Customer: Submit New Job Request */}
@@ -1428,6 +1620,45 @@ export const DemoTestingCenter: React.FC<DemoTestingCenterProps> = ({ onNavigate
                                 </>
                               )}
                             </p>
+                            {/* Accepted Partner Photo Display (strict privacy for customer photo) */}
+                            {activeUser.role === 'customer' && order.acceptedWorkerName && (
+                              <div className="mt-2 inline-flex items-center gap-2 px-2.5 py-1.5 rounded bg-emerald-50 border border-emerald-200 text-xs">
+                                <SecureAvatar
+                                  name={order.acceptedWorkerName}
+                                  photoDocId={
+                                    order.acceptedWorkerPhotoDocId ||
+                                    demoUsers.find((u) => u.id === order.acceptedWorkerId)?.photoDocId
+                                  }
+                                  sizeClass="w-8 h-8"
+                                  textSizeClass="text-[10px]"
+                                />
+                                <div>
+                                  <div className="font-bold text-[#0B3B75]">{order.acceptedWorkerName}</div>
+                                  <div className="text-[10px] text-[#15803D] font-semibold">Accepted Worker Profile</div>
+                                </div>
+                              </div>
+                            )}
+                            {activeUser.role === 'worker' && (
+                              isAcceptedByMe && isCustomerPhotoVisibleForJobStatus(order.status) ? (
+                                <div className="mt-2 inline-flex items-center gap-2 px-2.5 py-1.5 rounded bg-blue-50 border border-blue-200 text-xs">
+                                  <SecureAvatar
+                                    name={order.customerName}
+                                    acceptedGrantId={buildAcceptedDemoOrderGrantId(order.id)}
+                                    sizeClass="w-8 h-8"
+                                    textSizeClass="text-[10px]"
+                                  />
+                                  <div>
+                                    <div className="font-bold text-[#0B3B75]">{order.customerName}</div>
+                                    <div className="text-[10px] text-slate-600">Customer Photo (Authorized Job Partner)</div>
+                                  </div>
+                                </div>
+                              ) : (
+                                <div className="mt-1.5 text-[10px] text-slate-500 flex items-center gap-1">
+                                  <Lock className="w-3 h-3" />
+                                  <span>Customer photo stays hidden until you accept and customer confirms the job.</span>
+                                </div>
+                              )
+                            )}
                           </div>
 
                           {/* Stage 2: Worker Accept / Reject Controls */}
@@ -1920,7 +2151,7 @@ export const DemoTestingCenter: React.FC<DemoTestingCenterProps> = ({ onNavigate
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">
                   10-Digit Mobile (Unique) *
@@ -1937,16 +2168,41 @@ export const DemoTestingCenter: React.FC<DemoTestingCenterProps> = ({ onNavigate
               </div>
               <div>
                 <label className="block font-semibold text-slate-700 mb-1">
-                  4–6 Digit Test Login PIN *
+                  4–6 Digit Test PIN *
+                </label>
+                <div className="relative flex items-center">
+                  <input
+                    type={showRegPin ? 'text' : 'password'}
+                    required
+                    minLength={4}
+                    maxLength={6}
+                    placeholder="1234"
+                    value={regPin}
+                    onChange={(e) => setRegPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    className="w-full pl-3 pr-8 py-2 border border-slate-300 rounded font-mono-tabular"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowRegPin((v) => !v)}
+                    aria-label={showRegPin ? 'Hide PIN' : 'Show PIN'}
+                    className="absolute right-2 text-slate-400 hover:text-slate-700 cursor-pointer"
+                  >
+                    {showRegPin ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Confirm PIN *
                 </label>
                 <input
-                  type="text"
+                  type={showRegPin ? 'text' : 'password'}
                   required
                   minLength={4}
                   maxLength={6}
                   placeholder="1234"
-                  value={regPin}
-                  onChange={(e) => setRegPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  value={regConfirmPin}
+                  onChange={(e) => setRegConfirmPin(e.target.value.replace(/\D/g, '').slice(0, 6))}
                   className="w-full px-3 py-2 border border-slate-300 rounded font-mono-tabular"
                 />
               </div>
@@ -2018,6 +2274,18 @@ export const DemoTestingCenter: React.FC<DemoTestingCenterProps> = ({ onNavigate
               </button>
             </div>
 
+            <ProfilePhotoUploader
+              selectedPhoto={regSelectedPhoto}
+              onSelectPhoto={setRegSelectedPhoto}
+              onRemovePhoto={() => setRegSelectedPhoto(null)}
+              compact={true}
+              privacyNote={
+                regRole === 'customer'
+                  ? 'Optional Customer Photo: hidden until a worker accepts your job.'
+                  : 'Optional Worker Photo: shown alongside your name in test job orders.'
+              }
+            />
+
             <label className="flex items-start gap-2 cursor-pointer text-slate-700">
               <input
                 type="checkbox"
@@ -2087,21 +2355,29 @@ export const DemoTestingCenter: React.FC<DemoTestingCenterProps> = ({ onNavigate
                   const canDelete = Boolean(user && (u.ownerUid === user.uid || isAdmin));
                   return (
                     <div key={u.id} className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs">
-                      <div className="space-y-0.5">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-mono-tabular font-bold text-[#0B3B75]">{u.uniqueUserId}</span>
-                          <span className="px-1.5 py-0.5 rounded bg-amber-100 text-[#C25E00] font-bold text-[10px]">
-                            TEST-ONLY VERIFIED
-                          </span>
-                          {u.deviceLabel && (
-                            <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 font-semibold text-[10px]">
-                              {u.deviceLabel}
+                      <div className="flex items-start gap-3">
+                        <SecureAvatar
+                          name={u.displayName}
+                          photoDocId={u.photoDocId}
+                          sizeClass="w-10 h-10"
+                          textSizeClass="text-xs"
+                        />
+                        <div className="space-y-0.5">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-mono-tabular font-bold text-[#0B3B75]">{u.uniqueUserId}</span>
+                            <span className="px-1.5 py-0.5 rounded bg-amber-100 text-[#C25E00] font-bold text-[10px]">
+                              TEST-ONLY VERIFIED
                             </span>
-                          )}
-                        </div>
-                        <div className="font-semibold text-slate-900">{u.displayName}</div>
-                        <div className="text-slate-600">
-                          {u.role.toUpperCase()} · {u.category} · Mobile: <span className="font-mono-tabular">+91 {u.mobile10}</span> · GPS: {u.lat.toFixed(4)}, {u.lng.toFixed(4)}
+                            {u.deviceLabel && (
+                              <span className="px-1.5 py-0.5 rounded bg-slate-100 text-slate-700 font-semibold text-[10px]">
+                                {u.deviceLabel}
+                              </span>
+                            )}
+                          </div>
+                          <div className="font-semibold text-slate-900">{u.displayName}</div>
+                          <div className="text-slate-600">
+                            {u.role.toUpperCase()} · {u.category} · Mobile: <span className="font-mono-tabular">+91 {u.mobile10}</span> · GPS: {u.lat.toFixed(4)}, {u.lng.toFixed(4)}
+                          </div>
                         </div>
                       </div>
 

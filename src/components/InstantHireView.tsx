@@ -61,6 +61,7 @@ import type {
   WageUnit,
 } from '../types/domain';
 import { LocationPinModal } from './LocationPinModal';
+import { SecureAvatar } from './SecureAvatar';
 
 interface InstantHireViewProps {
   workers: PublicWorkerProfile[];
@@ -1204,11 +1205,19 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
                     </div>
 
                     <div className="flex items-start justify-between gap-3">
-                      <div className="min-w-0">
-                        <h2 className="font-display text-base font-bold text-[#0B3B75] truncate">
-                          {w.displayName}
-                        </h2>
-                        <p className="text-xs font-semibold text-[#C25E00] truncate">{w.primarySkill}</p>
+                      <div className="flex items-center gap-3 min-w-0">
+                        <SecureAvatar
+                          name={w.displayName}
+                          photoDocId={w.photoDocId}
+                          sizeClass="w-11 h-11"
+                          textSizeClass="text-sm"
+                        />
+                        <div className="min-w-0">
+                          <h2 className="font-display text-base font-bold text-[#0B3B75] truncate">
+                            {w.displayName}
+                          </h2>
+                          <p className="text-xs font-semibold text-[#C25E00] truncate">{w.primarySkill}</p>
+                        </div>
                       </div>
                       <div className="text-right shrink-0">
                         <div className="font-mono-tabular text-base font-extrabold text-[#15803D]">
@@ -1439,12 +1448,20 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
                     <div className="divide-y divide-slate-200">
                       {selectedWorkers.map((w) => (
                         <div key={w.id} className="py-1.5 flex items-center justify-between gap-2 text-xs">
-                          <div>
-                            <span className="font-bold text-slate-800">{w.displayName}</span>
-                            <span className="text-slate-500">
-                              {' '}
-                              · {w.primarySkill} · ₹{w.expectedWage}/{w.wageUnit}
-                            </span>
+                          <div className="flex items-center gap-2 min-w-0">
+                            <SecureAvatar
+                              name={w.displayName}
+                              photoDocId={w.photoDocId}
+                              sizeClass="w-7 h-7"
+                              textSizeClass="text-[10px]"
+                            />
+                            <div className="truncate">
+                              <span className="font-bold text-slate-800">{w.displayName}</span>
+                              <span className="text-slate-500">
+                                {' '}
+                                · {w.primarySkill} · ₹{w.expectedWage}/{w.wageUnit}
+                              </span>
+                            </div>
                           </div>
                           <button
                             type="button"

@@ -12,6 +12,7 @@ import type {
   PublicWorkerProfile,
   WageUnit,
 } from '../types/domain';
+import { SecureAvatar } from './SecureAvatar';
 
 interface FindWorkViewProps {
   jobs: JobPosting[];
@@ -98,6 +99,7 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
         workerRegistrationId: workerProfile.registrationId,
         workerName: workerProfile.displayName,
         workerPrimarySkill: workerProfile.primarySkill,
+        ...(workerProfile.photoDocId ? { workerPhotoDocId: workerProfile.photoDocId } : {}),
         proposedWage: numericWage,
         note: applyNote.trim().slice(0, 600),
       });
@@ -502,12 +504,20 @@ export const FindWorkersView: React.FC<FindWorkersViewProps> = ({ workers, onNav
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {filtered.map((w) => (
             <div key={w.id} className="bg-white border border-slate-200 rounded-lg p-5 space-y-3">
-              <div className="flex items-start justify-between gap-2">
-                <div>
-                  <p className="text-xs font-mono-tabular text-slate-500">{w.registrationId}</p>
-                  <h2 className="font-display text-base font-bold text-[#0B3B75]">{w.displayName}</h2>
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex items-center gap-3 min-w-0">
+                  <SecureAvatar
+                    name={w.displayName}
+                    photoDocId={w.photoDocId}
+                    sizeClass="w-11 h-11"
+                    textSizeClass="text-sm"
+                  />
+                  <div className="min-w-0">
+                    <p className="text-xs font-mono-tabular text-slate-500 truncate">{w.registrationId}</p>
+                    <h2 className="font-display text-base font-bold text-[#0B3B75] truncate">{w.displayName}</h2>
+                  </div>
                 </div>
-                <span className="text-xs font-semibold text-[#15803D]">
+                <span className="text-xs font-semibold text-[#15803D] shrink-0">
                   {w.verificationStatus === 'verified' ? t.common.verified : t.common.pending}
                 </span>
               </div>

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   BellRing,
@@ -24,6 +24,7 @@ import {
   Zap,
 } from 'lucide-react';
 import { RojgarSetuLogo } from './RojgarSetuLogo';
+import { SecureAvatar } from './SecureAvatar';
 import { UserNotificationCenter } from './UserNotificationCenter';
 import { AdminNotificationDemoPanel } from './AdminNotificationDemoPanel';
 import { AdminDemoOversightPanel } from './AdminDemoOversightPanel';
@@ -33,6 +34,12 @@ import { getVehicleTypeLabel } from '../data/vehicleTypes';
 import { useLanguage } from '../i18n/LanguageContext';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { detectBestGpsLocation } from '../lib/locationService';
+import {
+  buildAcceptedApplicationGrantId,
+  buildCustomerPhotoDocId,
+  grantAcceptedCustomerPhoto,
+  isCustomerPhotoVisibleForJobStatus,
+} from '../lib/photoStorageService';
 import {
   adminCreateAnnouncement,
   adminToggleAnnouncement,
@@ -432,33 +439,41 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
     <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-8">
       {/* Header & Registration Card */}
       <div className="bg-white border border-slate-200 rounded-lg p-6 sm:p-8 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-        <div className="space-y-2">
-          <p className="text-xs font-mono-tabular font-semibold text-[#C25E00]">
-            {t.workerForm.uniqueIdLabel}: {workerProfile.registrationId} · {t.dashboards.profileStatus}:{' '}
-            <span
-              className={
-                workerProfile.verificationStatus === 'verified'
-                  ? 'text-[#15803D]'
-                  : workerProfile.verificationStatus === 'suspended'
-                  ? 'text-red-700'
-                  : 'text-amber-700'
-              }
-            >
-              {verStatusLabel}
-            </span>
-          </p>
-          <h1 className="font-display text-2xl sm:text-3xl font-bold text-[#0B3B75]">
-            {workerProfile.displayName}
-          </h1>
-          <p className="text-sm text-slate-600">
-            {workerProfile.primarySkill} · {workerProfile.cityOrVillage}, {workerProfile.district}, {workerProfile.state} ·{' '}
-            <span className="font-mono-tabular font-semibold text-[#0B3B75]">
-              ₹{workerProfile.expectedWage.toLocaleString('en-IN')} / {workerProfile.wageUnit}
-            </span>
-          </p>
-          <p className="text-xs text-slate-500">
-            {tr(lang, 'Skills', 'कौशल', 'कौशल्ये')}: {workerProfile.skills.join(' · ')}
-          </p>
+        <div className="flex items-start gap-4">
+          <SecureAvatar
+            name={workerProfile.displayName}
+            photoDocId={workerProfile.photoDocId || workerPrivate?.photoDocId}
+            sizeClass="w-16 h-16"
+            textSizeClass="text-xl"
+          />
+          <div className="space-y-2">
+            <p className="text-xs font-mono-tabular font-semibold text-[#C25E00]">
+              {t.workerForm.uniqueIdLabel}: {workerProfile.registrationId} · {t.dashboards.profileStatus}:{' '}
+              <span
+                className={
+                  workerProfile.verificationStatus === 'verified'
+                    ? 'text-[#15803D]'
+                    : workerProfile.verificationStatus === 'suspended'
+                    ? 'text-red-700'
+                    : 'text-amber-700'
+                }
+              >
+                {verStatusLabel}
+              </span>
+            </p>
+            <h1 className="font-display text-2xl sm:text-3xl font-bold text-[#0B3B75]">
+              {workerProfile.displayName}
+            </h1>
+            <p className="text-sm text-slate-600">
+              {workerProfile.primarySkill} · {workerProfile.cityOrVillage}, {workerProfile.district}, {workerProfile.state} ·{' '}
+              <span className="font-mono-tabular font-semibold text-[#0B3B75]">
+                ₹{workerProfile.expectedWage.toLocaleString('en-IN')} / {workerProfile.wageUnit}
+              </span>
+            </p>
+            <p className="text-xs text-slate-500">
+              {tr(lang, 'Skills', 'कौशल', 'कौशल्ये')}: {workerProfile.skills.join(' · ')}
+            </p>
+          </div>
         </div>
 
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
@@ -583,24 +598,32 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
               </div>
             </div>
           </div>
-          <div className="p-4 sm:p-5 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-            <div>
-              <div className="text-slate-500 font-medium">{tr(lang, 'Name', 'नाम', 'नाव')}</div>
-              <div className="font-display text-sm font-bold text-[#0B3B75] mt-0.5">{workerProfile.displayName}</div>
-            </div>
-            <div>
-              <div className="text-slate-500 font-medium">{tr(lang, 'Primary Skill', 'मुख्य कौशल', 'मुख्य कौशल्य')}</div>
-              <div className="font-semibold text-slate-800 mt-0.5">{workerProfile.primarySkill}</div>
-            </div>
-            <div>
-              <div className="text-slate-500 font-medium">{tr(lang, 'District & State', 'जिला व राज्य', 'जिल्हा व राज्य')}</div>
-              <div className="font-semibold text-slate-800 mt-0.5">
-                {workerProfile.cityOrVillage}, {workerProfile.district}, {workerProfile.state}
+          <div className="p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center gap-4">
+            <SecureAvatar
+              name={workerProfile.displayName}
+              photoDocId={workerProfile.photoDocId || workerPrivate?.photoDocId}
+              sizeClass="w-16 h-16"
+              textSizeClass="text-lg"
+            />
+            <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs w-full">
+              <div>
+                <div className="text-slate-500 font-medium">{tr(lang, 'Name', 'नाम', 'नाव')}</div>
+                <div className="font-display text-sm font-bold text-[#0B3B75] mt-0.5">{workerProfile.displayName}</div>
               </div>
-            </div>
-            <div>
-              <div className="text-slate-500 font-medium">{t.dashboards.profileStatus}</div>
-              <div className="font-semibold text-[#15803D] mt-0.5">{verStatusLabel}</div>
+              <div>
+                <div className="text-slate-500 font-medium">{tr(lang, 'Primary Skill', 'मुख्य कौशल', 'मुख्य कौशल्य')}</div>
+                <div className="font-semibold text-slate-800 mt-0.5">{workerProfile.primarySkill}</div>
+              </div>
+              <div>
+                <div className="text-slate-500 font-medium">{tr(lang, 'District & State', 'जिला व राज्य', 'जिल्हा व राज्य')}</div>
+                <div className="font-semibold text-slate-800 mt-0.5">
+                  {workerProfile.cityOrVillage}, {workerProfile.district}, {workerProfile.state}
+                </div>
+              </div>
+              <div>
+                <div className="text-slate-500 font-medium">{t.dashboards.profileStatus}</div>
+                <div className="font-semibold text-[#15803D] mt-0.5">{verStatusLabel}</div>
+              </div>
             </div>
           </div>
           <div className="px-4 sm:px-5 py-2 bg-[#072A54] text-[10px] text-blue-100 flex items-center justify-between">
@@ -637,6 +660,31 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
                   </p>
                   <h3 className="font-display text-base font-bold text-[#0B3B75]">{app.jobTitle}</h3>
                   {app.note && <p className="text-xs text-slate-600">{app.note}</p>}
+                  {isCustomerPhotoVisibleForJobStatus(app.status) ? (
+                    <div className="mt-1.5 inline-flex items-center gap-2 px-2.5 py-1 rounded bg-blue-50 border border-blue-200 text-[11px]">
+                      <SecureAvatar
+                        name="Customer"
+                        acceptedGrantId={buildAcceptedApplicationGrantId(app.id)}
+                        sizeClass="w-7 h-7"
+                        textSizeClass="text-[10px]"
+                      />
+                      <span className="font-semibold text-[#0B3B75]">
+                        {tr(lang, 'Customer Photo (Accepted Job)', 'ग्राहक फोटो (स्वीकृत कार्य)', 'ग्राहक फोटो (मंजूर काम)')}
+                      </span>
+                    </div>
+                  ) : (
+                    <p className="text-[11px] text-slate-500 flex items-center gap-1 pt-0.5">
+                      <Lock className="w-3 h-3" />
+                      <span>
+                        {tr(
+                          lang,
+                          'Customer photo stays hidden unless job is accepted',
+                          'काम स्वीकार होने तक ग्राहक फोटो गोपनीय रहती है',
+                          'काम मंजूर होईपर्यंत ग्राहकाचा फोटो गोपनीय राहतो'
+                        )}
+                      </span>
+                    </p>
+                  )}
                   {app.status === 'work_completed' && (
                     <p className="text-xs text-[#15803D] font-medium inline-flex items-center gap-1">
                       <Star className="w-3.5 h-3.5" />
@@ -847,7 +895,7 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
   onNavigateToTarget,
 }) => {
   const { lang, t } = useLanguage();
-  const { user, employerProfile, customerPreference, signInWithGoogle } = useAuth();
+  const { user, employerProfile, employerPrivate, customerPreference, signInWithGoogle } = useAuth();
   const [applications, setApplications] = useState<JobApplication[]>([]);
   const [customerVehicleBookings, setCustomerVehicleBookings] = useState<VehicleBooking[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -856,6 +904,7 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
   const [feedbackVal, setFeedbackVal] = useState('');
   const [gpsUpdating, setGpsUpdating] = useState(false);
   const [locNotice, setLocNotice] = useState('');
+  const syncedPhotoGrantsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!user?.emailVerified) {
@@ -870,6 +919,28 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
       u2();
     };
   }, [user?.uid, user?.emailVerified]);
+
+  // Idempotently grant accepted workers access to customer's private photo (including worker-accepted invites)
+  useEffect(() => {
+    if (!user?.emailVerified || !employerPrivate?.photoDocId) return;
+    const customerPhotoDocId = employerPrivate.photoDocId;
+    for (const app of applications) {
+      if (isCustomerPhotoVisibleForJobStatus(app.status)) {
+        const key = `${app.id}:${customerPhotoDocId}:${app.workerUid}`;
+        if (syncedPhotoGrantsRef.current.has(key)) continue;
+        syncedPhotoGrantsRef.current.add(key);
+        void grantAcceptedCustomerPhoto({
+          customerUid: user.uid,
+          workerUid: app.workerUid,
+          sourceType: 'job_application',
+          sourceId: app.id,
+          customerPhotoDocId,
+        }).catch(() => {
+          syncedPhotoGrantsRef.current.delete(key);
+        });
+      }
+    }
+  }, [user?.uid, user?.emailVerified, employerPrivate?.photoDocId, applications]);
 
   const myJobs = useMemo(
     () => (user ? jobs.filter((j) => j.employerUid === user.uid) : []),
@@ -958,7 +1029,17 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
   const handleStatusDecision = async (app: JobApplication, status: 'accepted' | 'declined') => {
     setBusyId(app.id);
     try {
-      await updateApplicationByEmployer(app.id, { status });
+      await updateApplicationByEmployer(
+        app.id,
+        { status },
+        user && employerPrivate?.photoDocId
+          ? {
+              customerUid: user.uid,
+              workerUid: app.workerUid,
+              customerPhotoDocId: employerPrivate.photoDocId,
+            }
+          : undefined
+      );
       void callNotificationApi('/api/notifications/send-customer-event', {
         recipientUid: app.workerUid,
         eventType: status === 'accepted' ? 'booking_accepted' : 'booking_cancelled',
@@ -976,11 +1057,21 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
     e.preventDefault();
     setBusyId(app.id);
     try {
-      await updateApplicationByEmployer(app.id, {
-        status: 'work_completed',
-        workerRating: ratingVal,
-        ...(feedbackVal.trim() ? { employerFeedback: feedbackVal.trim() } : {}),
-      });
+      await updateApplicationByEmployer(
+        app.id,
+        {
+          status: 'work_completed',
+          workerRating: ratingVal,
+          ...(feedbackVal.trim() ? { employerFeedback: feedbackVal.trim() } : {}),
+        },
+        user && employerPrivate?.photoDocId
+          ? {
+              customerUid: user.uid,
+              workerUid: app.workerUid,
+              customerPhotoDocId: employerPrivate.photoDocId,
+            }
+          : undefined
+      );
       void callNotificationApi('/api/notifications/send-customer-event', {
         recipientUid: app.workerUid,
         eventType: 'job_completed',
@@ -1256,35 +1347,43 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
       </section>
 
       <div className="bg-white border border-slate-200 rounded-lg p-6 sm:p-8 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-        <div className="space-y-1.5">
-          <p className="text-xs font-mono-tabular font-semibold text-[#C25E00]">
-            {employerProfile ? `ID: ${employerProfile.registrationId} · ` : ''}
-            {t.dashboards.profileStatus}:{' '}
-            <span
-              className={
-                employerProfile?.verificationStatus === 'verified'
-                  ? 'text-[#15803D]'
-                  : employerProfile?.verificationStatus === 'suspended'
-                  ? 'text-red-700'
-                  : 'text-amber-700'
-              }
-            >
-              {verStatusLabel}
-            </span>
-          </p>
-          <h1 className="font-display text-2xl sm:text-3xl font-bold text-[#0B3B75]">
-            {employerProfile?.businessName || user.displayName || user.email}
-          </h1>
-          <p className="text-sm text-slate-600">
-            {employerProfile
-              ? `${employerProfile.businessType} · ${employerProfile.industryCategory} · ${employerProfile.district}, ${employerProfile.state}`
-              : tr(
-                  lang,
-                  'Instant Hire Customer · Active Bookings & Worker Responses',
-                  'त्वरित हायर ग्राहक · सक्रिय बुकिंग एवं कामगार प्रतिक्रिया',
-                  'तात्काळ हायर ग्राहक · सक्रिय बुकिंग व कामगारांचे प्रतिसाद'
-                )}
-          </p>
+        <div className="flex items-start gap-4">
+          <SecureAvatar
+            name={employerProfile?.businessName || user.displayName || 'Customer'}
+            photoDocId={employerPrivate?.photoDocId}
+            sizeClass="w-16 h-16"
+            textSizeClass="text-xl"
+          />
+          <div className="space-y-1.5">
+            <p className="text-xs font-mono-tabular font-semibold text-[#C25E00]">
+              {employerProfile ? `ID: ${employerProfile.registrationId} · ` : ''}
+              {t.dashboards.profileStatus}:{' '}
+              <span
+                className={
+                  employerProfile?.verificationStatus === 'verified'
+                    ? 'text-[#15803D]'
+                    : employerProfile?.verificationStatus === 'suspended'
+                    ? 'text-red-700'
+                    : 'text-amber-700'
+                }
+              >
+                {verStatusLabel}
+              </span>
+            </p>
+            <h1 className="font-display text-2xl sm:text-3xl font-bold text-[#0B3B75]">
+              {employerProfile?.businessName || user.displayName || user.email}
+            </h1>
+            <p className="text-sm text-slate-600">
+              {employerProfile
+                ? `${employerProfile.businessType} · ${employerProfile.industryCategory} · ${employerProfile.district}, ${employerProfile.state}`
+                : tr(
+                    lang,
+                    'Instant Hire Customer · Active Bookings & Worker Responses',
+                    'त्वरित हायर ग्राहक · सक्रिय बुकिंग एवं कामगार प्रतिक्रिया',
+                    'तात्काळ हायर ग्राहक · सक्रिय बुकिंग व कामगारांचे प्रतिसाद'
+                  )}
+            </p>
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
@@ -1312,6 +1411,15 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
             <PlusCircle className="w-4 h-4" />
             {employerProfile ? t.jobs.postTitle : t.nav.employerReg}
           </button>
+          {employerProfile && (
+            <button
+              type="button"
+              onClick={() => onNavigate('register-employer')}
+              className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-md border border-slate-300 bg-white text-xs font-semibold text-[#0B3B75] hover:bg-slate-50 cursor-pointer"
+            >
+              {tr(lang, 'Update Profile / Photo', 'प्रोफ़ाइल / फोटो बदलें', 'प्रोफाईल / फोटो बदला')}
+            </button>
+          )}
           <button
             type="button"
             onClick={handleExportEmployerReport}
@@ -1367,26 +1475,34 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
               </div>
             </div>
           </div>
-          <div className="p-4 sm:p-5 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-            <div>
-              <div className="text-slate-500 font-medium">{tr(lang, 'Organisation / Business', 'संस्था / व्यवसाय', 'संस्था / व्यवसाय')}</div>
-              <div className="font-display text-sm font-bold text-[#0B3B75] mt-0.5">{employerProfile.businessName}</div>
-            </div>
-            <div>
-              <div className="text-slate-500 font-medium">{tr(lang, 'Category', 'श्रेणी', 'श्रेणी')}</div>
-              <div className="font-semibold text-slate-800 mt-0.5">
-                {employerProfile.businessType} · {employerProfile.industryCategory}
+          <div className="p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center gap-4">
+            <SecureAvatar
+              name={employerProfile.businessName}
+              photoDocId={employerPrivate?.photoDocId}
+              sizeClass="w-14 h-14"
+              textSizeClass="text-base"
+            />
+            <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs w-full">
+              <div>
+                <div className="text-slate-500 font-medium">{tr(lang, 'Organisation / Business', 'संस्था / व्यवसाय', 'संस्था / व्यवसाय')}</div>
+                <div className="font-display text-sm font-bold text-[#0B3B75] mt-0.5">{employerProfile.businessName}</div>
               </div>
-            </div>
-            <div>
-              <div className="text-slate-500 font-medium">{tr(lang, 'Location', 'स्थान', 'ठिकाण')}</div>
-              <div className="font-semibold text-slate-800 mt-0.5">
-                {employerProfile.district}, {employerProfile.state}
+              <div>
+                <div className="text-slate-500 font-medium">{tr(lang, 'Category', 'श्रेणी', 'श्रेणी')}</div>
+                <div className="font-semibold text-slate-800 mt-0.5">
+                  {employerProfile.businessType} · {employerProfile.industryCategory}
+                </div>
               </div>
-            </div>
-            <div>
-              <div className="text-slate-500 font-medium">{t.dashboards.profileStatus}</div>
-              <div className="font-semibold text-[#15803D] mt-0.5">{verStatusLabel}</div>
+              <div>
+                <div className="text-slate-500 font-medium">{tr(lang, 'Location', 'स्थान', 'ठिकाण')}</div>
+                <div className="font-semibold text-slate-800 mt-0.5">
+                  {employerProfile.district}, {employerProfile.state}
+                </div>
+              </div>
+              <div>
+                <div className="text-slate-500 font-medium">{t.dashboards.profileStatus}</div>
+                <div className="font-semibold text-[#15803D] mt-0.5">{verStatusLabel}</div>
+              </div>
             </div>
           </div>
           <div className="px-4 sm:px-5 py-2 bg-[#072A54] text-[10px] text-blue-100 flex items-center justify-between">
@@ -1459,14 +1575,21 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
             {applications.map((app) => (
               <div key={app.id} className="py-4 space-y-3">
                 <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                  <div className="space-y-1">
-                    <p className="text-xs font-mono-tabular text-slate-500">
-                      {app.workerRegistrationId} · {app.workerPrimarySkill} ·{' '}
-                      <strong className="uppercase text-[#0B3B75]">{app.status}</strong>
-                    </p>
-                    <h3 className="font-display text-base font-bold text-[#0B3B75]">
-                      {app.workerName} — {app.jobTitle}
-                    </h3>
+                  <div className="flex items-start gap-3">
+                    <SecureAvatar
+                      name={app.workerName}
+                      photoDocId={app.workerPhotoDocId}
+                      sizeClass="w-11 h-11"
+                      textSizeClass="text-sm"
+                    />
+                    <div className="space-y-1">
+                      <p className="text-xs font-mono-tabular text-slate-500">
+                        {app.workerRegistrationId} · {app.workerPrimarySkill} ·{' '}
+                        <strong className="uppercase text-[#0B3B75]">{app.status}</strong>
+                      </p>
+                      <h3 className="font-display text-base font-bold text-[#0B3B75]">
+                        {app.workerName} — {app.jobTitle}
+                      </h3>
                     <p className="text-xs text-slate-600">
                       {t.jobs.proposedWageLabel}:{' '}
                       <strong className="font-mono-tabular text-[#15803D]">
@@ -1482,6 +1605,7 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
                           : tr(lang, 'Worker location sharing is off (privacy default)', 'कामगार लोकेशन साझाकरण बंद है', 'कामगार लोकेशन शेअरिंग बंद आहे')}
                       </p>
                     )}
+                    </div>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2">
@@ -1906,7 +2030,17 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
                   {workers.map((w) => (
                     <tr key={w.id}>
                       <td className="py-3 pr-4 font-mono-tabular text-xs">{w.registrationId}</td>
-                      <td className="py-3 pr-4 font-semibold text-[#0B3B75]">{w.displayName}</td>
+                      <td className="py-3 pr-4 font-semibold text-[#0B3B75]">
+                        <div className="flex items-center gap-2.5">
+                          <SecureAvatar
+                            name={w.displayName}
+                            photoDocId={w.photoDocId}
+                            sizeClass="w-8 h-8"
+                            textSizeClass="text-[11px]"
+                          />
+                          <span>{w.displayName}</span>
+                        </div>
+                      </td>
                       <td className="py-3 pr-4 text-slate-600">{w.primarySkill}</td>
                       <td className="py-3 pr-4 text-slate-600">{w.district}, {w.state}</td>
                       <td className="py-3 pr-4 font-semibold uppercase text-xs">{w.verificationStatus}</td>
@@ -2000,7 +2134,17 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
                   {employers.map((emp) => (
                     <tr key={emp.id}>
                       <td className="py-3 pr-4 font-mono-tabular text-xs">{emp.registrationId}</td>
-                      <td className="py-3 pr-4 font-semibold text-[#0B3B75]">{emp.businessName}</td>
+                      <td className="py-3 pr-4 font-semibold text-[#0B3B75]">
+                        <div className="flex items-center gap-2.5">
+                          <SecureAvatar
+                            name={emp.businessName}
+                            photoDocId={buildCustomerPhotoDocId(emp.ownerUid)}
+                            sizeClass="w-8 h-8"
+                            textSizeClass="text-[11px]"
+                          />
+                          <span>{emp.businessName}</span>
+                        </div>
+                      </td>
                       <td className="py-3 pr-4 text-slate-600">{emp.industryCategory}</td>
                       <td className="py-3 pr-4 text-slate-600">{emp.district}, {emp.state}</td>
                       <td className="py-3 pr-4 font-semibold uppercase text-xs">{emp.verificationStatus}</td>

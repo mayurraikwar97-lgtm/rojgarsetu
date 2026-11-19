@@ -6,11 +6,18 @@ import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../i18n/LanguageContext';
 import { saveWorkerRegistration } from '../lib/firestoreService';
 import { detectBestGpsLocation } from '../lib/locationService';
-import type { PageRoute, WageUnit, WorkType } from '../types/domain';
+import {
+  buildWorkerPhotoDocId,
+  deleteProfilePhotoRecord,
+  uploadProfilePhotoRecord,
+} from '../lib/photoStorageService';
+import type { PageRoute, VerificationMethod, WageUnit, WorkType } from '../types/domain';
 import { LocationPinModal } from './LocationPinModal';
 import { NotificationOptInButton } from './NotificationOptInButton';
 import { OtpVerificationBox } from './OtpVerificationBox';
+import { ProfilePhotoUploader, type SelectedProfilePhoto } from './ProfilePhotoUploader';
 import { PWAInstallButton } from './PWAControls';
+import { SecureAvatar } from './SecureAvatar';
 
 interface WorkerRegistrationFormProps {
   onNavigate: (route: PageRoute) => void;
@@ -23,6 +30,8 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({ 
   const [fullName, setFullName] = useState('');
   const [mobile, setMobile] = useState('');
   const [mobileVerified, setMobileVerified] = useState(false);
+  const [verificationMethod, setVerificationMethod] = useState<VerificationMethod | undefined>(undefined);
+  const [testPinHash, setTestPinHash] = useState('');
   const [email, setEmail] = useState('');
   const [stateName, setStateName] = useState('Chhattisgarh');
   const [districtName, setDistrictName] = useState('Narayanpur (Abujhmad)');
@@ -30,6 +39,8 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({ 
   const [approxLat, setApproxLat] = useState<number>(19.7176);
   const [approxLng, setApproxLng] = useState<number>(81.2468);
   const [photoUrl, setPhotoUrl] = useState('');
+  const [selectedPhoto, setSelectedPhoto] = useState<SelectedProfilePhoto | null>(null);
+  const [removePhoto, setRemovePhoto] = useState(false);
   const [gender, setGender] = useState<'female' | 'male' | 'other' | 'prefer_not_to_say'>('prefer_not_to_say');
   const [ageConfirmed, setAgeConfirmed] = useState(false);
   const [education, setEducation] = useState('10th / Secondary');
@@ -61,6 +72,8 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({ 
       setFullName(workerPrivate.fullName || workerProfile.displayName);
       setMobile(workerPrivate.mobile || '');
       setMobileVerified(workerPrivate.mobileVerified);
+      setVerificationMethod(workerPrivate.verificationMethod);
+      setTestPinHash(workerPrivate.testPinHash || '');
       setEmail(workerPrivate.email || '');
       setStateName(workerProfile.state);
       setDistrictName(workerProfile.district);
@@ -193,6 +206,26 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({ 
 
     setSaving(true);
     try {
+      const existingPhotoId = workerProfile?.photoDocId || workerPrivate?.photoDocId || '';
+      let resolvedPhotoDocId: string | undefined = existingPhotoId || undefined;
+
+      if (selectedPhoto) {
+        const photoId = buildWorkerPhotoDocId(user.uid);
+        await uploadProfilePhotoRecord({
+          photoId,
+          ownerUid: user.uid,
+          subjectId: user.uid,
+          role: 'worker',
+          mimeType: selectedPhoto.mimeType,
+          sizeBytes: selectedPhoto.sizeBytes,
+          photoData: selectedPhoto.photoData,
+        });
+        resolvedPhotoDocId = photoId;
+      } else if (removePhoto && existingPhotoId) {
+        await deleteProfilePhotoRecord(existingPhotoId);
+        resolvedPhotoDocId = workerProfile ? '' : undefined;
+      }
+
       await saveWorkerRegistration(
         user.uid,
         Boolean(workerProfile),
@@ -217,6 +250,7 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({ 
           education: education.trim().slice(0, 100),
           verificationStatus: workerProfile?.verificationStatus || 'pending',
           isWomenEnterprise: gender === 'female',
+          ...(resolvedPhotoDocId !== undefined ? { photoDocId: resolvedPhotoDocId } : {}),
           completedJobsCount: workerProfile?.completedJobsCount || 0,
           ratingAvg: workerProfile?.ratingAvg || 0,
         },
@@ -225,6 +259,8 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({ 
           fullName: fullName.trim().slice(0, 120),
           mobile: mobile.trim(),
           mobileVerified,
+          ...(verificationMethod ? { verificationMethod } : {}),
+          ...(testPinHash ? { testPinHash } : {}),
           email: email.trim().slice(0, 200),
           ageConfirmed,
           preferredWorkLocation: preferredWorkLocation.trim().slice(0, 160),
@@ -233,9 +269,12 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({ 
           idVerificationStatus,
           certificateNotes: certificateNotes.trim().slice(0, 500),
           photoUrl: photoUrl.trim().slice(0, 1000),
+          ...(resolvedPhotoDocId !== undefined ? { photoDocId: resolvedPhotoDocId } : {}),
         }
       );
 
+      setSelectedPhoto(null);
+      setRemovePhoto(false);
       await refreshUserProfiles();
       setSavedId(regId);
       setShowSuccessScreen(true);
@@ -291,11 +330,18 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({ 
 
           <div className="p-6 space-y-5">
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 bg-slate-50 border border-slate-200 rounded-lg p-4 text-xs sm:text-sm">
-              <div>
-                <div className="text-slate-500 text-xs font-medium">
-                  {lang === 'hi' ? 'कामगार नाम' : lang === 'mr' ? 'कामगार नाव' : 'Worker Name'}
+              <div className="flex items-center gap-3">
+                <SecureAvatar
+                  name={fullName || 'Worker'}
+                  photoDocId={workerProfile?.photoDocId || workerPrivate?.photoDocId}
+                  sizeClass="w-12 h-12"
+                />
+                <div>
+                  <div className="text-slate-500 text-xs font-medium">
+                    {lang === 'hi' ? 'कामगार नाम' : lang === 'mr' ? 'कामगार नाव' : 'Worker Name'}
+                  </div>
+                  <div className="font-bold text-[#0B3B75] mt-0.5">{fullName}</div>
                 </div>
-                <div className="font-bold text-[#0B3B75] mt-0.5">{fullName}</div>
               </div>
               <div>
                 <div className="text-slate-500 text-xs font-medium">{t.workerForm.uniqueIdLabel}</div>
@@ -411,11 +457,16 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({ 
             onMobileChange={(v) => {
               setMobile(v);
               setMobileVerified(false);
+              setVerificationMethod(undefined);
+              setTestPinHash('');
             }}
             verified={mobileVerified}
-            onVerified={(m) => {
+            verifiedMethod={verificationMethod}
+            onVerified={(m, meta) => {
               setMobile(m);
               setMobileVerified(true);
+              setVerificationMethod(meta?.method);
+              setTestPinHash(meta?.testPinHash || '');
             }}
           />
         </div>
@@ -552,16 +603,27 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({ 
             </select>
           </div>
 
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">
-              {t.workerForm.photoOpt}
-            </label>
-            <input
-              type="url"
-              value={photoUrl}
-              onChange={(e) => setPhotoUrl(e.target.value)}
-              placeholder="https://..."
-              className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
+          <div className="sm:col-span-3">
+            <ProfilePhotoUploader
+              existingPhotoDocId={workerProfile?.photoDocId || workerPrivate?.photoDocId}
+              selectedPhoto={selectedPhoto}
+              removedExisting={removePhoto}
+              onSelectPhoto={(photo) => {
+                setSelectedPhoto(photo);
+                setRemovePhoto(false);
+              }}
+              onRemovePhoto={() => {
+                setSelectedPhoto(null);
+                setRemovePhoto(true);
+              }}
+              roleLabel={t.workerForm.photoOpt}
+              privacyNote={
+                lang === 'hi'
+                  ? 'फ़ोटो वैकल्पिक है। प्रोफ़ाइल फ़ोटो केवल पंजीकृत ग्राहकों और एडमिन को काम की खोज में दिखाई देती है।'
+                  : lang === 'mr'
+                    ? 'फोटो ऐच्छिक आहे. तुमचा फोटो शोध परिणामांत आणि कामाच्या अर्जावर नोंदणीकृत ग्राहकांना दिसेल.'
+                    : 'Optional. Your photo helps customers recognize you in worker search results and job applications.'
+              }
             />
           </div>
         </div>

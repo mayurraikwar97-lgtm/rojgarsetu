@@ -1,5 +1,6 @@
 import {
   collection,
+  deleteField,
   doc,
   getDoc,
   getDocs,
@@ -16,6 +17,11 @@ import { calculateDistanceKm } from '../data/indiaLocations';
 import { getFirebaseVapidKey } from './appConfig';
 import { db, handleFirestoreError, OperationType } from './firebase';
 import { callNotificationApi } from './firestoreService';
+import {
+  deleteProfilePhotoRecord,
+  grantAcceptedCustomerPhoto,
+} from './photoStorageService';
+import { hashTestPin, normalizeTenDigitIndianMobile } from './pinAuth';
 import type {
   DemoLiveLocationShare,
   DemoLocationPermissionStatus,
@@ -39,6 +45,8 @@ export function isDemoModeEnvEnabled(): boolean {
   return true;
 }
 
+export { hashTestPin };
+
 export function sanitizeIndianMobile10(raw: string): string {
   const digits = raw.replace(/\D/g, '');
   if (digits.length === 12 && digits.startsWith('91')) return digits.slice(2);
@@ -47,26 +55,9 @@ export function sanitizeIndianMobile10(raw: string): string {
 }
 
 export function maskIndianMobile(mobile10: string): string {
-  const clean = sanitizeIndianMobile10(mobile10);
+  const clean = normalizeTenDigitIndianMobile(mobile10);
   if (clean.length !== 10) return '+91 XXXXXXXXXX';
   return `+91 ${clean.slice(0, 2)}XXXX${clean.slice(6)}`;
-}
-
-export async function hashTestPin(mobile10: string, pin: string): Promise<string> {
-  const cleanPin = pin.trim() || '1234';
-  const payload = `rojgar_setu_demo:${mobile10}:${cleanPin}`;
-  if (typeof window !== 'undefined' && window.crypto?.subtle) {
-    const encoded = new TextEncoder().encode(payload);
-    const digest = await window.crypto.subtle.digest('SHA-256', encoded);
-    return Array.from(new Uint8Array(digest))
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('');
-  }
-  let hash = 0;
-  for (let i = 0; i < payload.length; i += 1) {
-    hash = (hash * 31 + payload.charCodeAt(i)) >>> 0;
-  }
-  return `pin_${hash.toString(16)}`;
 }
 
 function makeUniqueDemoUserId(role: DemoUserRole, category: string): string {
@@ -320,6 +311,7 @@ export interface RegisterDemoUserInput {
   locationPermissionStatus: DemoLocationPermissionStatus;
   locationSource: DemoLocationSource;
   availabilityStatus?: 'available' | 'busy' | 'offline';
+  photoDocId?: string;
   pushEnabled?: boolean;
   fixedDocId?: string;
   fixedUniqueUserId?: string;
@@ -369,6 +361,7 @@ export async function registerDemoUser(input: RegisterDemoUserInput): Promise<De
     accuracyMeters: Math.max(0, Math.min(200000, Math.round(input.accuracyMeters || 50))),
     locationPermissionStatus: input.locationPermissionStatus,
     locationSource: input.locationSource,
+    ...(input.photoDocId ? { photoDocId: input.photoDocId } : {}),
     pushEnabled: Boolean(input.pushEnabled),
     isDemo: true as const,
     lastActiveAt: serverTimestamp(),
@@ -593,8 +586,27 @@ export async function deleteDemoUserAndReleaseMobile(user: DemoUserProfile): Pro
   batch.delete(regRef);
   try {
     await batch.commit();
+    if (user.photoDocId) {
+      await deleteProfilePhotoRecord(user.photoDocId);
+    }
   } catch (err) {
     handleFirestoreError(err, OperationType.DELETE, `demo_users/${user.id}`);
+  }
+}
+
+export async function updateDemoUserPhoto(
+  demoUserId: string,
+  photoDocId: string | null
+): Promise<void> {
+  const path = `demo_users/${demoUserId}`;
+  try {
+    await updateDoc(doc(db, 'demo_users', demoUserId), {
+      photoDocId: photoDocId ? photoDocId : deleteField(),
+      lastActiveAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
   }
 }
 
@@ -953,6 +965,7 @@ export async function respondToDemoWorkOrder(params: {
           acceptedWorkerOwnerUid: worker.ownerUid,
           acceptedWorkerName: worker.displayName.slice(0, 120),
           acceptedWorkerUniqueId: worker.uniqueUserId,
+          ...(worker.photoDocId ? { acceptedWorkerPhotoDocId: worker.photoDocId } : {}),
           updatedAt: serverTimestamp(),
         });
       } else {
@@ -1029,6 +1042,15 @@ export async function confirmDemoWorkOrder(params: {
   }
 
   await touchDemoUserLastActive(customer.id);
+  if (customer.photoDocId && worker?.ownerUid) {
+    await grantAcceptedCustomerPhoto({
+      customerUid: customer.ownerUid,
+      workerUid: worker.ownerUid,
+      sourceType: 'demo_work_order',
+      sourceId: order.id,
+      customerPhotoDocId: customer.photoDocId,
+    });
+  }
   if (!worker) return null;
 
   return dispatchDemoNotificationToUser({
@@ -1325,4 +1347,10 @@ export async function resetDemoTestingSandbox(
     batch.delete(doc(db, 'demo_notifications', n.id));
   }
   await batch.commit();
+  await Promise.allSettled(
+    users
+      .map((u) => u.photoDocId)
+      .filter((id): id is string => Boolean(id))
+      .map((photoId) => deleteProfilePhotoRecord(photoId))
+  );
 }

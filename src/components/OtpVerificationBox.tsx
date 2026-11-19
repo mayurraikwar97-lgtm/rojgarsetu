@@ -1,6 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertCircle, CheckCircle2, Clock, RefreshCw, Smartphone } from 'lucide-react';
+import {
+  AlertCircle,
+  CheckCircle2,
+  Clock,
+  Eye,
+  EyeOff,
+  KeyRound,
+  RefreshCw,
+  ShieldCheck,
+  Smartphone,
+} from 'lucide-react';
 import { useLanguage } from '../i18n/LanguageContext';
+import { isDemoModeEnvEnabled } from '../lib/demoService';
 import {
   isFirebasePhoneAuthEnvEnabled,
   mapFirebasePhoneError,
@@ -8,13 +19,26 @@ import {
   verifyFirebasePhoneOtp,
 } from '../lib/firebasePhoneOtp';
 import type { FirebasePhoneSession } from '../lib/firebasePhoneOtp';
-import type { Language } from '../types/domain';
+import {
+  hashTestPin,
+  normalizeTenDigitIndianMobile,
+  validateSecurityPin,
+} from '../lib/pinAuth';
+import type { Language, VerificationMethod } from '../types/domain';
+
+export interface OtpVerificationMeta {
+  method: VerificationMethod;
+  verificationProof?: string;
+  testPinHash?: string;
+}
 
 interface OtpVerificationBoxProps {
   mobile: string;
   onMobileChange: (value: string) => void;
   verified: boolean;
-  onVerified: (mobile: string, verificationProof?: string) => void;
+  onVerified: (mobile: string, meta?: OtpVerificationMeta) => void;
+  allowTestPinFallback?: boolean;
+  verifiedMethod?: VerificationMethod;
 }
 
 interface OtpConfigState {
@@ -22,17 +46,6 @@ interface OtpConfigState {
   smsProviderConfigured: boolean;
   firebasePhoneAuthEnabled: boolean;
   providerLabel?: string;
-}
-
-function normalizeTenDigitIndianMobile(input: string): string {
-  const digits = input.replace(/\D/g, '');
-  if (digits.length === 12 && digits.startsWith('91')) {
-    return digits.slice(2);
-  }
-  if (digits.length === 11 && digits.startsWith('0')) {
-    return digits.slice(1);
-  }
-  return digits.slice(0, 10);
 }
 
 function tr(lang: Language, en: string, hi: string, mr: string): string {
@@ -54,6 +67,8 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
   onMobileChange,
   verified,
   onVerified,
+  allowTestPinFallback = true,
+  verifiedMethod,
 }) => {
   const { lang, t } = useLanguage();
   const [challengeToken, setChallengeToken] = useState<string>('');
@@ -69,6 +84,14 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
     firebasePhoneAuthEnabled: isFirebasePhoneAuthEnvEnabled(),
   });
 
+  // Pre-launch Test PIN fallback states (active only when real SMS & Firebase Phone Auth are unconfigured)
+  const [pinInput, setPinInput] = useState<string>('');
+  const [confirmPinInput, setConfirmPinInput] = useState<string>('');
+  const [showPin, setShowPin] = useState<boolean>(false);
+  const [pinError, setPinError] = useState<string>('');
+  const [pinBusy, setPinBusy] = useState<boolean>(false);
+  const [forcePinFallback, setForcePinFallback] = useState<boolean>(false);
+
   const recaptchaRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -79,7 +102,10 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
         return safeParseJson(res);
       })
       .then((data) => {
-        if (!active || !data) return;
+        if (!active || !data) {
+          if (active) setOtpConfig((prev) => ({ ...prev, checked: true, smsProviderConfigured: false }));
+          return;
+        }
         setOtpConfig({
           checked: true,
           smsProviderConfigured: Boolean(data.smsProviderConfigured),
@@ -90,7 +116,7 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
       })
       .catch(() => {
         if (!active) return;
-        setOtpConfig((prev) => ({ ...prev, checked: true }));
+        setOtpConfig((prev) => ({ ...prev, checked: true, smsProviderConfigured: false }));
       });
     return () => {
       active = false;
@@ -109,6 +135,13 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
   const isValidIndianMobile = /^[6-9]\d{9}$/.test(cleanedMobile);
   const hasActiveChallenge = Boolean(challengeToken || firebaseSession);
 
+  const showTestPinMode =
+    allowTestPinFallback &&
+    isDemoModeEnvEnabled() &&
+    !verified &&
+    ((otpConfig.checked && !otpConfig.smsProviderConfigured && !otpConfig.firebasePhoneAuthEnabled) ||
+      forcePinFallback);
+
   const mapServerErrorToMessage = (
     status: number,
     data: Record<string, unknown> | null,
@@ -120,9 +153,9 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
     if (status === 404) {
       return tr(
         lang,
-        'SMS service temporarily unavailable. OTP API endpoint was not found on this deployment.',
-        'SMS सेवा अस्थायी रूप से अनुपलब्ध है। इस सर्वर पर OTP API उपलब्ध नहीं है।',
-        'SMS सेवा सध्या उपलब्ध नाही. या सर्व्हरवर OTP API एंडपॉइंट सापडला नाही.'
+        'SMS OTP endpoint unavailable on this deployment. You can use Pre-Launch Test PIN verification below.',
+        'इस सर्वर पर SMS OTP सेवा उपलब्ध नहीं है। आप नीचे दिए गए प्री-लॉन्च Test PIN से मोबाइल सत्यापित कर सकते हैं।',
+        'या सर्व्हरवर SMS OTP सेवा उपलब्ध नाही. तुम्ही खालील Pre-Launch Test PIN वापरून मोबाईल पडताळणी करू शकता.'
       );
     }
 
@@ -138,9 +171,9 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
       case 'SMS_GATEWAY_NOT_CONFIGURED':
         return tr(
           lang,
-          'SMS provider configuration missing. Real OTP SMS cannot be sent until a server SMS gateway (MSG91 / Fast2SMS / Twilio / DLT) or Firebase Phone Auth is configured.',
-          'SMS प्रदाता कॉन्फ़िगरेशन उपलब्ध नहीं है। जब तक सर्वर SMS गेटवे (MSG91 / Fast2SMS / Twilio / DLT) या Firebase Phone Auth सेट नहीं होता, असली OTP SMS नहीं भेजा जा सकता।',
-          'SMS प्रदाता कॉन्फिगरेशन उपलब्ध नाही. सर्व्हरवर SMS गेटवे (MSG91 / Fast2SMS / Twilio / DLT) किंवा Firebase Phone Auth सेट केल्याशिवाय खरा OTP SMS पाठवता येत नाही.'
+          'SMS Gateway is not configured yet. Please complete verification using the 4–6 digit Security PIN below.',
+          'SMS गेटवे अभी सेट नहीं है। कृपया नीचे दिए गए 4–6 अंकों के सिक्योरिटी PIN से सत्यापन पूरा करें।',
+          'SMS गेटवे अद्याप सेट नाही. कृपया खालील ४ ते ६ अंकी सुरक्षा PIN वापरून पडताळणी पूर्ण करा.'
         );
       case 'OTP_COOLDOWN_ACTIVE': {
         const wait = typeof data?.retryAfterSeconds === 'number' ? data.retryAfterSeconds : 45;
@@ -199,6 +232,7 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
   const requestOtp = async () => {
     setErrorMsg('');
     setStatusMsg('');
+    setPinError('');
 
     if (!isValidIndianMobile) {
       setErrorMsg(
@@ -274,6 +308,17 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
         }
       }
 
+      if (
+        (res.status === 503 ||
+          res.status === 404 ||
+          errorCode === 'SMS_PROVIDER_NOT_CONFIGURED' ||
+          errorCode === 'SMS_GATEWAY_NOT_CONFIGURED') &&
+        allowTestPinFallback &&
+        isDemoModeEnvEnabled()
+      ) {
+        setForcePinFallback(true);
+      }
+
       setErrorMsg(
         mapServerErrorToMessage(
           res.status,
@@ -287,12 +332,15 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
         )
       );
     } catch {
+      if (allowTestPinFallback && isDemoModeEnvEnabled()) {
+        setForcePinFallback(true);
+      }
       setErrorMsg(
         tr(
           lang,
-          'SMS service temporarily unavailable. Network connection failed.',
-          'नेटवर्क त्रुटि: SMS सेवा से संपर्क नहीं हो सका।',
-          'नेटवर्क त्रुटी: SMS सेवेशी संपर्क होऊ शकला नाही.'
+          'SMS service temporarily unavailable. Use the Security PIN verification below.',
+          'SMS सेवा अनुपलब्ध है। कृपया नीचे दिए गए सिक्योरिटी PIN से सत्यापन करें।',
+          'SMS सेवा उपलब्ध नाही. कृपया खालील सुरक्षा PIN ने पडताळणी करा.'
         )
       );
     } finally {
@@ -325,7 +373,7 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
             setStatusMsg('');
             setOtpInput('');
             setCooldownSeconds(0);
-            onVerified(cleanedMobile);
+            onVerified(cleanedMobile, { method: 'firebase_phone' });
           }
           return;
         } catch (fbErr) {
@@ -382,7 +430,10 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
       setCooldownSeconds(0);
       const verifiedMobile = typeof data.mobile === 'string' ? data.mobile : cleanedMobile;
       const proof = typeof data.verificationProof === 'string' ? data.verificationProof : undefined;
-      onVerified(verifiedMobile, proof);
+      onVerified(verifiedMobile, {
+        method: 'sms_otp',
+        ...(proof ? { verificationProof: proof } : {}),
+      });
     } catch {
       setErrorMsg(
         tr(
@@ -397,6 +448,62 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
     }
   };
 
+  const handleVerifyWithPin = async () => {
+    setPinError('');
+    setErrorMsg('');
+
+    if (!isValidIndianMobile) {
+      setPinError(
+        tr(
+          lang,
+          'Please enter a valid 10-digit Indian mobile number (+91, starting with 6–9) first.',
+          'पहले 6–9 से शुरू होने वाला 10 अंकों का सही भारतीय मोबाइल नंबर दर्ज करें।',
+          'प्रथम ६ ते ९ ने सुरू होणारा १० अंकी योग्य भारतीय मोबाईल नंबर टाका.'
+        )
+      );
+      return;
+    }
+
+    const validation = validateSecurityPin(pinInput, confirmPinInput);
+    if (!validation.ok) {
+      if (validation.code === 'INVALID_PIN_FORMAT') {
+        setPinError(
+          tr(
+            lang,
+            'Security PIN must be 4 to 6 numeric digits (e.g., 4829).',
+            'सिक्योरिटी PIN 4 से 6 अंकों का होना चाहिए (उदा. 4829)।',
+            'सुरक्षा PIN ४ ते ६ अंकी असणे आवश्यक आहे (उदा. 4829).'
+          )
+        );
+      } else {
+        setPinError(
+          tr(
+            lang,
+            'Security PIN and Confirm PIN do not match. Please re-check.',
+            'सिक्योरिटी PIN और कन्फर्म PIN मेल नहीं खाते। कृपया जांचें।',
+            'सुरक्षा PIN आणि Confirm PIN जुळत नाहीत. कृपया पुन्हा तपासा.'
+          )
+        );
+      }
+      return;
+    }
+
+    setPinBusy(true);
+    try {
+      const testPinHash = await hashTestPin(cleanedMobile, validation.cleanPin);
+      setPinInput('');
+      setConfirmPinInput('');
+      setStatusMsg('');
+      setErrorMsg('');
+      onVerified(cleanedMobile, {
+        method: 'test_pin',
+        testPinHash,
+      });
+    } finally {
+      setPinBusy(false);
+    }
+  };
+
   const sendButtonLabel = verified
     ? t.workerForm.otpVerified
     : loading && !hasActiveChallenge
@@ -408,7 +515,7 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
     : t.workerForm.sendOtp;
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2.5">
       <div className="flex flex-col sm:flex-row gap-2">
         <div className="relative flex flex-1 items-center">
           <Smartphone className="w-4 h-4 text-slate-400 absolute left-3 pointer-events-none" />
@@ -428,6 +535,7 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
               setOtpInput('');
               setStatusMsg('');
               setErrorMsg('');
+              setPinError('');
             }}
             placeholder="9876543210"
             className="w-full px-3 py-2 border border-slate-300 rounded-r-md text-sm font-mono-tabular focus:outline-none focus:ring-2 focus:ring-[#0B3B75]"
@@ -470,10 +578,19 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
       )}
 
       {verified && (
-        <p className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#15803D]">
-          <CheckCircle2 className="w-4 h-4" />
-          {t.workerForm.otpVerified} (+91 {cleanedMobile})
-        </p>
+        <div className="inline-flex flex-wrap items-center gap-2 text-xs font-semibold text-[#15803D] bg-emerald-50 border border-emerald-200 rounded px-2.5 py-1.5">
+          <CheckCircle2 className="w-4 h-4 shrink-0" />
+          <span>
+            {verifiedMethod === 'test_pin'
+              ? tr(
+                  lang,
+                  `Verified with Security PIN (+91 ${cleanedMobile}) — Pre-Launch Test Mode`,
+                  `सिक्योरिटी PIN द्वारा सत्यापित (+91 ${cleanedMobile}) — प्री-लॉन्च टेस्ट मोड`,
+                  `सुरक्षा PIN द्वारे पडताळणी पूर्ण (+91 ${cleanedMobile}) — प्री-लॉन्च टेस्ट मोड`
+                )
+              : `${t.workerForm.otpVerified} (+91 ${cleanedMobile})`}
+          </span>
+        </div>
       )}
 
       {statusMsg && !verified && (
@@ -489,7 +606,105 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
         </p>
       )}
 
-      {otpConfig.checked && !otpConfig.smsProviderConfigured && !otpConfig.firebasePhoneAuthEnabled && !verified && !errorMsg && (
+      {showTestPinMode && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50/90 p-3.5 space-y-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 text-xs font-bold text-[#0B3B75]">
+              <KeyRound className="w-4 h-4 text-[#E06D1B]" />
+              <span>
+                {tr(
+                  lang,
+                  'Pre-Launch PIN Verification (SMS Gateway Pending)',
+                  'प्री-लॉन्च PIN सत्यापन (SMS गेटवे अभी लंबित)',
+                  'प्री-लॉन्च PIN पडताळणी (SMS गेटवे अद्याप सुरू नाही)'
+                )}
+              </span>
+            </div>
+            <span className="px-2 py-0.5 rounded bg-amber-200/80 text-amber-950 text-[10px] font-bold uppercase tracking-wide">
+              TEST MODE
+            </span>
+          </div>
+
+          <p className="text-[11px] text-slate-700 leading-relaxed">
+            {tr(
+              lang,
+              'Live SMS OTP delivery is disabled until an SMS gateway is active. Set a 4–6 digit Security PIN to verify this mobile number and complete your registration now.',
+              'लाइव SMS OTP गेटवे अभी सक्रिय नहीं है। अपना मोबाइल नंबर सत्यापित करने और रजिस्ट्रेशन पूरा करने के लिए 4–6 अंकों का सिक्योरिटी PIN सेट करें।',
+              'थेट SMS OTP गेटवे अद्याप सक्रिय नाही. मोबाईल नंबर पडताळून नोंदणी पूर्ण करण्यासाठी ४ ते ६ अंकी सुरक्षा PIN सेट करा.'
+            )}
+          </p>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                {tr(lang, 'Security PIN (4–6 digits) *', 'सिक्योरिटी PIN (4–6 अंक) *', 'सुरक्षा PIN (४–६ अंक) *')}
+              </label>
+              <div className="relative">
+                <input
+                  type={showPin ? 'text' : 'password'}
+                  inputMode="numeric"
+                  maxLength={6}
+                  value={pinInput}
+                  onChange={(e) => {
+                    setPinInput(e.target.value.replace(/\D/g, '').slice(0, 6));
+                    setPinError('');
+                  }}
+                  placeholder={tr(lang, 'e.g. 4829', 'उदा. 4829', 'उदा. 4829')}
+                  className="w-full px-3 py-1.5 pr-9 border border-slate-300 bg-white rounded-md text-sm font-mono-tabular focus:outline-none focus:ring-2 focus:ring-[#0B3B75]"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPin((s) => !s)}
+                  aria-label={showPin ? 'Hide PIN' : 'Show PIN'}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-800 cursor-pointer"
+                >
+                  {showPin ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                {tr(lang, 'Confirm Security PIN *', 'PIN की पुष्टि करें *', 'सुरक्षा PIN पुन्हा टाका *')}
+              </label>
+              <input
+                type={showPin ? 'text' : 'password'}
+                inputMode="numeric"
+                maxLength={6}
+                value={confirmPinInput}
+                onChange={(e) => {
+                  setConfirmPinInput(e.target.value.replace(/\D/g, '').slice(0, 6));
+                  setPinError('');
+                }}
+                placeholder={tr(lang, 'Re-enter PIN', 'दोबारा PIN लिखें', 'PIN पुन्हा टाका')}
+                className="w-full px-3 py-1.5 border border-slate-300 bg-white rounded-md text-sm font-mono-tabular focus:outline-none focus:ring-2 focus:ring-[#0B3B75]"
+              />
+            </div>
+          </div>
+
+          {pinError && (
+            <p className="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 rounded px-2.5 py-1.5">
+              {pinError}
+            </p>
+          )}
+
+          <button
+            type="button"
+            disabled={pinBusy || !isValidIndianMobile || pinInput.length < 4}
+            onClick={handleVerifyWithPin}
+            className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-md bg-[#E06D1B] text-white text-xs sm:text-sm font-bold hover:bg-[#c55b10] disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+          >
+            <ShieldCheck className="w-4 h-4" />
+            <span>
+              {pinBusy
+                ? tr(lang, 'Verifying PIN...', 'PIN सत्यापित हो रहा है...', 'PIN तपासत आहे...')
+                : tr(lang, 'Verify Mobile with Security PIN', 'सिक्योरिटी PIN से सत्यापित करें', 'सुरक्षा PIN द्वारे मोबाईल पडताळा')}
+            </span>
+          </button>
+        </div>
+      )}
+
+      {otpConfig.checked && !otpConfig.smsProviderConfigured && !otpConfig.firebasePhoneAuthEnabled && !verified && !showTestPinMode && !errorMsg && (
         <p className="text-[11px] text-amber-800 bg-amber-50 border border-amber-200 rounded px-2.5 py-1.5">
           {tr(
             lang,

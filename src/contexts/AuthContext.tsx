@@ -20,6 +20,7 @@ import type {
   WorkerPrivateInfo,
 } from '../types/domain';
 import { subscribeCustomerPreference } from '../lib/firestoreService';
+import { clearPhotoCache } from '../lib/photoStorageService';
 import { useLanguage } from '../i18n/LanguageContext';
 
 interface AuthContextValue {
@@ -113,6 +114,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
           console.error('Profile sync error:', err);
         }
       } else {
+        clearPhotoCache();
         setUserAccount(null);
         setWorkerProfile(null);
         setWorkerPrivate(null);
@@ -141,6 +143,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   };
 
   const logout = async () => {
+    clearPhotoCache();
     await signOut(auth);
   };
 

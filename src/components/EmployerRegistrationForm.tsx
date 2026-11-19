@@ -5,10 +5,17 @@ import { INDIA_STATES_DISTRICTS } from '../data/indiaLocations';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../i18n/LanguageContext';
 import { saveEmployerRegistration } from '../lib/firestoreService';
-import type { PageRoute } from '../types/domain';
+import {
+  buildCustomerPhotoDocId,
+  deleteProfilePhotoRecord,
+  uploadProfilePhotoRecord,
+} from '../lib/photoStorageService';
+import type { PageRoute, VerificationMethod } from '../types/domain';
 import { NotificationOptInButton } from './NotificationOptInButton';
 import { OtpVerificationBox } from './OtpVerificationBox';
+import { ProfilePhotoUploader, type SelectedProfilePhoto } from './ProfilePhotoUploader';
 import { PWAInstallButton } from './PWAControls';
+import { SecureAvatar } from './SecureAvatar';
 
 interface EmployerRegistrationFormProps {
   onNavigate: (route: PageRoute) => void;
@@ -22,6 +29,10 @@ export const EmployerRegistrationForm: React.FC<EmployerRegistrationFormProps> =
   const [contactPerson, setContactPerson] = useState('');
   const [mobile, setMobile] = useState('');
   const [mobileVerified, setMobileVerified] = useState(false);
+  const [verificationMethod, setVerificationMethod] = useState<VerificationMethod | undefined>(undefined);
+  const [testPinHash, setTestPinHash] = useState('');
+  const [selectedPhoto, setSelectedPhoto] = useState<SelectedProfilePhoto | null>(null);
+  const [removePhoto, setRemovePhoto] = useState(false);
   const [email, setEmail] = useState('');
   const [stateName, setStateName] = useState('Chhattisgarh');
   const [districtName, setDistrictName] = useState('Raipur');
@@ -44,6 +55,8 @@ export const EmployerRegistrationForm: React.FC<EmployerRegistrationFormProps> =
       setContactPerson(employerPrivate.contactPerson);
       setMobile(employerPrivate.mobile);
       setMobileVerified(employerPrivate.mobileVerified);
+      setVerificationMethod(employerPrivate.verificationMethod);
+      setTestPinHash(employerPrivate.testPinHash || '');
       setEmail(employerPrivate.email);
       setStateName(employerProfile.state);
       setDistrictName(employerProfile.district);
@@ -104,6 +117,26 @@ export const EmployerRegistrationForm: React.FC<EmployerRegistrationFormProps> =
 
     setSaving(true);
     try {
+      const existingPhotoId = employerPrivate?.photoDocId || '';
+      let resolvedPhotoDocId: string | undefined = existingPhotoId || undefined;
+
+      if (selectedPhoto) {
+        const photoId = buildCustomerPhotoDocId(user.uid);
+        await uploadProfilePhotoRecord({
+          photoId,
+          ownerUid: user.uid,
+          subjectId: user.uid,
+          role: 'customer',
+          mimeType: selectedPhoto.mimeType,
+          sizeBytes: selectedPhoto.sizeBytes,
+          photoData: selectedPhoto.photoData,
+        });
+        resolvedPhotoDocId = photoId;
+      } else if (removePhoto && existingPhotoId) {
+        await deleteProfilePhotoRecord(existingPhotoId);
+        resolvedPhotoDocId = employerProfile ? '' : undefined;
+      }
+
       await saveEmployerRegistration(
         user.uid,
         Boolean(employerProfile),
@@ -123,14 +156,19 @@ export const EmployerRegistrationForm: React.FC<EmployerRegistrationFormProps> =
           contactPerson: contactPerson.trim().slice(0, 120),
           mobile: mobile.trim(),
           mobileVerified,
+          ...(verificationMethod ? { verificationMethod } : {}),
+          ...(testPinHash ? { testPinHash } : {}),
           email: email.trim().slice(0, 200),
           businessAddress: businessAddress.trim().slice(0, 300),
           gstNumber: gstNumber.trim().slice(0, 30),
           establishmentDetails: establishmentDetails.trim().slice(0, 600),
           workforceNotes: workforceNotes.trim().slice(0, 600),
+          ...(resolvedPhotoDocId !== undefined ? { photoDocId: resolvedPhotoDocId } : {}),
         }
       );
 
+      setSelectedPhoto(null);
+      setRemovePhoto(false);
       await refreshUserProfiles();
       setSavedId(regId);
       setShowSuccessScreen(true);
@@ -185,9 +223,16 @@ export const EmployerRegistrationForm: React.FC<EmployerRegistrationFormProps> =
 
           <div className="p-6 space-y-5">
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-slate-50 border border-slate-200 rounded-lg p-4 text-xs sm:text-sm">
-              <div>
-                <div className="text-slate-500 text-xs font-medium">Customer ID</div>
-                <div className="font-mono-tabular font-extrabold text-[#C25E00] mt-0.5">{savedId}</div>
+              <div className="flex items-center gap-3">
+                <SecureAvatar
+                  name={contactPerson || businessName || 'Customer'}
+                  photoDocId={employerPrivate?.photoDocId}
+                  sizeClass="w-12 h-12"
+                />
+                <div>
+                  <div className="text-slate-500 text-xs font-medium">Customer ID</div>
+                  <div className="font-mono-tabular font-extrabold text-[#C25E00] mt-0.5">{savedId}</div>
+                </div>
               </div>
               <div>
                 <div className="text-slate-500 text-xs font-medium">{t.employerForm.businessName}</div>
@@ -300,11 +345,16 @@ export const EmployerRegistrationForm: React.FC<EmployerRegistrationFormProps> =
               onMobileChange={(v) => {
                 setMobile(v);
                 setMobileVerified(false);
+                setVerificationMethod(undefined);
+                setTestPinHash('');
               }}
               verified={mobileVerified}
-              onVerified={(m) => {
+              verifiedMethod={verificationMethod}
+              onVerified={(m, meta) => {
                 setMobile(m);
                 setMobileVerified(true);
+                setVerificationMethod(meta?.method);
+                setTestPinHash(meta?.testPinHash || '');
               }}
             />
           </div>
@@ -322,6 +372,34 @@ export const EmployerRegistrationForm: React.FC<EmployerRegistrationFormProps> =
             />
           </div>
         </div>
+
+        <ProfilePhotoUploader
+          existingPhotoDocId={employerPrivate?.photoDocId}
+          selectedPhoto={selectedPhoto}
+          removedExisting={removePhoto}
+          onSelectPhoto={(photo) => {
+            setSelectedPhoto(photo);
+            setRemovePhoto(false);
+          }}
+          onRemovePhoto={() => {
+            setSelectedPhoto(null);
+            setRemovePhoto(true);
+          }}
+          roleLabel={
+            lang === 'hi'
+              ? 'ग्राहक / नियोक्ता प्रोफ़ाइल फ़ोटो (वैकल्पिक)'
+              : lang === 'mr'
+                ? 'ग्राहक / नियोक्ता प्रोफाइल फोटो (ऐच्छिक)'
+                : 'Customer / Employer Profile Photo (Optional)'
+          }
+          privacyNote={
+            lang === 'hi'
+              ? 'गोपनीयता सुरक्षा: आपकी फ़ोटो सार्वजनिक रूप से नहीं दिखती। यह केवल आपकी प्रोफ़ाइल, एडमिन पैनल और जॉब स्वीकार होने के बाद संबंधित कामगार को ही दिखाई जाती है।'
+              : lang === 'mr'
+                ? 'गोपनीयता सुरक्षा: तुमचा फोटो सार्वजनिक दिसत नाही. तो फक्त तुमच्या प्रोफाइलवर, अ‍ॅडमिनकडे आणि काम स्वीकारल्यानंतर संबंधित कामगारालाच दिसेल.'
+                : 'Privacy protected: Your photo is never public. It is shown only on your profile, to Admin, and to a worker strictly after job acceptance.'
+          }
+        />
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
           <div>

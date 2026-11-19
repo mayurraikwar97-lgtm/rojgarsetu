@@ -38,6 +38,7 @@ export type WageUnit = 'daily' | 'monthly' | 'hourly' | 'contract';
 export type WorkType = 'full_time' | 'part_time' | 'daily_wage' | 'contract';
 export type JobWorkType = WorkType | 'temporary' | 'urgent' | 'bulk';
 export type VerificationStatus = 'pending' | 'verified' | 'suspended';
+export type VerificationMethod = 'sms_otp' | 'firebase_phone' | 'test_pin';
 
 export interface UserAccount {
   uid: string;
@@ -71,6 +72,7 @@ export interface PublicWorkerProfile {
   education?: string;
   verificationStatus: VerificationStatus;
   isWomenEnterprise?: boolean;
+  photoDocId?: string;
   completedJobsCount: number;
   ratingAvg: number;
   createdAt?: unknown;
@@ -82,6 +84,8 @@ export interface WorkerPrivateInfo {
   fullName: string;
   mobile: string;
   mobileVerified: boolean;
+  verificationMethod?: VerificationMethod;
+  testPinHash?: string;
   email?: string;
   ageConfirmed: boolean;
   preferredWorkLocation?: string;
@@ -90,6 +94,7 @@ export interface WorkerPrivateInfo {
   idVerificationStatus: 'not_submitted' | 'voluntary_pending' | 'verified';
   certificateNotes?: string;
   photoUrl?: string;
+  photoDocId?: string;
   createdAt?: unknown;
   updatedAt?: unknown;
 }
@@ -114,11 +119,14 @@ export interface EmployerPrivateInfo {
   contactPerson: string;
   mobile: string;
   mobileVerified: boolean;
+  verificationMethod?: VerificationMethod;
+  testPinHash?: string;
   email: string;
   businessAddress: string;
   gstNumber?: string;
   establishmentDetails?: string;
   workforceNotes?: string;
+  photoDocId?: string;
   createdAt?: unknown;
   updatedAt?: unknown;
 }
@@ -166,6 +174,7 @@ export interface JobApplication {
   workerRegistrationId: string;
   workerName: string;
   workerPrimarySkill: string;
+  workerPhotoDocId?: string;
   proposedWage: number;
   note?: string;
   status: 'applied' | 'invited' | 'accepted' | 'declined' | 'work_completed';
@@ -266,6 +275,8 @@ export interface VehiclePrivateInfo {
   ownerName: string;
   mobile: string;
   mobileVerified: boolean;
+  verificationMethod?: VerificationMethod;
+  testPinHash?: string;
   email?: string;
   rcOrLicenseNotes?: string;
   createdAt?: unknown;
@@ -508,6 +519,7 @@ export interface DemoUserProfile {
   accuracyMeters: number;
   locationPermissionStatus: DemoLocationPermissionStatus;
   locationSource: DemoLocationSource;
+  photoDocId?: string;
   pushEnabled?: boolean;
   isDemo: true;
   lastActiveAt?: unknown;
@@ -540,6 +552,7 @@ export interface DemoWorkOrder {
   acceptedWorkerOwnerUid?: string;
   acceptedWorkerName?: string;
   acceptedWorkerUniqueId?: string;
+  acceptedWorkerPhotoDocId?: string;
   customerConfirmedAt?: unknown;
   completedAt?: unknown;
   closedAt?: unknown;
@@ -603,4 +616,26 @@ export interface DemoNotificationRecord {
   updatedAt?: unknown;
 }
 
+export interface ProfilePhotoRecord {
+  id?: string;
+  ownerUid: string;
+  subjectId: string;
+  role: 'worker' | 'customer';
+  mimeType: 'image/jpeg' | 'image/png' | 'image/webp';
+  sizeBytes: number;
+  photoData: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface AcceptedCustomerPhotoRecord {
+  id?: string;
+  ownerUid: string;
+  workerUid: string;
+  sourceType: 'job_application' | 'demo_work_order';
+  sourceId: string;
+  photoData: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
 

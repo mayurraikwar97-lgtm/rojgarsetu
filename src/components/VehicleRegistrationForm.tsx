@@ -9,7 +9,7 @@ import { VEHICLE_TYPE_CATALOG } from '../data/vehicleTypes';
 import { useLanguage } from '../i18n/LanguageContext';
 import { saveVehicleListing } from '../lib/firestoreService';
 import { detectBestGpsLocation } from '../lib/locationService';
-import type { Language, PageRoute, VehicleType } from '../types/domain';
+import type { Language, PageRoute, VehicleType, VerificationMethod } from '../types/domain';
 import { LocationPinModal } from './LocationPinModal';
 import { OtpVerificationBox } from './OtpVerificationBox';
 
@@ -53,6 +53,8 @@ export const VehicleRegistrationForm: React.FC<VehicleRegistrationFormProps> = (
 
   const [mobile, setMobile] = useState('');
   const [mobileVerified, setMobileVerified] = useState(false);
+  const [verificationMethod, setVerificationMethod] = useState<VerificationMethod | undefined>(undefined);
+  const [testPinHash, setTestPinHash] = useState('');
   const [privacyConsent, setPrivacyConsent] = useState(false);
 
   const [submitting, setSubmitting] = useState(false);
@@ -184,6 +186,8 @@ export const VehicleRegistrationForm: React.FC<VehicleRegistrationFormProps> = (
           ownerName: ownerDisplayName.trim(),
           mobile: mobile.trim(),
           mobileVerified,
+          ...(verificationMethod ? { verificationMethod } : {}),
+          ...(testPinHash ? { testPinHash } : {}),
           ...(user.email ? { email: user.email } : {}),
           ...(rcOrLicenseNotes.trim() ? { rcOrLicenseNotes: rcOrLicenseNotes.trim() } : {}),
         }
@@ -604,11 +608,16 @@ export const VehicleRegistrationForm: React.FC<VehicleRegistrationFormProps> = (
               onMobileChange={(val) => {
                 setMobile(val);
                 setMobileVerified(false);
+                setVerificationMethod(undefined);
+                setTestPinHash('');
               }}
               verified={mobileVerified}
-              onVerified={(m) => {
+              verifiedMethod={verificationMethod}
+              onVerified={(m, meta) => {
                 setMobile(m);
                 setMobileVerified(true);
+                setVerificationMethod(meta?.method);
+                setTestPinHash(meta?.testPinHash || '');
               }}
             />
           </div>

@@ -2,6 +2,7 @@ import {
   addDoc,
   collection,
   deleteDoc,
+  deleteField,
   doc,
   getDoc,
   increment,
@@ -15,6 +16,7 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import { auth, db, handleFirestoreError, OperationType } from './firebase';
+import { grantAcceptedCustomerPhoto } from './photoStorageService';
 import type {
   AppNotificationRecord,
   AuditLog,
@@ -174,8 +176,13 @@ export async function saveWorkerRegistration(
   const batch = writeBatch(db);
 
   if (!isExisting) {
+    const cleanPub = { ...publicData };
+    if (!cleanPub.photoDocId) delete cleanPub.photoDocId;
+    const cleanPriv = { ...privateData };
+    if (!cleanPriv.photoDocId) delete cleanPriv.photoDocId;
+
     batch.set(pubRef, {
-      ...publicData,
+      ...cleanPub,
       verificationStatus: 'pending',
       completedJobsCount: 0,
       ratingAvg: 0,
@@ -183,7 +190,7 @@ export async function saveWorkerRegistration(
       updatedAt: serverTimestamp(),
     });
     batch.set(privRef, {
-      ...privateData,
+      ...cleanPriv,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
@@ -206,12 +213,19 @@ export async function saveWorkerRegistration(
       ...(publicData.gender ? { gender: publicData.gender } : {}),
       ...(publicData.education ? { education: publicData.education } : {}),
       ...(typeof publicData.isWomenEnterprise === 'boolean' ? { isWomenEnterprise: publicData.isWomenEnterprise } : {}),
+      ...(publicData.photoDocId === ''
+        ? { photoDocId: deleteField() }
+        : publicData.photoDocId
+          ? { photoDocId: publicData.photoDocId }
+          : {}),
       updatedAt: serverTimestamp(),
     });
     batch.update(privRef, {
       fullName: privateData.fullName,
       mobile: privateData.mobile,
       mobileVerified: privateData.mobileVerified,
+      ...(privateData.verificationMethod ? { verificationMethod: privateData.verificationMethod } : {}),
+      ...(privateData.testPinHash ? { testPinHash: privateData.testPinHash } : {}),
       ...(privateData.email ? { email: privateData.email } : {}),
       ageConfirmed: privateData.ageConfirmed,
       ...(privateData.preferredWorkLocation ? { preferredWorkLocation: privateData.preferredWorkLocation } : {}),
@@ -220,6 +234,11 @@ export async function saveWorkerRegistration(
       idVerificationStatus: privateData.idVerificationStatus,
       ...(privateData.certificateNotes ? { certificateNotes: privateData.certificateNotes } : {}),
       ...(privateData.photoUrl ? { photoUrl: privateData.photoUrl } : {}),
+      ...(privateData.photoDocId === ''
+        ? { photoDocId: deleteField() }
+        : privateData.photoDocId
+          ? { photoDocId: privateData.photoDocId }
+          : {}),
       updatedAt: serverTimestamp(),
     });
   }
@@ -242,6 +261,9 @@ export async function saveEmployerRegistration(
   const batch = writeBatch(db);
 
   if (!isExisting) {
+    const cleanPriv = { ...privateData };
+    if (!cleanPriv.photoDocId) delete cleanPriv.photoDocId;
+
     batch.set(pubRef, {
       ...publicData,
       verificationStatus: 'pending',
@@ -249,7 +271,7 @@ export async function saveEmployerRegistration(
       updatedAt: serverTimestamp(),
     });
     batch.set(privRef, {
-      ...privateData,
+      ...cleanPriv,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     });
@@ -267,11 +289,18 @@ export async function saveEmployerRegistration(
       contactPerson: privateData.contactPerson,
       mobile: privateData.mobile,
       mobileVerified: privateData.mobileVerified,
+      ...(privateData.verificationMethod ? { verificationMethod: privateData.verificationMethod } : {}),
+      ...(privateData.testPinHash ? { testPinHash: privateData.testPinHash } : {}),
       email: privateData.email,
       businessAddress: privateData.businessAddress,
       ...(privateData.gstNumber ? { gstNumber: privateData.gstNumber } : {}),
       ...(privateData.establishmentDetails ? { establishmentDetails: privateData.establishmentDetails } : {}),
       ...(privateData.workforceNotes ? { workforceNotes: privateData.workforceNotes } : {}),
+      ...(privateData.photoDocId === ''
+        ? { photoDocId: deleteField() }
+        : privateData.photoDocId
+          ? { photoDocId: privateData.photoDocId }
+          : {}),
       updatedAt: serverTimestamp(),
     });
   }
@@ -358,6 +387,7 @@ export async function createInstantHireRequest(
       workerRegistrationId: worker.registrationId,
       workerName: worker.displayName,
       workerPrimarySkill: worker.primarySkill,
+      ...(worker.photoDocId ? { workerPhotoDocId: worker.photoDocId } : {}),
       proposedWage: jobPayload.offeredWage > 0 ? jobPayload.offeredWage : worker.expectedWage,
       ...(safeNote ? { note: safeNote } : {}),
       status: 'invited',
@@ -421,6 +451,11 @@ export async function updateApplicationByEmployer(
     status: 'invited' | 'accepted' | 'declined' | 'work_completed';
     workerRating?: number;
     employerFeedback?: string;
+  },
+  photoGrantContext?: {
+    customerUid: string;
+    workerUid: string;
+    customerPhotoDocId?: string;
   }
 ): Promise<void> {
   const path = `applications/${applicationId}`;
@@ -429,6 +464,18 @@ export async function updateApplicationByEmployer(
       ...updates,
       updatedAt: serverTimestamp(),
     });
+    if (
+      (updates.status === 'accepted' || updates.status === 'work_completed') &&
+      photoGrantContext?.customerPhotoDocId
+    ) {
+      await grantAcceptedCustomerPhoto({
+        customerUid: photoGrantContext.customerUid,
+        workerUid: photoGrantContext.workerUid,
+        sourceType: 'job_application',
+        sourceId: applicationId,
+        customerPhotoDocId: photoGrantContext.customerPhotoDocId,
+      });
+    }
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, path);
   }

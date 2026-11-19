@@ -51,6 +51,7 @@
         "education": { "type": "string", "maxLength": 100 },
         "verificationStatus": { "type": "string", "enum": ["pending", "verified", "suspended"] },
         "isWomenEnterprise": { "type": "boolean" },
+        "photoDocId": { "type": "string", "maxLength": 128 },
         "completedJobsCount": { "type": "number" },
         "ratingAvg": { "type": "number" },
         "createdAt": { "type": "string", "format": "date-time" },
@@ -73,6 +74,8 @@
         "fullName": { "type": "string", "minLength": 2, "maxLength": 120 },
         "mobile": { "type": "string", "minLength": 10, "maxLength": 20 },
         "mobileVerified": { "type": "boolean" },
+        "verificationMethod": { "type": "string", "enum": ["sms_otp", "firebase_phone", "test_pin"] },
+        "testPinHash": { "type": "string", "maxLength": 128 },
         "email": { "type": "string", "maxLength": 200 },
         "ageConfirmed": { "type": "boolean" },
         "preferredWorkLocation": { "type": "string", "maxLength": 160 },
@@ -81,6 +84,7 @@
         "idVerificationStatus": { "type": "string", "enum": ["not_submitted", "voluntary_pending", "verified"] },
         "certificateNotes": { "type": "string", "maxLength": 500 },
         "photoUrl": { "type": "string", "maxLength": 1000 },
+        "photoDocId": { "type": "string", "maxLength": 128 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -122,11 +126,14 @@
         "contactPerson": { "type": "string", "minLength": 2, "maxLength": 120 },
         "mobile": { "type": "string", "minLength": 10, "maxLength": 20 },
         "mobileVerified": { "type": "boolean" },
+        "verificationMethod": { "type": "string", "enum": ["sms_otp", "firebase_phone", "test_pin"] },
+        "testPinHash": { "type": "string", "maxLength": 128 },
         "email": { "type": "string", "maxLength": 200 },
         "businessAddress": { "type": "string", "minLength": 4, "maxLength": 300 },
         "gstNumber": { "type": "string", "maxLength": 30 },
         "establishmentDetails": { "type": "string", "maxLength": 600 },
         "workforceNotes": { "type": "string", "maxLength": 600 },
+        "photoDocId": { "type": "string", "maxLength": 128 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -191,6 +198,7 @@
         "workerRegistrationId": { "type": "string", "minLength": 5, "maxLength": 40 },
         "workerName": { "type": "string", "minLength": 2, "maxLength": 120 },
         "workerPrimarySkill": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "workerPhotoDocId": { "type": "string", "maxLength": 128 },
         "proposedWage": { "type": "number" },
         "note": { "type": "string", "maxLength": 600 },
         "status": { "type": "string", "enum": ["applied", "invited", "accepted", "declined", "work_completed"] },
@@ -337,6 +345,8 @@
         "ownerName": { "type": "string", "minLength": 2, "maxLength": 120 },
         "mobile": { "type": "string", "minLength": 10, "maxLength": 20 },
         "mobileVerified": { "type": "boolean" },
+        "verificationMethod": { "type": "string", "enum": ["sms_otp", "firebase_phone", "test_pin"] },
+        "testPinHash": { "type": "string", "maxLength": 128 },
         "email": { "type": "string", "maxLength": 200 },
         "rcOrLicenseNotes": { "type": "string", "maxLength": 500 },
         "createdAt": { "type": "string", "format": "date-time" },
@@ -613,6 +623,7 @@
         "accuracyMeters": { "type": "number" },
         "locationPermissionStatus": { "type": "string", "enum": ["granted", "denied", "prompt", "manual_fallback"] },
         "locationSource": { "type": "string", "enum": ["gps", "search", "manual_test"] },
+        "photoDocId": { "type": "string", "maxLength": 128 },
         "pushEnabled": { "type": "boolean" },
         "isDemo": { "type": "boolean" },
         "lastActiveAt": { "type": "string", "format": "date-time" },
@@ -668,6 +679,7 @@
         "acceptedWorkerOwnerUid": { "type": "string", "maxLength": 128 },
         "acceptedWorkerName": { "type": "string", "maxLength": 120 },
         "acceptedWorkerUniqueId": { "type": "string", "maxLength": 48 },
+        "acceptedWorkerPhotoDocId": { "type": "string", "maxLength": 128 },
         "customerConfirmedAt": { "type": "string", "format": "date-time" },
         "completedAt": { "type": "string", "format": "date-time" },
         "closedAt": { "type": "string", "format": "date-time" },
@@ -745,6 +757,37 @@
         "eventType", "title", "body", "inAppDelivered", "browserNotificationStatus",
         "fcmPushStatus", "read", "isDemo", "createdAt", "updatedAt"
       ]
+    },
+    "ProfilePhotoRecord": {
+      "title": "ProfilePhotoRecord",
+      "description": "Authenticated compressed profile photo record with role-scoped access control.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "subjectId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "role": { "type": "string", "enum": ["worker", "customer"] },
+        "mimeType": { "type": "string", "enum": ["image/jpeg", "image/png", "image/webp"] },
+        "sizeBytes": { "type": "number" },
+        "photoData": { "type": "string", "minLength": 30, "maxLength": 480000 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "subjectId", "role", "mimeType", "sizeBytes", "photoData", "createdAt", "updatedAt"]
+    },
+    "AcceptedCustomerPhotoRecord": {
+      "title": "AcceptedCustomerPhotoRecord",
+      "description": "Job-scoped customer photo grant revealed strictly to the accepted worker.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "sourceType": { "type": "string", "enum": ["job_application", "demo_work_order"] },
+        "sourceId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "photoData": { "type": "string", "minLength": 30, "maxLength": 480000 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "workerUid", "sourceType", "sourceId", "photoData", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -863,6 +906,14 @@
     "/demo_notifications/{notifId}": {
       "schema": { "$ref": "#/entities/DemoNotificationRecord" },
       "description": "3-channel notification history and diagnostic records for Demo Mode testing."
+    },
+    "/profilePhotos/{photoId}": {
+      "schema": { "$ref": "#/entities/ProfilePhotoRecord" },
+      "description": "Authenticated user profile photos (worker photos readable by signed-in users; customer photos strictly restricted to owner and admin)."
+    },
+    "/acceptedCustomerPhotos/{grantId}": {
+      "schema": { "$ref": "#/entities/AcceptedCustomerPhotoRecord" },
+      "description": "Accepted-job customer photo grants readable strictly by the customer, accepted worker, and admin."
     }
   }
 }
