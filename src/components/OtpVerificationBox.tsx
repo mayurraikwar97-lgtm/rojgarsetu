@@ -234,13 +234,26 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
             'चुकीचा OTP. कृपया ६ अंकी योग्य कोड तपासा.'
           )
         );
+      case 'SMS_TEMPLATE_REQUIRED':
+        return (
+          serverMsg ||
+          tr(
+            lang,
+            'SMS OTP template is not configured on the server. Voice Call OTP is disabled.',
+            'सर्वर पर SMS OTP टेम्पलेट कॉन्फ़िगर नहीं है। वॉइस कॉल OTP बंद है।',
+            'सर्व्हरवर SMS OTP टेम्प्लेट सेट नाही. व्हॉइस कॉल OTP बंद आहे.'
+          )
+        );
       case 'SMS_DISPATCH_FAILED':
       case 'SMS_SERVICE_UNAVAILABLE':
-        return tr(
-          lang,
-          'SMS service temporarily unavailable. Please try again in a moment.',
-          'SMS सेवा अस्थायी रूप से अनुपलब्ध है। कृपया थोड़ी देर बाद पुनः प्रयास करें।',
-          'SMS सेवा सध्या तात्पुरती उपलब्ध नाही. कृपया थोड्या वेळाने पुन्हा प्रयत्न करा.'
+        return (
+          serverMsg ||
+          tr(
+            lang,
+            'SMS delivery failed. Please wait for the cooldown timer and retry.',
+            'SMS डिलीवरी विफल रही। कृपया कूलडाउन के बाद पुनः प्रयास करें।',
+            'SMS पाठवणे अयशस्वी झाले. कृपया कूलडाउननंतर पुन्हा प्रयत्न करा.'
+          )
         );
       default:
         return serverMsg || fallbackEn;
@@ -289,9 +302,9 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
         setStatusMsg(
           tr(
             lang,
-            `OTP sent successfully to +91 ${cleanedMobile}. Valid for 5 minutes.`,
-            `+91 ${cleanedMobile} पर OTP सफलतापूर्वक भेजा गया। यह 5 मिनट के लिए मान्य है।`,
-            `+91 ${cleanedMobile} वर OTP यशस्वीरित्या पाठवला आहे. हा ५ मिनिटांसाठी वैध आहे.`
+            `OTP sent successfully via SMS. Verification code sent to +91 ${cleanedMobile} (valid for 5 minutes).`,
+            `SMS के माध्यम से OTP सफलतापूर्वक भेजा गया। +91 ${cleanedMobile} पर कोड भेजा गया है (5 मिनट के लिए मान्य)।`,
+            `SMS द्वारे OTP यशस्वीरित्या पाठवला आहे. +91 ${cleanedMobile} वर कोड पाठवला आहे (५ मिनिटांसाठी वैध).`
           )
         );
         return;
@@ -313,9 +326,9 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
           setStatusMsg(
             tr(
               lang,
-              `OTP sent successfully to +91 ${cleanedMobile} via Firebase Phone Auth.`,
-              `Firebase के माध्यम से +91 ${cleanedMobile} पर OTP सफलतापूर्वक भेजा गया।`,
-              `Firebase द्वारे +91 ${cleanedMobile} वर OTP यशस्वीरित्या पाठवला आहे.`
+              `OTP sent successfully via SMS. Verification code sent to +91 ${cleanedMobile}.`,
+              `SMS के माध्यम से OTP सफलतापूर्वक भेजा गया। +91 ${cleanedMobile} पर कोड भेजा गया।`,
+              `SMS द्वारे OTP यशस्वीरित्या पाठवला आहे. +91 ${cleanedMobile} वर कोड पाठवला.`
             )
           );
           return;
@@ -335,6 +348,10 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
         isDemoModeEnvEnabled()
       ) {
         setForcePinFallback(true);
+      }
+
+      if (typeof data?.retryAfterSeconds === 'number' && data.retryAfterSeconds > 0) {
+        setCooldownSeconds(data.retryAfterSeconds);
       }
 
       setErrorMsg(
@@ -736,9 +753,9 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
           <p>
             {tr(
               lang,
-              'Live SMS OTP requires active server SMS Gateway / DLT configuration (TWOFACTOR_API_KEY, MSG91, Fast2SMS, or Firebase Phone Auth). Public registration does not allow OTP bypass.',
-              'लाइव SMS OTP के लिए सर्वर पर सक्रिय SMS गेटवे / DLT (TWOFACTOR_API_KEY, MSG91, Fast2SMS या Firebase Phone Auth) आवश्यक है। सार्वजनिक पंजीकरण में OTP बायपास की अनुमति नहीं है।',
-              'थेट SMS OTP साठी सर्व्हरवर सक्रिय SMS गेटवे / DLT (TWOFACTOR_API_KEY, MSG91, Fast2SMS किंवा Firebase Phone Auth) आवश्यक आहे. सार्वजनिक नोंदणीमध्ये OTP बायपास करता येत नाही.'
+              'Live SMS OTP requires active server SMS Gateway / DLT configuration (TWOFACTOR_API_KEY + TWOFACTOR_TEMPLATE_NAME, MSG91, Fast2SMS, or Firebase Phone Auth). Public registration does not allow OTP bypass and Voice Call OTP is disabled.',
+              'लाइव SMS OTP के लिए सर्वर पर सक्रिय SMS गेटवे / DLT (TWOFACTOR_API_KEY + TWOFACTOR_TEMPLATE_NAME, MSG91, Fast2SMS या Firebase Phone Auth) आवश्यक है। सार्वजनिक पंजीकरण में OTP बायपास और वॉइस कॉल OTP बंद है।',
+              'थेट SMS OTP साठी सर्व्हरवर सक्रिय SMS गेटवे / DLT (TWOFACTOR_API_KEY + TWOFACTOR_TEMPLATE_NAME, MSG91, Fast2SMS किंवा Firebase Phone Auth) आवश्यक आहे. सार्वजनिक नोंदणीमध्ये OTP बायपास आणि व्हॉइस कॉल OTP बंद आहे.'
             )}
           </p>
           {onOpenDemoMode && isDemoModeEnvEnabled() && (

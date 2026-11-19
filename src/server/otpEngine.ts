@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 
 export const OTP_TTL_SECONDS = 300; // 5 minutes
 export const OTP_COOLDOWN_SECONDS = 45; // resend cooldown
+export const OTP_FAILURE_COOLDOWN_SECONDS = 30; // retry cooldown after SMS dispatch failure
 export const MAX_OTP_VERIFY_ATTEMPTS = 5;
 
 export type SmsProviderKind = '2factor' | 'msg91' | 'fast2sms' | 'twilio_verify' | 'twilio_sms' | 'webhook';
@@ -199,6 +200,7 @@ export function resolveSmsProviderConfig(): ResolvedSmsProvider {
 
   const twoFactorKey = (process.env.TWOFACTOR_API_KEY || '').trim();
   const twoFactorTemplate = (process.env.TWOFACTOR_TEMPLATE_NAME || process.env.SMS_DLT_TEMPLATE_ID || '').trim();
+  const twoFactorSenderId = (process.env.TWOFACTOR_SENDER_ID || dltSenderId || '').trim();
 
   const msg91Key = (process.env.MSG91_AUTH_KEY || '').trim();
   const msg91Template = (process.env.MSG91_TEMPLATE_ID || process.env.SMS_DLT_TEMPLATE_ID || '').trim();
@@ -211,11 +213,18 @@ export function resolveSmsProviderConfig(): ResolvedSmsProvider {
   if (explicitProvider === '2factor' || (!explicitProvider && twoFactorKey)) {
     const missing: string[] = [];
     if (!twoFactorKey) missing.push('TWOFACTOR_API_KEY');
+    if (!twoFactorTemplate) {
+      missing.push(
+        'TWOFACTOR_TEMPLATE_NAME (approved 2Factor SMS template required for SMS-only OTP; Voice Call fallback is disabled)'
+      );
+    }
     return {
-      configured: missing.length === 0,
+      configured: Boolean(twoFactorKey && twoFactorTemplate),
       provider: '2factor',
-      providerLabel: '2Factor.in OTP SMS Gateway',
-      dltConfigured: Boolean(twoFactorTemplate || dltConfigured),
+      providerLabel: twoFactorSenderId
+        ? '2Factor.in Transactional SMS (TSMS) Gateway'
+        : '2Factor.in SMS OTP Gateway',
+      dltConfigured: Boolean(twoFactorTemplate),
       missingConfig: missing,
     };
   }
@@ -294,6 +303,8 @@ export function getOtpPublicConfig(): {
   smsProviderConfigured: boolean;
   providerType: SmsProviderKind | null;
   providerLabel: string;
+  deliveryChannel: 'sms_only';
+  voiceFallbackDisabled: boolean;
   dltConfigured: boolean;
   firebasePhoneAuthEnabled: boolean;
   cooldownSeconds: number;
@@ -306,6 +317,8 @@ export function getOtpPublicConfig(): {
     smsProviderConfigured: cfg.configured,
     providerType: cfg.provider,
     providerLabel: cfg.providerLabel,
+    deliveryChannel: 'sms_only',
+    voiceFallbackDisabled: true,
     dltConfigured: cfg.dltConfigured,
     firebasePhoneAuthEnabled:
       (process.env.VITE_FIREBASE_PHONE_AUTH_ENABLED || process.env.FIREBASE_PHONE_AUTH_ENABLED || '').trim().toLowerCase() === 'true',
@@ -354,7 +367,9 @@ async function dispatchSmsViaConfiguredProvider(
   try {
     if (provider === '2factor') {
       const apiKey = (process.env.TWOFACTOR_API_KEY || '').trim();
-      const templateName = (process.env.TWOFACTOR_TEMPLATE_NAME || '').trim();
+      const templateName = (process.env.TWOFACTOR_TEMPLATE_NAME || dltTemplateId || '').trim();
+      const senderId = (process.env.TWOFACTOR_SENDER_ID || dltSenderId || '').trim();
+
       if (!apiKey) {
         return {
           ok: false,
@@ -363,14 +378,45 @@ async function dispatchSmsViaConfiguredProvider(
         };
       }
 
-      const encodedKey = encodeURIComponent(apiKey);
-      const encodedPhone = encodeURIComponent(mobile.e164);
-      const encodedOtp = encodeURIComponent(otp);
-      const endpoint = templateName
-        ? `https://2factor.in/API/V1/${encodedKey}/SMS/${encodedPhone}/${encodedOtp}/${encodeURIComponent(templateName)}`
-        : `https://2factor.in/API/V1/${encodedKey}/SMS/${encodedPhone}/${encodedOtp}`;
+      // CRITICAL: On 2Factor, calling /SMS/{phone}/{otp} without an approved SMS templateName
+      // routes through 2Factor's automated Voice Call fallback. Require templateName strictly
+      // so OTPs are ONLY delivered via SMS and never via Voice Call.
+      if (!templateName) {
+        return {
+          ok: false,
+          errorCode: 'SMS_TEMPLATE_REQUIRED',
+          message:
+            '2Factor SMS delivery requires TWOFACTOR_TEMPLATE_NAME (approved DLT SMS template). Voice Call OTP fallback is disabled.',
+        };
+      }
 
-      const res = await fetchWithTimeout(endpoint, { method: 'GET' });
+      const encodedKey = encodeURIComponent(apiKey);
+      const safeSanitize = (rawText: string) =>
+        rawText.split(apiKey).join('***').replace(/\s+/g, ' ').trim().slice(0, 200);
+
+      let res: globalThis.Response;
+      if (senderId) {
+        // Official 2Factor Transactional SMS (TSMS) endpoint — strictly SMS-only channel, no voice routing
+        const tsmsEndpoint = `https://2factor.in/API/V1/${encodedKey}/ADDON_SERVICES/SEND/TSMS`;
+        res = await fetchWithTimeout(tsmsEndpoint, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            From: senderId,
+            To: mobile.digits91,
+            TemplateName: templateName,
+            VAR1: otp,
+          }),
+        });
+      } else {
+        // Official 2Factor Manual SMS OTP endpoint WITH explicit approved template name (no Voice fallback)
+        const encodedPhone = encodeURIComponent(mobile.digits91);
+        const encodedOtp = encodeURIComponent(otp);
+        const encodedTemplate = encodeURIComponent(templateName);
+        const smsEndpoint = `https://2factor.in/API/V1/${encodedKey}/SMS/${encodedPhone}/${encodedOtp}/${encodedTemplate}`;
+        res = await fetchWithTimeout(smsEndpoint, { method: 'GET' });
+      }
+
       const text = await res.text();
       let parsed: { Status?: string; Details?: string } = {};
       try {
@@ -380,13 +426,13 @@ async function dispatchSmsViaConfiguredProvider(
       }
 
       if (!res.ok || parsed.Status !== 'Success') {
-        const detail = typeof parsed.Details === 'string' ? parsed.Details.slice(0, 200) : text.slice(0, 200);
-        console.error('[OTP 2Factor] Dispatch failed status=', res.status, 'detail=', detail);
+        const rawDetail = typeof parsed.Details === 'string' && parsed.Details.trim() ? parsed.Details : text;
+        const cleanDetail = safeSanitize(rawDetail) || `HTTP ${res.status}`;
+        console.error('[OTP 2Factor SMS] Dispatch failed status=', res.status, 'detail=', cleanDetail);
         return {
           ok: false,
           errorCode: 'SMS_DISPATCH_FAILED',
-          message:
-            '2Factor SMS delivery failed. Verify DLT template approval, account credits, or retry in a moment.',
+          message: `SMS delivery failed (${cleanDetail}). Voice Call fallback is disabled.`,
         };
       }
 
@@ -700,12 +746,20 @@ export async function handleOtpRequest(
 
   const providerConfig = resolveSmsProviderConfig();
   if (!providerConfig.configured || !providerConfig.provider) {
+    const missingTemplateOnly =
+      providerConfig.provider === '2factor' &&
+      Boolean((process.env.TWOFACTOR_API_KEY || '').trim()) &&
+      !providerConfig.dltConfigured;
+
     return {
       status: 503,
       body: {
-        error: 'SMS_PROVIDER_NOT_CONFIGURED',
-        message:
-          'SMS provider configuration missing. Real OTP SMS cannot be sent until a server SMS gateway (2Factor, MSG91, Fast2SMS, Twilio, or DLT Webhook) or Firebase Phone Auth is configured.',
+        error: missingTemplateOnly ? 'SMS_TEMPLATE_REQUIRED' : 'SMS_PROVIDER_NOT_CONFIGURED',
+        deliveryChannel: 'sms_only',
+        voiceFallbackDisabled: true,
+        message: missingTemplateOnly
+          ? '2Factor SMS delivery failed: TWOFACTOR_TEMPLATE_NAME (approved DLT SMS template name) is required in Vercel Environment Variables to send SMS only. Voice Call OTP is disabled.'
+          : 'SMS provider configuration missing. Real OTP SMS cannot be sent until a server SMS gateway (2Factor with approved SMS template, MSG91, Fast2SMS, Twilio, or DLT Webhook) or Firebase Phone Auth is configured.',
         missingConfig: providerConfig.missingConfig,
       },
     };
@@ -721,11 +775,15 @@ export async function handleOtpRequest(
 
   const dispatchResult = await dispatchSmsViaConfiguredProvider(providerConfig.provider, normalized, otp);
   if (!dispatchResult.ok) {
+    mobileCooldownMap.set(normalized.national10, now + OTP_FAILURE_COOLDOWN_SECONDS * 1000);
     return {
       status: 503,
       body: {
         error: dispatchResult.errorCode || 'SMS_DISPATCH_FAILED',
-        message: dispatchResult.message || 'SMS service temporarily unavailable.',
+        deliveryChannel: 'sms_only',
+        voiceFallbackDisabled: true,
+        retryAfterSeconds: OTP_FAILURE_COOLDOWN_SECONDS,
+        message: dispatchResult.message || 'SMS delivery failed. Voice Call fallback is disabled.',
       },
     };
   }
@@ -749,6 +807,7 @@ export async function handleOtpRequest(
       ok: true,
       mode: providerConfig.provider,
       providerLabel: providerConfig.providerLabel,
+      deliveryChannel: 'sms_only',
       deliveryStatus: 'dispatched',
       mobile: normalized.national10,
       e164: normalized.e164,
