@@ -1,8 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { ChevronDown, FlaskConical, Globe, LogOut, Menu, Mic, Shield, UserCheck, UserPlus, X, Zap } from 'lucide-react';
+import { Bell, CheckCheck, ChevronDown, Globe, LogOut, Menu, Mic, Shield, UserCheck, UserPlus, X, Zap } from 'lucide-react';
 import { useLanguage } from '../i18n/LanguageContext';
 import { useAuth } from '../contexts/AuthContext';
-import type { Language, PageRoute } from '../types/domain';
+import type { AppNotificationRecord, Language, PageRoute } from '../types/domain';
 import { PWAInstallButton } from './PWAControls';
 import { RojgarSetuLogo } from './RojgarSetuLogo';
 import gandhiPortrait from '../assets/images/gandhi_dignity_labour_1794635762419.jpg';
@@ -11,19 +11,26 @@ interface HeaderProps {
   currentRoute: PageRoute;
   onNavigate: (route: PageRoute) => void;
   onOpenAiAssistant?: () => void;
-  demoModeActive?: boolean;
+  notifications?: AppNotificationRecord[];
+  unreadCount?: number;
+  onOpenNotification?: (item: AppNotificationRecord) => void;
+  onMarkAllRead?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   currentRoute,
   onNavigate,
   onOpenAiAssistant,
-  demoModeActive = false,
+  notifications = [],
+  unreadCount = 0,
+  onOpenNotification,
+  onMarkAllRead,
 }) => {
   const { lang, setLang, t } = useLanguage();
   const { user, workerProfile, employerProfile, isAdmin, signInWithGoogle, logout } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
+  const [notifOpen, setNotifOpen] = useState(false);
   const [fontScale, setFontScale] = useState<'sm' | 'md' | 'lg'>('md');
 
   useEffect(() => {
@@ -111,21 +118,6 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
 
             <PWAInstallButton />
-
-            {demoModeActive && (
-              <button
-                type="button"
-                onClick={() => handleNav('demo-testing')}
-                className={`hidden md:inline-flex items-center gap-1 px-2 py-0.5 rounded border text-[11px] font-bold transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
-                  currentRoute === 'demo-testing'
-                    ? 'bg-amber-400 text-[#072A54] border-amber-300'
-                    : 'bg-amber-500/20 text-amber-200 border-amber-400/60 hover:bg-amber-400 hover:text-[#072A54]'
-                }`}
-              >
-                <FlaskConical className="w-3 h-3" />
-                <span>{lang === 'hi' ? 'डेमो टेस्ट (5 यूजर)' : lang === 'mr' ? 'डेमो टेस्ट (5 युझर)' : 'Demo Test (5 Users)'}</span>
-              </button>
-            )}
 
             {/* Mandatory 3-Language Switcher */}
             <div
@@ -305,19 +297,6 @@ export const Header: React.FC<HeaderProps> = ({
                       { id: 'pricing', label: t.nav.pricing },
                       { id: 'trust-safety', label: t.nav.trustSafety },
                       { id: 'contact', label: t.nav.contact },
-                      ...(demoModeActive
-                        ? [
-                            {
-                              id: 'demo-testing' as PageRoute,
-                              label:
-                                lang === 'hi'
-                                  ? '🧪 डेमो टेस्ट मोड (5 यूजर)'
-                                  : lang === 'mr'
-                                  ? '🧪 डेमो टेस्ट मोड (5 युझर)'
-                                  : '🧪 Pre-Launch Demo Mode (5 Users)',
-                            },
-                          ]
-                        : []),
                       ...(isAdmin ? [{ id: 'admin' as PageRoute, label: t.nav.adminPanel }] : []),
                     ] as { id: PageRoute; label: string }[]
                   ).map((sub) => (
@@ -403,6 +382,101 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
             )}
 
+            {user && (
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setNotifOpen((v) => !v)}
+                  aria-label="Notifications"
+                  className="relative inline-flex items-center justify-center w-9 h-9 rounded border border-blue-400/70 bg-[#072A54] text-white hover:bg-blue-900 cursor-pointer shrink-0"
+                >
+                  <Bell className="w-4 h-4 text-amber-300" />
+                  {unreadCount > 0 && (
+                    <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-1 rounded-full bg-[#E06D1B] text-white text-[10px] font-mono-tabular font-extrabold flex items-center justify-center border border-white">
+                      {unreadCount > 99 ? '99+' : unreadCount}
+                    </span>
+                  )}
+                </button>
+
+                {notifOpen && (
+                  <div className="absolute right-0 mt-2 w-80 sm:w-96 rounded-lg border border-slate-200 bg-white text-slate-900 shadow-xl z-50 overflow-hidden">
+                    <div className="px-4 py-2.5 bg-[#072A54] text-white flex items-center justify-between gap-2">
+                      <div className="text-xs font-bold flex items-center gap-1.5">
+                        <Bell className="w-3.5 h-3.5 text-amber-300" />
+                        <span>
+                          {lang === 'hi'
+                            ? 'सूचनाएं'
+                            : lang === 'mr'
+                            ? 'सूचना'
+                            : 'Notifications'}{' '}
+                          ({unreadCount} {lang === 'hi' ? 'अपठित' : lang === 'mr' ? 'न वाचलेल्या' : 'unread'})
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {unreadCount > 0 && onMarkAllRead && (
+                          <button
+                            type="button"
+                            onClick={() => onMarkAllRead()}
+                            className="inline-flex items-center gap-1 text-[11px] font-semibold text-amber-300 hover:text-white cursor-pointer"
+                          >
+                            <CheckCheck className="w-3.5 h-3.5" />
+                            {lang === 'hi' ? 'सभी पढ़ें' : lang === 'mr' ? 'सर्व वाचल्या' : 'Mark all read'}
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setNotifOpen(false)}
+                          className="p-0.5 rounded hover:bg-blue-900 text-blue-200 cursor-pointer"
+                          aria-label="Close notifications"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="max-h-80 overflow-y-auto divide-y divide-slate-100">
+                      {notifications.length === 0 ? (
+                        <p className="p-4 text-xs text-slate-500 text-center">
+                          {lang === 'hi'
+                            ? 'अभी कोई सूचना नहीं है।'
+                            : lang === 'mr'
+                            ? 'अद्याप कोणतीही सूचना नाही.'
+                            : 'No notifications yet.'}
+                        </p>
+                      ) : (
+                        notifications.slice(0, 15).map((item) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => {
+                              setNotifOpen(false);
+                              if (onOpenNotification) onOpenNotification(item);
+                            }}
+                            className={`w-full text-left px-4 py-3 hover:bg-slate-50 transition-colors cursor-pointer space-y-1 ${
+                              !item.read ? 'bg-amber-50/70' : 'bg-white'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-[10px] font-mono-tabular font-bold uppercase text-[#C25E00]">
+                                {item.dealStatus || item.eventType || item.category}
+                              </span>
+                              {!item.read && (
+                                <span className="w-2 h-2 rounded-full bg-[#E06D1B] shrink-0" />
+                              )}
+                            </div>
+                            <div className="text-xs font-bold text-[#0B3B75] leading-snug">
+                              {item.title}
+                            </div>
+                            <p className="text-[11px] text-slate-600 line-clamp-2">{item.body}</p>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             <button
               type="button"
               onClick={() => setMobileOpen((v) => !v)}
@@ -437,19 +511,6 @@ export const Header: React.FC<HeaderProps> = ({
                 { id: 'pricing', label: t.nav.pricing },
                 { id: 'trust-safety', label: t.nav.trustSafety },
                 { id: 'contact', label: t.nav.contact },
-                ...(demoModeActive
-                  ? [
-                      {
-                        id: 'demo-testing' as PageRoute,
-                        label:
-                          lang === 'hi'
-                            ? '🧪 डेमो टेस्ट मोड (5 यूजर)'
-                            : lang === 'mr'
-                            ? '🧪 डेमो टेस्ट मोड (5 युझर)'
-                            : '🧪 Pre-Launch Demo Mode (5 Users)',
-                      },
-                    ]
-                  : []),
                 ...(isAdmin ? [{ id: 'admin' as PageRoute, label: t.nav.adminPanel }] : []),
               ] as { id: PageRoute; label: string }[]
             ).map((item) => (

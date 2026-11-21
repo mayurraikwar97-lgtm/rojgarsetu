@@ -1,15 +1,29 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { BellRing, Briefcase, CheckCircle2, MapPin, PlusCircle, Search, Users } from 'lucide-react';
+import { BellRing, Briefcase, CheckCircle2, MapPin, PlusCircle, Search, Users, Volume2, VolumeX } from 'lucide-react';
 import { EMPLOYMENT_CATEGORIES } from '../data/categories';
 import { getDistrictCoordinates, INDIA_STATES_DISTRICTS } from '../data/indiaLocations';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../i18n/LanguageContext';
-import { applyToJob, callNotificationApi, createJobPosting } from '../lib/firestoreService';
+import {
+  callNotificationApi,
+  createJobPosting,
+  notifyMatchingWorkersInApp,
+  submitWorkerOffer,
+} from '../lib/firestoreService';
+import {
+  buildApproxLocationLabel,
+  buildSmartJobVoiceScript,
+  calculateValidDistanceKm,
+  getPublicJobLocationText,
+  SERVICE_RADIUS_STAGES,
+} from '../lib/smartVoiceJobAlert';
+import { speakJobAlert, stopVoiceAlert, unlockAudioOnUserGesture } from '../lib/voiceAlertEngine';
 import type {
   JobPosting,
   JobWorkType,
   PageRoute,
   PublicWorkerProfile,
+  ServiceRadiusKm,
   WageUnit,
 } from '../types/domain';
 import { SecureAvatar } from './SecureAvatar';
@@ -40,9 +54,11 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
 
   const [applyingJob, setApplyingJob] = useState<JobPosting | null>(null);
   const [proposedWage, setProposedWage] = useState<number>(0);
+  const [estimatedArrivalTime, setEstimatedArrivalTime] = useState<string>('Within 1 hour');
   const [applyNote, setApplyNote] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [appliedJobIds, setAppliedJobIds] = useState<string[]>([]);
+  const [speakingJobId, setSpeakingJobId] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
 
   const filteredJobs = useMemo(() => {
@@ -80,7 +96,8 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
   const handleOpenApply = (job: JobPosting) => {
     setErrorMsg('');
     setApplyingJob(job);
-    setProposedWage(job.offeredWage);
+    setProposedWage(job.offeredWage > 0 ? job.offeredWage : workerProfile?.expectedWage || 500);
+    setEstimatedArrivalTime('Within 1 hour');
     setApplyNote('');
   };
 
@@ -90,35 +107,22 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
     setSubmitting(true);
     setErrorMsg('');
     try {
-      const numericWage = Number(proposedWage) || applyingJob.offeredWage;
-      await applyToJob({
-        jobId: applyingJob.id,
-        jobTitle: applyingJob.title,
-        employerUid: applyingJob.employerUid,
+      const numericWage = Number(proposedWage) || applyingJob.offeredWage || workerProfile.expectedWage;
+      await submitWorkerOffer({
+        job: applyingJob,
+        worker: workerProfile,
         workerUid: user.uid,
-        workerRegistrationId: workerProfile.registrationId,
-        workerName: workerProfile.displayName,
-        workerPrimarySkill: workerProfile.primarySkill,
-        ...(workerProfile.photoDocId ? { workerPhotoDocId: workerProfile.photoDocId } : {}),
-        proposedWage: numericWage,
-        note: applyNote.trim().slice(0, 600),
+        offeredPrice: numericWage,
+        estimatedArrivalTime: estimatedArrivalTime.trim() || 'Within 1 hour',
+        offerMessage: applyNote.trim().slice(0, 600),
       });
-      void callNotificationApi('/api/notifications/send-customer-event', {
-        recipientUid: applyingJob.employerUid,
-        eventType: numericWage !== applyingJob.offeredWage ? 'worker_quotation' : 'new_application',
-        workerName: workerProfile.displayName,
-        jobTitle: applyingJob.title,
-        jobId: applyingJob.id,
-        proposedWage: numericWage,
-        targetRoute: 'employer-dashboard',
-      }).catch(() => undefined);
       setAppliedJobIds((prev) => [...prev, applyingJob.id]);
       setApplyingJob(null);
       if (highlightedJobId === applyingJob.id && onClearHighlightedJob) {
         onClearHighlightedJob();
       }
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Unable to submit application.');
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to send offer.');
     } finally {
       setSubmitting(false);
     }
@@ -293,20 +297,74 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
                   )}
 
                   <div className="text-xs text-slate-600 space-y-1 pt-1">
-                    <div className="flex items-center gap-1.5">
-                      <MapPin className="w-3.5 h-3.5 text-slate-400" />
-                      <span>
-                        {job.workLocationLabel}, {job.cityOrVillage}, {job.district}, {job.state}
-                      </span>
-                    </div>
-                    <p className="font-mono-tabular">
-                      {job.workersRequired} {t.jobs.workersUnit} · {job.paymentTerms}
-                    </p>
-                    <p className="text-slate-500">
-                      Skills: {job.requiredSkills.join(', ')}
-                      {job.isWomenFriendly ? ' · Women-friendly' : ''}
-                      {job.isAccessible ? ' · Accessible (PwD)' : ''}
-                    </p>
+                    {(() => {
+                      const approxLoc = getPublicJobLocationText(job, false);
+                      const distKm = calculateValidDistanceKm(
+                        job.lat,
+                        job.lng,
+                        workerProfile?.approxLat,
+                        workerProfile?.approxLng
+                      );
+                      const isSpeaking = speakingJobId === job.id;
+                      const preferredLang = workerProfile?.preferredLanguage || lang;
+                      return (
+                        <>
+                          <div className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex items-center gap-1.5">
+                              <MapPin className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                              <span>
+                                {approxLoc}
+                                {distKm !== null ? ` (~${distKm} km away)` : ''}
+                              </span>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                unlockAudioOnUserGesture();
+                                if (isSpeaking) {
+                                  stopVoiceAlert();
+                                  setSpeakingJobId(null);
+                                  return;
+                                }
+                                const script = buildSmartJobVoiceScript({
+                                  lang: preferredLang,
+                                  customerName: job.employerName,
+                                  category: job.category,
+                                  jobTitle: job.title,
+                                  jobDescription: job.title || job.description,
+                                  approxLocationLabel: approxLoc,
+                                  distanceKm: distKm,
+                                });
+                                setSpeakingJobId(job.id);
+                                void speakJobAlert({
+                                  text: script,
+                                  lang: preferredLang,
+                                  soundEnabled: false,
+                                  voiceEnabled: true,
+                                }).finally(() => {
+                                  setSpeakingJobId((prev) => (prev === job.id ? null : prev));
+                                });
+                              }}
+                              className="inline-flex items-center gap-1 px-2 py-1 rounded border border-slate-300 bg-slate-50 text-[11px] font-semibold text-[#0B3B75] hover:bg-slate-100 cursor-pointer"
+                            >
+                              {isSpeaking ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3 h-3 text-[#E06D1B]" />}
+                              <span>{isSpeaking ? 'Stop' : 'Listen'}</span>
+                            </button>
+                          </div>
+                          <p className="font-mono-tabular">
+                            {job.workersRequired} {t.jobs.workersUnit} · {job.paymentTerms}
+                          </p>
+                          <p className="text-slate-500">
+                            Skills: {job.requiredSkills.join(', ')}
+                            {job.isWomenFriendly ? ' · Women-friendly' : ''}
+                            {job.isAccessible ? ' · Accessible (PwD)' : ''}
+                          </p>
+                          <p className="text-[11px] text-slate-400">
+                            Exact address is revealed after offer acceptance.
+                          </p>
+                        </>
+                      );
+                    })()}
                   </div>
                 </div>
 
@@ -366,15 +424,27 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
 
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
-                {t.jobs.proposedWageLabel}
+                {t.jobs.proposedWageLabel} (Offer Price ₹)
               </label>
               <input
                 type="number"
                 min={0}
-                disabled={!applyingJob.biddingEnabled}
                 value={proposedWage}
                 onChange={(e) => setProposedWage(Number(e.target.value))}
-                className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm font-mono-tabular disabled:bg-slate-100"
+                className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm font-mono-tabular"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Estimated Arrival Time
+              </label>
+              <input
+                type="text"
+                value={estimatedArrivalTime}
+                onChange={(e) => setEstimatedArrivalTime(e.target.value)}
+                placeholder="e.g., 30 mins, Today 4 PM, Tomorrow 9 AM"
+                className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
               />
             </div>
 
@@ -386,6 +456,7 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
                 rows={3}
                 value={applyNote}
                 onChange={(e) => setApplyNote(e.target.value)}
+                placeholder="Describe tools, experience, or availability..."
                 className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
               />
             </div>
@@ -543,10 +614,11 @@ export const FindWorkersView: React.FC<FindWorkersViewProps> = ({ workers, onNav
 };
 
 interface PostJobViewProps {
+  workers?: PublicWorkerProfile[];
   onNavigate: (route: PageRoute) => void;
 }
 
-export const PostJobView: React.FC<PostJobViewProps> = ({ onNavigate }) => {
+export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNavigate }) => {
   const { lang, t } = useLanguage();
   const { user, employerProfile, signInWithGoogle } = useAuth();
 
@@ -570,6 +642,7 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ onNavigate }) => {
   const [isWomenFriendly, setIsWomenFriendly] = useState(false);
   const [isAccessible, setIsAccessible] = useState(false);
   const [biddingEnabled, setBiddingEnabled] = useState(true);
+  const [initialRadiusKm, setInitialRadiusKm] = useState<ServiceRadiusKm>(5);
 
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -594,7 +667,12 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ onNavigate }) => {
 
     setSaving(true);
     try {
-      const id = await createJobPosting({
+      const approxLocationLabel = buildApproxLocationLabel({
+        cityOrVillage: cityOrVillage.trim(),
+        district: districtName,
+        state: stateName,
+      });
+      const jobPayload = {
         employerUid: user.uid,
         employerName: employerProfile.businessName,
         title: title.trim().slice(0, 140),
@@ -606,6 +684,9 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ onNavigate }) => {
         district: districtName,
         cityOrVillage: cityOrVillage.trim().slice(0, 100),
         workLocationLabel: workLocationLabel.trim().slice(0, 160),
+        approxLocationLabel: approxLocationLabel.slice(0, 160),
+        initialRadiusKm,
+        currentRadiusKm: initialRadiusKm,
         lat: coords.lat,
         lng: coords.lng,
         jobDate,
@@ -619,8 +700,20 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ onNavigate }) => {
         isWomenFriendly,
         isAccessible,
         biddingEnabled,
-      });
+      };
+      const id = await createJobPosting(jobPayload);
       setCreatedJobId(id);
+
+      let inAppNotified = 0;
+      if (workers.length > 0) {
+        inAppNotified = await notifyMatchingWorkersInApp({
+          jobId: id,
+          job: jobPayload,
+          workers,
+          stageRadiusKm: initialRadiusKm,
+          autoExpandIfEmpty: true,
+        });
+      }
 
       try {
         const res = await callNotificationApi<{
@@ -629,19 +722,23 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ onNavigate }) => {
           sentCount?: number;
           inAppOnlyCount?: number;
           message?: string;
-        }>('/api/notifications/send-matching-job', { jobId: id });
+        }>('/api/notifications/send-matching-job', {
+          jobId: id,
+          stageRadiusKm: initialRadiusKm,
+        });
         if ((res.data.sentCount || 0) > 0) {
           setPushDispatchNotice(
-            `Push notifications delivered to ${res.data.sentCount} matching worker device(s).`
+            `Notified ${Math.max(inAppNotified, res.data.matchedWorkersCount || 0)} matching worker(s) (${res.data.sentCount} push delivery).`
           );
-        } else if ((res.data.matchedWorkersCount || 0) > 0) {
+        } else if (inAppNotified > 0 || (res.data.matchedWorkersCount || 0) > 0) {
           setPushDispatchNotice(
-            res.data.message ||
-              `${res.data.matchedWorkersCount} matching worker(s) found (${res.data.inAppOnlyCount || 0} in-app alerts recorded).`
+            `${Math.max(inAppNotified, res.data.matchedWorkersCount || 0)} matching worker(s) notified immediately in-app.`
           );
         }
       } catch {
-        // Non-blocking: job is still published even if server push credentials aren't active
+        if (inAppNotified > 0) {
+          setPushDispatchNotice(`${inAppNotified} matching worker(s) notified immediately in-app.`);
+        }
       }
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Unable to publish job.');
@@ -951,6 +1048,23 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ onNavigate }) => {
                   <option value="platform_message">Platform updates only</option>
                 </select>
               </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Initial Notification Radius Stage (Staged: 5 → 10 → 20 → 30 km)
+              </label>
+              <select
+                value={initialRadiusKm}
+                onChange={(e) => setInitialRadiusKm(Number(e.target.value) as ServiceRadiusKm)}
+                className="w-full sm:w-64 px-3 py-2 border border-slate-300 rounded-md text-sm bg-white font-mono-tabular"
+              >
+                {SERVICE_RADIUS_STAGES.map((km) => (
+                  <option key={km} value={km}>
+                    {km} km initial broadcast radius
+                  </option>
+                ))}
+              </select>
             </div>
 
             <div className="space-y-2 pt-2 border-t border-slate-200 text-sm text-slate-700">

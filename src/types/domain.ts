@@ -40,6 +40,37 @@ export type JobWorkType = WorkType | 'temporary' | 'urgent' | 'bulk';
 export type VerificationStatus = 'pending' | 'verified' | 'suspended';
 export type VerificationMethod = 'sms_otp' | 'firebase_phone' | 'test_pin';
 
+export type DealStatus =
+  | 'REQUESTED'
+  | 'NOTIFIED'
+  | 'OFFER_RECEIVED'
+  | 'OFFER_ACCEPTED'
+  | 'DEAL_CONFIRMED'
+  | 'WORK_IN_PROGRESS'
+  | 'WORK_COMPLETED'
+  | 'CANCELLED'
+  | 'REJECTED';
+
+export type DealNotificationEventType =
+  | 'hiring_request_created'
+  | 'worker_offer_sent'
+  | 'offer_accepted'
+  | 'offer_rejected'
+  | 'job_request_accepted'
+  | 'job_request_rejected'
+  | 'customer_message'
+  | 'worker_message'
+  | 'deal_confirmed'
+  | 'work_started'
+  | 'work_completed'
+  | 'deal_cancelled'
+  | 'worker_quotation'
+  | 'booking_accepted'
+  | 'worker_arrived'
+  | 'job_completed'
+  | 'booking_cancelled'
+  | 'new_application';
+
 export interface UserAccount {
   uid: string;
   email: string;
@@ -49,6 +80,8 @@ export interface UserAccount {
   createdAt?: unknown;
   updatedAt?: unknown;
 }
+
+export type ServiceRadiusKm = 5 | 10 | 20 | 30;
 
 export interface PublicWorkerProfile {
   id: string;
@@ -73,6 +106,9 @@ export interface PublicWorkerProfile {
   verificationStatus: VerificationStatus;
   isWomenEnterprise?: boolean;
   photoDocId?: string;
+  preferredLanguage?: Language;
+  preferredRadiusKm?: ServiceRadiusKm;
+  voiceAlertsEnabled?: boolean;
   completedJobsCount: number;
   ratingAvg: number;
   createdAt?: unknown;
@@ -160,6 +196,14 @@ export interface JobPosting {
   photoAttachment?: string;
   photoAnalyzed?: boolean;
   status: 'open' | 'in_progress' | 'completed' | 'cancelled' | 'flagged';
+  dealStatus?: DealStatus;
+  acceptedApplicationId?: string;
+  acceptedWorkerUid?: string;
+  notifiedWorkerUids?: string[];
+  approxLocationLabel?: string;
+  initialRadiusKm?: ServiceRadiusKm;
+  currentRadiusKm?: ServiceRadiusKm;
+  radiusStageUpdatedAt?: unknown;
   applicationsCount: number;
   createdAt?: unknown;
   updatedAt?: unknown;
@@ -178,6 +222,24 @@ export interface JobApplication {
   proposedWage: number;
   note?: string;
   status: 'applied' | 'invited' | 'accepted' | 'declined' | 'work_completed';
+  dealStatus?: DealStatus;
+  initiatedBy?: 'customer_invite' | 'customer_broadcast' | 'worker_apply';
+  jobCategory?: string;
+  jobDistrict?: string;
+  jobLocationLabel?: string;
+  jobDate?: string;
+  startTime?: string;
+  customerName?: string;
+  offerAmount?: number;
+  estimatedArrivalTime?: string;
+  offerMessage?: string;
+  offerSubmittedAt?: unknown;
+  agreedPrice?: number;
+  dealConfirmedAt?: unknown;
+  workStartedAt?: unknown;
+  completedAt?: unknown;
+  cancelledAt?: unknown;
+  cancelledByUid?: string;
   liveTrackingAuthorized: boolean;
   workerRating?: number;
   employerFeedback?: string;
@@ -375,6 +437,10 @@ export interface NotificationPreferences {
   bookingNotifications: boolean;
   announcements: boolean;
   preferredLanguage: Language;
+  voiceAlertsEnabled?: boolean;
+  soundEnabled?: boolean;
+  preferredCategories?: string[];
+  preferredRadiusKm?: ServiceRadiusKm;
   createdAt?: unknown;
   updatedAt?: unknown;
 }
@@ -383,13 +449,26 @@ export interface AppNotificationRecord {
   id: string;
   recipientUid: string;
   recipientRole: 'worker' | 'employer' | 'admin' | 'demo_worker';
+  senderUid?: string;
+  senderName?: string;
   isDemo: boolean;
   category: NotificationCategoryKey;
+  eventType?: DealNotificationEventType | string;
+  dealStatus?: DealStatus;
   title: string;
   body: string;
+  voiceScript?: string;
+  approxLocationLabel?: string;
+  distanceKm?: number;
+  customerName?: string;
+  jobCategory?: string;
+  playSound?: boolean;
+  speakVoice?: boolean;
+  metadataLabel?: string;
   language: Language;
   targetRoute: PageRoute;
   targetJobId?: string;
+  targetApplicationId?: string;
   targetDemoJobId?: string;
   dedupeKey: string;
   deliveryStatus: 'sent' | 'failed' | 'in_app_only';
@@ -635,6 +714,36 @@ export interface AcceptedCustomerPhotoRecord {
   sourceType: 'job_application' | 'demo_work_order';
   sourceId: string;
   photoData: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface DealMessage {
+  id: string;
+  applicationId: string;
+  jobId: string;
+  employerUid: string;
+  workerUid: string;
+  senderUid: string;
+  senderRole: 'customer' | 'worker';
+  senderName: string;
+  text: string;
+  createdAt?: unknown;
+}
+
+export interface DealLocationShare {
+  id: string;
+  applicationId: string;
+  jobId: string;
+  ownerUid: string;
+  authorizedUids: string[];
+  role: 'customer' | 'worker';
+  participantName: string;
+  lat: number;
+  lng: number;
+  accuracyMeters: number;
+  sharingActive: boolean;
+  source: 'gps_watch' | 'gps_once' | 'manual_pin' | 'simulated_move';
   createdAt?: unknown;
   updatedAt?: unknown;
 }

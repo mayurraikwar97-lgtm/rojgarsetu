@@ -10,7 +10,14 @@ import { FieldValue, getFirestore } from 'firebase-admin/firestore';
 import type { Firestore } from 'firebase-admin/firestore';
 import { getMessaging } from 'firebase-admin/messaging';
 import type { Messaging } from 'firebase-admin/messaging';
-import { calculateDistanceKm } from '../data/indiaLocations.ts';
+import {
+  SERVICE_RADIUS_STAGES,
+  buildApproxLocationLabel,
+  buildSmartJobNotificationContent,
+  evaluateWorkerEligibilityForJob,
+  getNextRadiusStage,
+  normalizeRadiusKm,
+} from '../lib/smartVoiceJobAlert.ts';
 
 const BOOTSTRAPPED_ADMIN_EMAIL = 'mayurraikwar97@gmail.com';
 
@@ -179,37 +186,80 @@ function buildLocalizedCustomerEventMessage(params: {
   workerName: string;
   jobTitle: string;
   proposedWage?: number;
+  eta?: string;
+  locationLabel?: string;
+  messageSnippet?: string;
 }): { title: string; body: string } {
-  const { lang, eventType, workerName, jobTitle, proposedWage } = params;
-  const safeName = workerName || 'Worker';
+  const { lang, eventType, workerName, jobTitle, proposedWage, eta, locationLabel, messageSnippet } = params;
+  const safeName = workerName || 'Participant';
   const safeJob = jobTitle || 'Work Request';
+  const priceText = proposedWage && proposedWage > 0 ? `₹${proposedWage}` : '';
+  const etaText = eta ? ` · ETA: ${eta}` : '';
+  const locText = locationLabel ? ` · ${locationLabel}` : '';
+  const msgText = messageSnippet ? ` — "${messageSnippet.slice(0, 120)}"` : '';
 
   if (lang === 'mr') {
     switch (eventType) {
+      case 'hiring_request_created':
+        return {
+          title: `नवीन कामाची विनंती: ${safeJob}`,
+          body: `${safeName} यांनी कामाची विनंती पाठवली आहे${locText}${priceText ? ` · ${priceText}` : ''}. स्वीकारा, नकारा किंवा दर प्रस्ताव पाठवा.`,
+        };
+      case 'worker_offer_sent':
       case 'worker_quotation':
         return {
-          title: `नवीन दर प्रस्ताव: ${safeJob}`,
-          body: `${safeName} यांनी ₹${proposedWage || 0} दरासह प्रस्ताव पाठवला आहे.`,
+          title: `कामगाराचा नवीन दर प्रस्ताव: ${safeJob}`,
+          body: `${safeName} यांनी ${priceText || 'नवीन दर'} ऑफर पाठवली आहे${etaText}${msgText}.`,
         };
+      case 'offer_accepted':
+        return {
+          title: `अभिनंदन! ग्राहकाने तुमची ऑफर स्वीकारली आहे: ${safeJob}`,
+          body: `${safeName} यांनी तुमची ऑफर स्वीकारली (${priceText || 'मान्य दर'})${locText}. आता काम पक्के करून लाइव्ह लोकेशन पाहता येईल.`,
+        };
+      case 'offer_rejected':
+        return {
+          title: `ऑफर नाकारली गेली: ${safeJob}`,
+          body: `${safeName} यांनी या कामासाठीचा प्रस्ताव नाकारला आहे.`,
+        };
+      case 'job_request_accepted':
       case 'booking_accepted':
         return {
-          title: `बुकिंग स्वीकारली: ${safeJob}`,
-          body: `${safeName} यांनी तुमचे काम स्वीकारले आहे.`,
+          title: `कामाची विनंती स्वीकारली: ${safeJob}`,
+          body: `${safeName} यांनी तुमची कामाची विनंती स्वीकारली आहे${priceText ? ` (${priceText})` : ''}.`,
         };
+      case 'job_request_rejected':
+        return {
+          title: `कामाची विनंती नाकारली: ${safeJob}`,
+          body: `${safeName} सध्या या कामासाठी उपलब्ध नाहीत.`,
+        };
+      case 'customer_message':
+      case 'worker_message':
+        return {
+          title: `नवीन संदेश — ${safeJob}`,
+          body: `${safeName}: ${messageSnippet || 'नवीन संदेश प्राप्त झाला आहे.'}`,
+        };
+      case 'deal_confirmed':
+        return {
+          title: `व्यवहार निश्चित झाला (Deal Confirmed): ${safeJob}`,
+          body: `${safeJob} साठी व्यवहार पक्का झाला आहे${priceText ? ` (${priceText})` : ''}${locText}. दोन-मार्ग लाइव्ह लोकेशन आता उपलब्ध आहे.`,
+        };
+      case 'work_started':
       case 'worker_arrived':
         return {
-          title: `कामगार पोहोचले: ${safeJob}`,
-          body: `${safeName} कामाच्या ठिकाणी पोहोचले आहेत.`,
+          title: `काम सुरू झाले: ${safeJob}`,
+          body: `${safeName} कामाच्या ठिकाणी पोहोचले / काम सुरू केले आहे.`,
         };
+      case 'work_completed':
       case 'job_completed':
         return {
           title: `काम पूर्ण झाले: ${safeJob}`,
-          body: `${safeJob} पूर्ण झाले आहे. डॅशबोर्डवर रेटिंग द्या.`,
+          body: `${safeJob} पूर्ण झाले आहे. लाइव्ह लोकेशन शेअरिंग सुरक्षितपणे बंद केले आहे.`,
         };
+      case 'deal_cancelled':
       case 'booking_cancelled':
         return {
-          title: `बुकिंग रद्द: ${safeJob}`,
-          body: `${safeJob} साठीची बुकिंग अद्ययावत झाली आहे.`,
+          title: `व्यवहार रद्द झाला: ${safeJob}`,
+          body: `${safeName} यांनी ${safeJob} रद्द केले आहे. लोकेशन शेअरिंग बंद झाले आहे.`,
         };
       default:
         return {
@@ -221,30 +271,66 @@ function buildLocalizedCustomerEventMessage(params: {
 
   if (lang === 'hi') {
     switch (eventType) {
+      case 'hiring_request_created':
+        return {
+          title: `नया कार्य अनुरोध: ${safeJob}`,
+          body: `${safeName} ने कार्य अनुरोध भेजा है${locText}${priceText ? ` · ${priceText}` : ''}। स्वीकार करें, अस्वीकार करें या ऑफर भेजें।`,
+        };
+      case 'worker_offer_sent':
       case 'worker_quotation':
         return {
-          title: `नया वेतन प्रस्ताव: ${safeJob}`,
-          body: `${safeName} ने ₹${proposedWage || 0} का कोटेशन भेजा है।`,
+          title: `कामगार का नया ऑफर: ${safeJob}`,
+          body: `${safeName} ने ${priceText || 'दर'} का ऑफर भेजा है${etaText}${msgText}।`,
         };
+      case 'offer_accepted':
+        return {
+          title: `बधाई हो! ग्राहक ने आपका ऑफर स्वीकार कर लिया है: ${safeJob}`,
+          body: `${safeName} ने आपका ऑफर स्वीकार किया (${priceText || 'तय राशि'})${locText}। कृपया डैशबोर्ड पर डील कन्फर्म करें।`,
+        };
+      case 'offer_rejected':
+        return {
+          title: `ऑफर अस्वीकृत: ${safeJob}`,
+          body: `${safeName} ने इस काम का प्रस्ताव अस्वीकार कर दिया है।`,
+        };
+      case 'job_request_accepted':
       case 'booking_accepted':
         return {
-          title: `बुकिंग स्वीकृत: ${safeJob}`,
-          body: `${safeName} ने आपका कार्य अनुरोध स्वीकार कर लिया है।`,
+          title: `कार्य अनुरोध स्वीकृत: ${safeJob}`,
+          body: `${safeName} ने आपका कार्य अनुरोध स्वीकार कर लिया है${priceText ? ` (${priceText})` : ''}।`,
         };
+      case 'job_request_rejected':
+        return {
+          title: `कार्य अनुरोध अस्वीकृत: ${safeJob}`,
+          body: `${safeName} अभी इस कार्य के लिए उपलब्ध नहीं हैं।`,
+        };
+      case 'customer_message':
+      case 'worker_message':
+        return {
+          title: `नया संदेश — ${safeJob}`,
+          body: `${safeName}: ${messageSnippet || 'नया संदेश प्राप्त हुआ है।'}`,
+        };
+      case 'deal_confirmed':
+        return {
+          title: `डील कन्फर्म हो गई: ${safeJob}`,
+          body: `${safeJob} की डील पक्की हो गई है${priceText ? ` (${priceText})` : ''}${locText}। अब लाइव लोकेशन साझा की जा सकती है।`,
+        };
+      case 'work_started':
       case 'worker_arrived':
         return {
-          title: `कामगार पहुंचे: ${safeJob}`,
-          body: `${safeName} कार्य स्थल पर पहुंच गए हैं।`,
+          title: `काम शुरू हो गया: ${safeJob}`,
+          body: `${safeName} ने कार्य शुरू कर दिया है / स्थल पर पहुंच गए हैं।`,
         };
+      case 'work_completed':
       case 'job_completed':
         return {
           title: `कार्य पूर्ण: ${safeJob}`,
-          body: `${safeJob} पूर्ण हो गया है। कृपया डैशबोर्ड पर रेटिंग दें।`,
+          body: `${safeJob} पूर्ण हो गया है। लाइव लोकेशन साझाकरण बंद कर दिया गया है।`,
         };
+      case 'deal_cancelled':
       case 'booking_cancelled':
         return {
-          title: `बुकिंग अपडेट: ${safeJob}`,
-          body: `${safeJob} की बुकिंग स्थिति बदल दी गई है।`,
+          title: `डील रद्द: ${safeJob}`,
+          body: `${safeName} द्वारा ${safeJob} रद्द कर दिया गया है। लाइव लोकेशन बंद हो गई है।`,
         };
       default:
         return {
@@ -255,30 +341,66 @@ function buildLocalizedCustomerEventMessage(params: {
   }
 
   switch (eventType) {
+    case 'hiring_request_created':
+      return {
+        title: `New Hiring Request: ${safeJob}`,
+        body: `${safeName} requested a worker${locText}${priceText ? ` · ${priceText}` : ''}. Accept, Reject, or Send Offer.`,
+      };
+    case 'worker_offer_sent':
     case 'worker_quotation':
       return {
-        title: `New Quotation: ${safeJob}`,
-        body: `${safeName} submitted a proposed rate of ₹${proposedWage || 0}.`,
+        title: `New Offer Received: ${safeJob}`,
+        body: `${safeName} sent an offer of ${priceText || 'proposed rate'}${etaText}${msgText}.`,
       };
+    case 'offer_accepted':
+      return {
+        title: `Congratulations! Offer Accepted: ${safeJob}`,
+        body: `Congratulations! The customer (${safeName}) has accepted your offer${priceText ? ` of ${priceText}` : ''}${locText}.`,
+      };
+    case 'offer_rejected':
+      return {
+        title: `Offer Not Accepted: ${safeJob}`,
+        body: `${safeName} declined your offer for ${safeJob}.`,
+      };
+    case 'job_request_accepted':
     case 'booking_accepted':
       return {
-        title: `Booking Accepted: ${safeJob}`,
-        body: `${safeName} accepted your work/transport booking.`,
+        title: `Request Accepted: ${safeJob}`,
+        body: `${safeName} accepted your hiring/booking request${priceText ? ` (${priceText})` : ''}.`,
       };
+    case 'job_request_rejected':
+      return {
+        title: `Request Declined: ${safeJob}`,
+        body: `${safeName} declined the request for ${safeJob}.`,
+      };
+    case 'customer_message':
+    case 'worker_message':
+      return {
+        title: `New Message — ${safeJob}`,
+        body: `${safeName}: ${messageSnippet || 'Sent you a message in deal coordination.'}`,
+      };
+    case 'deal_confirmed':
+      return {
+        title: `Deal Confirmed: ${safeJob}`,
+        body: `Deal confirmed with ${safeName}${priceText ? ` at ${priceText}` : ''}${locText}. Two-way live location sharing is now unlocked.`,
+      };
+    case 'work_started':
     case 'worker_arrived':
       return {
-        title: `Worker Arrival Update: ${safeJob}`,
-        body: `${safeName} has arrived at the worksite.`,
+        title: `Work Started: ${safeJob}`,
+        body: `${safeName} has started work / arrived at the site for ${safeJob}.`,
       };
+    case 'work_completed':
     case 'job_completed':
       return {
-        title: `Job Completed: ${safeJob}`,
-        body: `${safeJob} is marked complete. Rate your experience in the dashboard.`,
+        title: `Work Completed: ${safeJob}`,
+        body: `${safeJob} has been marked completed. Live location sharing is now stopped.`,
       };
+    case 'deal_cancelled':
     case 'booking_cancelled':
       return {
-        title: `Booking Cancelled: ${safeJob}`,
-        body: `Booking status for ${safeJob} has been updated.`,
+        title: `Deal Cancelled: ${safeJob}`,
+        body: `${safeJob} was cancelled by ${safeName}. Live location sharing has been stopped.`,
       };
     default:
       return {
@@ -297,12 +419,159 @@ interface DeliveryTarget {
   tokens: Array<{ docId: string; token: string }>;
   title: string;
   body: string;
+  voiceScript?: string;
+  approxLocationLabel?: string;
+  distanceKm?: number | null;
+  customerName?: string;
+  jobCategory?: string;
+  playSound?: boolean;
+  speakVoice?: boolean;
   category: 'matchingJobs' | 'nearbyJobs' | 'applicationUpdates' | 'bookingNotifications' | 'announcements';
   targetRoute: string;
   targetJobId?: string;
   targetDemoJobId?: string;
   clickUrl: string;
   dedupeKey: string;
+}
+
+function buildOptionalVoicePayloadFields(target: DeliveryTarget): Record<string, unknown> {
+  return {
+    ...(target.voiceScript ? { voiceScript: target.voiceScript.slice(0, 680) } : {}),
+    ...(target.approxLocationLabel ? { approxLocationLabel: target.approxLocationLabel.slice(0, 155) } : {}),
+    ...(typeof target.distanceKm === 'number' &&
+    Number.isFinite(target.distanceKm) &&
+    target.distanceKm >= 0 &&
+    target.distanceKm <= 5000
+      ? { distanceKm: target.distanceKm }
+      : {}),
+    ...(target.customerName ? { customerName: target.customerName.slice(0, 155) } : {}),
+    ...(target.jobCategory ? { jobCategory: target.jobCategory.slice(0, 75) } : {}),
+    ...(typeof target.playSound === 'boolean' ? { playSound: target.playSound } : {}),
+    ...(typeof target.speakVoice === 'boolean' ? { speakVoice: target.speakVoice } : {}),
+  };
+}
+
+function collectStageTargets(params: {
+  jobId: string;
+  job: FirebaseFirestore.DocumentData;
+  workersDocs: FirebaseFirestore.QueryDocumentSnapshot[];
+  tokensByUid: Map<string, Array<{ docId: string; token: string; preferredLanguage?: string }>>;
+  prefsByUid: Map<string, FirebaseFirestore.DocumentData>;
+  stageRadiusKm: number;
+  alreadyNotifiedSet: Set<string>;
+}): DeliveryTarget[] {
+  const { jobId, job, workersDocs, tokensByUid, prefsByUid, stageRadiusKm, alreadyNotifiedSet } = params;
+  const targets: DeliveryTarget[] = [];
+
+  const jobCategoryStr = String(job.category || '');
+  const jobSkillsArr = Array.isArray(job.requiredSkills) ? job.requiredSkills.map((s: unknown) => String(s)) : [];
+  const approxLocLabel =
+    (typeof job.approxLocationLabel === 'string' && job.approxLocationLabel.trim()) ||
+    buildApproxLocationLabel({
+      cityOrVillage: String(job.cityOrVillage || ''),
+      district: String(job.district || ''),
+      state: String(job.state || ''),
+    });
+  const customerName = String(job.employerName || 'Customer').trim() || 'Customer';
+
+  for (const wDoc of workersDocs) {
+    const w = wDoc.data();
+    const workerUid = String(w.ownerUid || wDoc.id || '');
+    if (!workerUid) continue;
+
+    const pref = prefsByUid.get(workerUid);
+    const evalResult = evaluateWorkerEligibilityForJob({
+      job: {
+        employerUid: String(job.employerUid || ''),
+        category: jobCategoryStr,
+        requiredSkills: jobSkillsArr,
+        district: String(job.district || ''),
+        cityOrVillage: String(job.cityOrVillage || ''),
+        lat: Number(job.lat),
+        lng: Number(job.lng),
+      },
+      worker: {
+        ownerUid: workerUid,
+        displayName: String(w.displayName || 'Worker'),
+        primarySkill: String(w.primarySkill || ''),
+        skills: Array.isArray(w.skills) ? w.skills.map((s: unknown) => String(s)) : [],
+        district: String(w.district || ''),
+        cityOrVillage: String(w.cityOrVillage || ''),
+        approxLat: Number(w.approxLat),
+        approxLng: Number(w.approxLng),
+        verificationStatus: String(w.verificationStatus || 'pending'),
+        availabilityStatus: String(w.availabilityStatus || 'available'),
+        preferredLanguage: w.preferredLanguage === 'hi' || w.preferredLanguage === 'mr' ? w.preferredLanguage : undefined,
+        preferredRadiusKm: Number(w.preferredRadiusKm) || undefined,
+      },
+      pref: pref
+        ? {
+            masterEnabled: pref.masterEnabled,
+            matchingJobs: pref.matchingJobs,
+            voiceAlertsEnabled: pref.voiceAlertsEnabled,
+            soundEnabled: pref.soundEnabled,
+            preferredLanguage:
+              pref.preferredLanguage === 'hi' || pref.preferredLanguage === 'mr' || pref.preferredLanguage === 'en'
+                ? pref.preferredLanguage
+                : undefined,
+            preferredCategories: Array.isArray(pref.preferredCategories)
+              ? pref.preferredCategories.map((c: unknown) => String(c))
+              : undefined,
+            preferredRadiusKm: Number(pref.preferredRadiusKm) || undefined,
+          }
+        : undefined,
+      stageRadiusKm,
+      alreadyNotifiedUids: alreadyNotifiedSet,
+    });
+
+    if (!evalResult.eligible) continue;
+
+    const userTokens = tokensByUid.get(workerUid) || [];
+    const lang = getLanguageOrDefault(
+      pref?.preferredLanguage || w.preferredLanguage || userTokens[0]?.preferredLanguage
+    );
+    const playSound = pref?.soundEnabled !== false;
+    const speakVoice = pref?.voiceAlertsEnabled !== false && w.voiceAlertsEnabled !== false;
+
+    const msg = buildSmartJobNotificationContent({
+      lang,
+      customerName,
+      title: String(job.title || 'Work Opportunity'),
+      category: jobCategoryStr,
+      description: String(job.description || job.title || ''),
+      approxLocationLabel: approxLocLabel,
+      distanceKm: evalResult.distanceKm,
+      offeredWage: Number(job.offeredWage) || 0,
+      wageUnit: String(job.wageUnit || 'daily'),
+    });
+
+    const dedupeKey = `job_${jobId}_${workerUid}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 115);
+
+    targets.push({
+      uid: workerUid,
+      label: String(w.displayName || 'Worker'),
+      role: 'worker',
+      isDemo: false,
+      language: lang,
+      tokens: userTokens.map((t) => ({ docId: t.docId, token: t.token })),
+      title: msg.title,
+      body: msg.body,
+      voiceScript: msg.voiceScript,
+      approxLocationLabel: approxLocLabel,
+      distanceKm: evalResult.distanceKm,
+      customerName,
+      jobCategory: jobCategoryStr,
+      playSound,
+      speakVoice,
+      category: 'matchingJobs',
+      targetRoute: 'worker-dashboard',
+      targetJobId: jobId,
+      clickUrl: `/?route=worker-dashboard&jobId=${encodeURIComponent(jobId)}&speak=${speakVoice ? '1' : '0'}&lang=${lang}`,
+      dedupeKey,
+    });
+  }
+
+  return targets;
 }
 
 async function dispatchAndRecordTargets(params: {
@@ -341,7 +610,21 @@ async function dispatchAndRecordTargets(params: {
   const errors: Array<{ uid: string; code: string; message: string }> = [];
 
   for (const target of targets) {
-    // Deduplication check
+    // Deterministic doc ID dedupe check so client Firestore writes and server FCM writes never duplicate
+    const safeDocId = target.dedupeKey.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120);
+    if (safeDocId.length >= 8) {
+      try {
+        const directSnap = await runtime.db.collection('notifications').doc(safeDocId).get();
+        if (directSnap.exists && target.tokens.length === 0) {
+          continue;
+        }
+      } catch {
+        // Proceed
+      }
+    }
+
+    // Deduplication query check
+    let alreadyRecordedInFirestore = false;
     try {
       const dupSnap = await runtime.db
         .collection('notifications')
@@ -350,7 +633,10 @@ async function dispatchAndRecordTargets(params: {
         .limit(1)
         .get();
       if (!dupSnap.empty) {
-        continue;
+        alreadyRecordedInFirestore = true;
+        if (target.tokens.length === 0) {
+          continue;
+        }
       }
     } catch {
       // Proceed if query fails due to unconfigured credentials; handled below
@@ -359,13 +645,14 @@ async function dispatchAndRecordTargets(params: {
     if (target.tokens.length === 0) {
       inAppOnlyCount += 1;
       try {
-        await runtime.db.collection('notifications').add({
+        const payloadDoc = {
           recipientUid: target.uid,
           recipientRole: target.role,
           isDemo: target.isDemo,
           category: target.category,
           title: target.title.slice(0, 160),
           body: target.body.slice(0, 500),
+          ...buildOptionalVoicePayloadFields(target),
           language: target.language,
           targetRoute: target.targetRoute,
           ...(target.targetJobId ? { targetJobId: target.targetJobId } : {}),
@@ -375,7 +662,12 @@ async function dispatchAndRecordTargets(params: {
           read: false,
           createdAt: FieldValue.serverTimestamp(),
           updatedAt: FieldValue.serverTimestamp(),
-        });
+        };
+        if (safeDocId.length >= 8) {
+          await runtime.db.collection('notifications').doc(safeDocId).set(payloadDoc, { merge: true });
+        } else {
+          await runtime.db.collection('notifications').add(payloadDoc);
+        }
       } catch (err) {
         console.warn('Unable to write in-app notification:', err);
       }
@@ -409,11 +701,27 @@ async function dispatchAndRecordTargets(params: {
           jobId: target.targetJobId || '',
           demoJobId: target.targetDemoJobId || '',
           dedupeKey: target.dedupeKey,
+          lang: target.language,
+          voiceScript: (target.voiceScript || '').slice(0, 680),
+          approxLocationLabel: (target.approxLocationLabel || '').slice(0, 155),
+          distanceKm:
+            typeof target.distanceKm === 'number' && Number.isFinite(target.distanceKm)
+              ? String(target.distanceKm)
+              : '',
+          customerName: (target.customerName || '').slice(0, 155),
+          jobCategory: (target.jobCategory || '').slice(0, 75),
+          playSound: target.playSound === false ? 'false' : 'true',
+          speakVoice: target.speakVoice === false ? 'false' : 'true',
+          speak: target.speakVoice === false ? '0' : '1',
         },
         webpush: {
           notification: {
             icon: '/pwa-192x192.png',
             badge: '/pwa-192x192.png',
+            tag: safeDocId || target.dedupeKey || 'rojgar-setu-alert',
+            renotify: true,
+            requireInteraction: true,
+            silent: target.playSound === false,
           },
           fcmOptions: {
             link: target.clickUrl,
@@ -492,24 +800,32 @@ async function dispatchAndRecordTargets(params: {
         }
       }
 
-      await runtime.db.collection('notifications').add({
-        recipientUid: target.uid,
-        recipientRole: target.role,
-        isDemo: target.isDemo,
-        category: target.category,
-        title: target.title.slice(0, 160),
-        body: target.body.slice(0, 500),
-        language: target.language,
-        targetRoute: target.targetRoute,
-        ...(target.targetJobId ? { targetJobId: target.targetJobId } : {}),
-        ...(target.targetDemoJobId ? { targetDemoJobId: target.targetDemoJobId } : {}),
-        dedupeKey: target.dedupeKey,
-        deliveryStatus: targetAnySuccess ? 'sent' : 'failed',
-        ...(firstErrorMsg && !targetAnySuccess ? { errorMessage: firstErrorMsg.slice(0, 400) } : {}),
-        read: false,
-        createdAt: FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
-      });
+      if (!alreadyRecordedInFirestore) {
+        const payloadDoc = {
+          recipientUid: target.uid,
+          recipientRole: target.role,
+          isDemo: target.isDemo,
+          category: target.category,
+          title: target.title.slice(0, 160),
+          body: target.body.slice(0, 500),
+          ...buildOptionalVoicePayloadFields(target),
+          language: target.language,
+          targetRoute: target.targetRoute,
+          ...(target.targetJobId ? { targetJobId: target.targetJobId } : {}),
+          ...(target.targetDemoJobId ? { targetDemoJobId: target.targetDemoJobId } : {}),
+          dedupeKey: target.dedupeKey,
+          deliveryStatus: targetAnySuccess ? 'sent' : 'failed',
+          ...(firstErrorMsg && !targetAnySuccess ? { errorMessage: firstErrorMsg.slice(0, 400) } : {}),
+          read: false,
+          createdAt: FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
+        };
+        if (safeDocId.length >= 8) {
+          await runtime.db.collection('notifications').doc(safeDocId).set(payloadDoc, { merge: true });
+        } else {
+          await runtime.db.collection('notifications').add(payloadDoc);
+        }
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'FCM dispatch error';
       failedCount += tokenStrings.length;
@@ -646,86 +962,203 @@ export function registerNotificationRoutes(
         tokensByUid.set(data.ownerUid, list);
       });
 
-      const jobCatLower = String(job.category || '').toLowerCase();
-      const jobSkillsLower = Array.isArray(job.requiredSkills)
-        ? job.requiredSkills.map((s: string) => String(s).toLowerCase())
+      const requestedRadius = normalizeRadiusKm(
+        req.body?.stageRadiusKm ?? job.currentRadiusKm ?? job.initialRadiusKm ?? 5,
+        5
+      );
+      const autoExpandIfEmpty = req.body?.autoExpandIfEmpty !== false;
+
+      const existingNotified: string[] = Array.isArray(job.notifiedWorkerUids)
+        ? job.notifiedWorkerUids.map((u: unknown) => String(u))
         : [];
-      const jobDistrictLower = String(job.district || '').toLowerCase();
-      const jobLat = Number(job.lat);
-      const jobLng = Number(job.lng);
+      const alreadyNotifiedSet = new Set<string>(existingNotified);
 
-      const targets: DeliveryTarget[] = [];
+      let activeRadiusKm = requestedRadius;
+      let targets = collectStageTargets({
+        jobId,
+        job,
+        workersDocs: workersSnap.docs,
+        tokensByUid,
+        prefsByUid,
+        stageRadiusKm: activeRadiusKm,
+        alreadyNotifiedSet,
+      });
 
-      for (const wDoc of workersSnap.docs) {
-        const w = wDoc.data();
-        if (w.verificationStatus === 'suspended' || w.availabilityStatus === 'offline') continue;
-        if (w.ownerUid === job.employerUid) continue;
-
-        const wPrimaryLower = String(w.primarySkill || '').toLowerCase();
-        const wSkillsLower = Array.isArray(w.skills)
-          ? w.skills.map((s: string) => String(s).toLowerCase())
-          : [];
-
-        const skillMatches =
-          wPrimaryLower === jobCatLower ||
-          wSkillsLower.some((s) => s === jobCatLower || jobSkillsLower.includes(s)) ||
-          jobSkillsLower.some((reqSkill) => wPrimaryLower.includes(reqSkill));
-
-        const distKm =
-          Number.isFinite(jobLat) &&
-          Number.isFinite(jobLng) &&
-          Number.isFinite(Number(w.approxLat)) &&
-          Number.isFinite(Number(w.approxLng))
-            ? calculateDistanceKm(jobLat, jobLng, Number(w.approxLat), Number(w.approxLng))
-            : Number.POSITIVE_INFINITY;
-
-        const locationMatches =
-          String(w.district || '').toLowerCase() === jobDistrictLower || distKm <= 50;
-
-        if (!skillMatches && !locationMatches) continue;
-
-        const pref = prefsByUid.get(w.ownerUid);
-        if (pref && pref.masterEnabled === false) continue;
-        if (skillMatches && pref && pref.matchingJobs === false) continue;
-        if (!skillMatches && locationMatches && pref && pref.nearbyJobs === false) continue;
-
-        const userTokens = tokensByUid.get(w.ownerUid) || [];
-        const lang = getLanguageOrDefault(pref?.preferredLanguage || userTokens[0]?.preferredLanguage);
-        const msg = buildLocalizedJobMessage({
-          lang,
-          title: String(job.title || 'Work Opportunity'),
-          category: String(job.category || ''),
-          district: String(job.district || ''),
-          offeredWage: Number(job.offeredWage) || 0,
-          wageUnit: String(job.wageUnit || 'daily'),
-          isDemo: false,
-        });
-
-        targets.push({
-          uid: String(w.ownerUid),
-          label: String(w.displayName || 'Worker'),
-          role: 'worker',
-          isDemo: false,
-          language: lang,
-          tokens: userTokens.map((t) => ({ docId: t.docId, token: t.token })),
-          title: msg.title,
-          body: msg.body,
-          category: skillMatches ? 'matchingJobs' : 'nearbyJobs',
-          targetRoute: 'find-work',
-          targetJobId: jobId,
-          clickUrl: `/?route=find-work&jobId=${encodeURIComponent(jobId)}`,
-          dedupeKey: `job_${jobId}_${w.ownerUid}`,
-        });
+      if (targets.length === 0 && autoExpandIfEmpty) {
+        for (const candidateStage of SERVICE_RADIUS_STAGES) {
+          if (candidateStage <= activeRadiusKm) continue;
+          activeRadiusKm = candidateStage;
+          targets = collectStageTargets({
+            jobId,
+            job,
+            workersDocs: workersSnap.docs,
+            tokensByUid,
+            prefsByUid,
+            stageRadiusKm: activeRadiusKm,
+            alreadyNotifiedSet,
+          });
+          if (targets.length > 0) break;
+        }
       }
+
+      const cappedTargets = targets.slice(0, 100);
+      const result = await dispatchAndRecordTargets({
+        runtime,
+        targets: cappedTargets,
+        sentByUid: authUser.decoded.uid,
+      });
+
+      const updatedNotifiedUids = Array.from(
+        new Set([...existingNotified, ...cappedTargets.map((t) => t.uid)])
+      ).slice(0, 100);
+
+      await runtime.db
+        .collection('jobs')
+        .doc(jobId)
+        .update({
+          currentRadiusKm: activeRadiusKm,
+          radiusStageUpdatedAt: FieldValue.serverTimestamp(),
+          notifiedWorkerUids: updatedNotifiedUids,
+          ...(cappedTargets.length > 0 ? { dealStatus: 'NOTIFIED' } : {}),
+          updatedAt: FieldValue.serverTimestamp(),
+        })
+        .catch(() => undefined);
+
+      res.json({
+        matchedWorkersCount: cappedTargets.length,
+        currentRadiusKm: activeRadiusKm,
+        hasNextStage: getNextRadiusStage(activeRadiusKm) !== null,
+        totalNotifiedCount: updatedNotifiedUids.length,
+        ...result,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Matching notification error';
+      res.status(500).json({ ok: false, errorCode: 'SERVER_ERROR', message });
+    }
+  });
+
+  // Expand Search Radius (5 -> 10 -> 20 -> 30 km) without re-notifying prior workers
+  app.post('/api/notifications/expand-job-radius', async (req: Request, res: Response) => {
+    const authUser = await verifyRequestUser(req, runtime);
+    if (!authUser) {
+      res.status(401).json({ error: 'UNAUTHORIZED', message: 'Valid sign-in required.' });
+      return;
+    }
+    if (!checkRateLimit(authUser.decoded.uid, 30)) {
+      res.status(429).json({ error: 'RATE_LIMITED', message: 'Too many expansion requests.' });
+      return;
+    }
+    if (!runtime.hasMessagingCredentials) {
+      res.status(503).json({
+        ok: false,
+        errorCode: 'ADMIN_CREDENTIALS_MISSING',
+        message: 'Server Firebase Admin credentials are not configured yet for push expansion.',
+      });
+      return;
+    }
+
+    const jobId = typeof req.body?.jobId === 'string' ? req.body.jobId.trim() : '';
+    if (!jobId) {
+      res.status(400).json({ error: 'MISSING_JOB_ID' });
+      return;
+    }
+
+    try {
+      const jobSnap = await runtime.db.collection('jobs').doc(jobId).get();
+      if (!jobSnap.exists) {
+        res.status(404).json({ error: 'JOB_NOT_FOUND' });
+        return;
+      }
+      const job = jobSnap.data()!;
+      if (job.employerUid !== authUser.decoded.uid && !authUser.isAdmin) {
+        res.status(403).json({ error: 'FORBIDDEN' });
+        return;
+      }
+
+      const prevRadius = normalizeRadiusKm(job.currentRadiusKm ?? job.initialRadiusKm ?? 5, 5);
+      const nextStage = req.body?.targetRadiusKm
+        ? normalizeRadiusKm(req.body.targetRadiusKm, prevRadius)
+        : getNextRadiusStage(prevRadius);
+
+      const existingNotified: string[] = Array.isArray(job.notifiedWorkerUids)
+        ? job.notifiedWorkerUids.map((u: unknown) => String(u))
+        : [];
+      const alreadyNotifiedSet = new Set<string>(existingNotified);
+
+      if (!nextStage || nextStage <= prevRadius) {
+        res.json({
+          ok: true,
+          previousRadiusKm: prevRadius,
+          currentRadiusKm: prevRadius,
+          hasNextStage: false,
+          newlyNotifiedCount: 0,
+          sentCount: 0,
+          inAppOnlyCount: 0,
+          totalNotifiedCount: alreadyNotifiedSet.size,
+          message: 'Maximum 30 km radius stage already active.',
+        });
+        return;
+      }
+
+      const [workersSnap, tokensSnap, prefsSnap] = await Promise.all([
+        runtime.db.collection('publicWorkers').get(),
+        runtime.db.collection('device_tokens').where('enabled', '==', true).where('isDemo', '==', false).get(),
+        runtime.db.collection('notification_preferences').get(),
+      ]);
+
+      const prefsByUid = new Map<string, FirebaseFirestore.DocumentData>();
+      prefsSnap.docs.forEach((d) => prefsByUid.set(d.id, d.data()));
+
+      const tokensByUid = new Map<string, Array<{ docId: string; token: string; preferredLanguage?: string }>>();
+      tokensSnap.docs.forEach((d) => {
+        const data = d.data();
+        const list = tokensByUid.get(data.ownerUid) || [];
+        list.push({ docId: d.id, token: data.token, preferredLanguage: data.preferredLanguage });
+        tokensByUid.set(data.ownerUid, list);
+      });
+
+      const targets = collectStageTargets({
+        jobId,
+        job,
+        workersDocs: workersSnap.docs,
+        tokensByUid,
+        prefsByUid,
+        stageRadiusKm: nextStage,
+        alreadyNotifiedSet,
+      }).slice(0, 100);
 
       const result = await dispatchAndRecordTargets({
         runtime,
-        targets: targets.slice(0, 100),
+        targets,
         sentByUid: authUser.decoded.uid,
       });
-      res.json({ matchedWorkersCount: targets.length, ...result });
+
+      const updatedNotifiedUids = Array.from(
+        new Set([...existingNotified, ...targets.map((t) => t.uid)])
+      ).slice(0, 100);
+
+      await runtime.db
+        .collection('jobs')
+        .doc(jobId)
+        .update({
+          currentRadiusKm: nextStage,
+          radiusStageUpdatedAt: FieldValue.serverTimestamp(),
+          notifiedWorkerUids: updatedNotifiedUids,
+          ...(targets.length > 0 ? { dealStatus: 'NOTIFIED' } : {}),
+          updatedAt: FieldValue.serverTimestamp(),
+        })
+        .catch(() => undefined);
+
+      res.json({
+        previousRadiusKm: prevRadius,
+        currentRadiusKm: nextStage,
+        hasNextStage: getNextRadiusStage(nextStage) !== null,
+        newlyNotifiedCount: targets.length,
+        totalNotifiedCount: updatedNotifiedUids.length,
+        ...result,
+      });
     } catch (err) {
-      const message = err instanceof Error ? err.message : 'Matching notification error';
+      const message = err instanceof Error ? err.message : 'Radius expansion failed';
       res.status(500).json({ ok: false, errorCode: 'SERVER_ERROR', message });
     }
   });
@@ -751,12 +1184,17 @@ export function registerNotificationRoutes(
     }
 
     const recipientUid = typeof req.body?.recipientUid === 'string' ? req.body.recipientUid.trim() : '';
+    const recipientRoleRaw = typeof req.body?.recipientRole === 'string' ? req.body.recipientRole.trim() : '';
     const eventType = typeof req.body?.eventType === 'string' ? req.body.eventType.trim() : 'new_application';
     const workerName = typeof req.body?.workerName === 'string' ? req.body.workerName.trim().slice(0, 100) : '';
     const jobTitle = typeof req.body?.jobTitle === 'string' ? req.body.jobTitle.trim().slice(0, 140) : '';
     const jobId = typeof req.body?.jobId === 'string' ? req.body.jobId.trim() : '';
     const bookingId = typeof req.body?.bookingId === 'string' ? req.body.bookingId.trim() : '';
     const proposedWage = Number(req.body?.proposedWage) || 0;
+    const eta = typeof req.body?.eta === 'string' ? req.body.eta.trim().slice(0, 80) : '';
+    const locationLabel = typeof req.body?.locationLabel === 'string' ? req.body.locationLabel.trim().slice(0, 140) : '';
+    const messageSnippet = typeof req.body?.messageSnippet === 'string' ? req.body.messageSnippet.trim().slice(0, 180) : '';
+    const requestedDedupeKey = typeof req.body?.dedupeKey === 'string' ? req.body.dedupeKey.trim().slice(0, 120) : '';
     const targetRoute = typeof req.body?.targetRoute === 'string' ? req.body.targetRoute : 'employer-dashboard';
 
     if (!recipientUid) {
@@ -774,13 +1212,19 @@ export function registerNotificationRoutes(
           if (jobSnap.exists) {
             const jobData = jobSnap.data() as { employerUid?: string };
             if (jobData.employerUid === callerUid) {
+              // Job owner can notify applicants, invited workers, or registered workers matching the job request
               const appSnap = await runtime.db
                 .collection('applications')
                 .where('jobId', '==', jobId)
                 .where('workerUid', '==', recipientUid)
                 .limit(1)
                 .get();
-              authorized = !appSnap.empty;
+              if (!appSnap.empty) {
+                authorized = true;
+              } else {
+                const workerSnap = await runtime.db.collection('publicWorkers').doc(recipientUid).get();
+                authorized = workerSnap.exists;
+              }
             } else if (jobData.employerUid === recipientUid) {
               const appSnap = await runtime.db
                 .collection('applications')
@@ -833,22 +1277,34 @@ export function registerNotificationRoutes(
         workerName,
         jobTitle,
         proposedWage,
+        eta,
+        locationLabel,
+        messageSnippet,
       });
+
+      const resolvedRole: DeliveryTarget['role'] =
+        recipientRoleRaw === 'worker' || targetRoute === 'worker-dashboard' || targetRoute === 'find-work'
+          ? 'worker'
+          : 'employer';
 
       const target: DeliveryTarget = {
         uid: recipientUid,
-        label: 'Customer / Employer',
-        role: 'employer',
+        label: resolvedRole === 'worker' ? 'Worker' : 'Customer / Employer',
+        role: resolvedRole,
         isDemo: false,
         language: lang,
         tokens: tokenSnap.docs.map((d) => ({ docId: d.id, token: String(d.data().token) })),
         title: msg.title,
         body: msg.body,
-        category: eventType.includes('booking') ? 'bookingNotifications' : 'applicationUpdates',
+        category: eventType.includes('booking')
+          ? 'bookingNotifications'
+          : eventType === 'hiring_request_created'
+          ? 'matchingJobs'
+          : 'applicationUpdates',
         targetRoute,
         ...(jobId ? { targetJobId: jobId } : {}),
         clickUrl: `/?route=${encodeURIComponent(targetRoute)}${jobId ? `&jobId=${encodeURIComponent(jobId)}` : ''}`,
-        dedupeKey: `event_${eventType}_${jobId || 'na'}_${Date.now()}`,
+        dedupeKey: requestedDedupeKey || `event_${eventType}_${jobId || 'na'}_${Date.now()}`,
       };
 
       const result = await dispatchAndRecordTargets({

@@ -20,6 +20,9 @@ messaging.onBackgroundMessage((payload) => {
   const body = notif.body || data.body || 'New update on ROJGAR SETU.';
   const tag = data.dedupeKey || data.jobId || data.demoJobId || 'rojgar-setu-alert';
   const clickUrl = data.clickUrl || '/';
+  const isSilent = data.playSound === 'false';
+  const openActionTitle =
+    data.lang === 'mr' ? 'उघडा व ऐका' : data.lang === 'hi' ? 'खोलें व सुनें' : 'Open & Listen';
 
   return self.registration.showNotification(title, {
     body,
@@ -27,11 +30,22 @@ messaging.onBackgroundMessage((payload) => {
     badge: '/pwa-192x192.png',
     tag,
     renotify: true,
+    requireInteraction: true,
+    silent: isSilent,
+    ...(isSilent ? {} : { vibrate: [220, 100, 220] }),
+    actions: [{ action: 'open_listen', title: openActionTitle }],
     data: {
       clickUrl,
       route: data.route || '',
       jobId: data.jobId || '',
       demoJobId: data.demoJobId || '',
+      voiceScript: data.voiceScript || '',
+      lang: data.lang || 'en',
+      approxLocationLabel: data.approxLocationLabel || '',
+      distanceKm: data.distanceKm || '',
+      playSound: data.playSound !== 'false',
+      speakVoice: data.speakVoice !== 'false',
+      speak: data.speak === '0' ? '0' : '1',
     },
   });
 });
@@ -40,7 +54,14 @@ self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const data = event.notification && event.notification.data ? event.notification.data : {};
   const rawUrl = data.clickUrl || '/';
-  const targetUrl = new URL(rawUrl, self.location.origin).href;
+  const targetUrlObj = new URL(rawUrl, self.location.origin);
+  if (data.speak && !targetUrlObj.searchParams.has('speak')) {
+    targetUrlObj.searchParams.set('speak', data.speak);
+  }
+  if (data.lang && !targetUrlObj.searchParams.has('lang')) {
+    targetUrlObj.searchParams.set('lang', data.lang);
+  }
+  const targetUrl = targetUrlObj.href;
 
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
@@ -52,6 +73,12 @@ self.addEventListener('notificationclick', (event) => {
             route: data.route || '',
             jobId: data.jobId || '',
             demoJobId: data.demoJobId || '',
+            voiceScript: data.voiceScript || '',
+            lang: data.lang || '',
+            approxLocationLabel: data.approxLocationLabel || '',
+            distanceKm: data.distanceKm || '',
+            playSound: data.playSound !== false,
+            speakVoice: data.speakVoice !== false,
           });
           return client.focus();
         }

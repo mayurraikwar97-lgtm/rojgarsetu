@@ -86,8 +86,9 @@ service cloud.firestore {
           'experienceYears', 'expectedWage', 'wageUnit', 'preferredWorkType',
           'availabilityStatus', 'state', 'district', 'cityOrVillage',
           'approxLat', 'approxLng', 'languagesKnown', 'gender', 'education',
-          'verificationStatus', 'isWomenEnterprise', 'photoDocId', 'completedJobsCount',
-          'ratingAvg', 'createdAt', 'updatedAt'
+          'verificationStatus', 'isWomenEnterprise', 'photoDocId',
+          'preferredLanguage', 'preferredRadiusKm', 'voiceAlertsEnabled',
+          'completedJobsCount', 'ratingAvg', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.ownerUid)
         && data.registrationId is string && data.registrationId.size() >= 5 && data.registrationId.size() <= 40
@@ -110,6 +111,9 @@ service cloud.firestore {
         && data.verificationStatus in ['pending', 'verified', 'suspended']
         && (!('isWomenEnterprise' in data) || data.isWomenEnterprise is bool)
         && (!('photoDocId' in data) || isValidId(data.photoDocId))
+        && (!('preferredLanguage' in data) || data.preferredLanguage in ['en', 'hi', 'mr'])
+        && (!('preferredRadiusKm' in data) || data.preferredRadiusKm in [5, 10, 20, 30])
+        && (!('voiceAlertsEnabled' in data) || data.voiceAlertsEnabled is bool)
         && data.completedJobsCount is number && data.completedJobsCount >= 0 && data.completedJobsCount <= 100000
         && data.ratingAvg is number && data.ratingAvg >= 0 && data.ratingAvg <= 5
         && data.createdAt is timestamp
@@ -197,6 +201,13 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidDealStatus(s) {
+      return s in [
+        'REQUESTED', 'NOTIFIED', 'OFFER_RECEIVED', 'OFFER_ACCEPTED',
+        'DEAL_CONFIRMED', 'WORK_IN_PROGRESS', 'WORK_COMPLETED', 'CANCELLED', 'REJECTED'
+      ];
+    }
+
     function isValidJob(data) {
       return data.keys().hasAll([
           'employerUid', 'employerName', 'title', 'category', 'description',
@@ -211,7 +222,10 @@ service cloud.firestore {
           'workLocationLabel', 'lat', 'lng', 'jobDate', 'startTime', 'duration',
           'workType', 'offeredWage', 'wageUnit', 'paymentTerms', 'contactPreference',
           'isWomenFriendly', 'isAccessible', 'biddingEnabled', 'photoAttachment',
-          'photoAnalyzed', 'status', 'applicationsCount', 'createdAt', 'updatedAt'
+          'photoAnalyzed', 'status', 'dealStatus', 'acceptedApplicationId',
+          'acceptedWorkerUid', 'notifiedWorkerUids', 'approxLocationLabel',
+          'initialRadiusKm', 'currentRadiusKm', 'radiusStageUpdatedAt',
+          'applicationsCount', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.employerUid)
         && data.employerName is string && data.employerName.size() >= 2 && data.employerName.size() <= 160
@@ -240,6 +254,14 @@ service cloud.firestore {
         && (!('photoAttachment' in data) || (data.photoAttachment is string && data.photoAttachment.size() <= 100000))
         && (!('photoAnalyzed' in data) || data.photoAnalyzed is bool)
         && data.status in ['open', 'in_progress', 'completed', 'cancelled', 'flagged']
+        && (!('dealStatus' in data) || isValidDealStatus(data.dealStatus))
+        && (!('acceptedApplicationId' in data) || isValidId(data.acceptedApplicationId))
+        && (!('acceptedWorkerUid' in data) || isValidId(data.acceptedWorkerUid))
+        && (!('notifiedWorkerUids' in data) || (data.notifiedWorkerUids is list && data.notifiedWorkerUids.size() <= 100))
+        && (!('approxLocationLabel' in data) || (data.approxLocationLabel is string && data.approxLocationLabel.size() <= 160))
+        && (!('initialRadiusKm' in data) || data.initialRadiusKm in [5, 10, 20, 30])
+        && (!('currentRadiusKm' in data) || data.currentRadiusKm in [5, 10, 20, 30])
+        && (!('radiusStageUpdatedAt' in data) || data.radiusStageUpdatedAt is timestamp)
         && data.applicationsCount is number && data.applicationsCount >= 0 && data.applicationsCount <= 100000
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -254,6 +276,10 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'jobId', 'jobTitle', 'employerUid', 'workerUid', 'workerRegistrationId',
           'workerName', 'workerPrimarySkill', 'workerPhotoDocId', 'proposedWage', 'note', 'status',
+          'dealStatus', 'initiatedBy', 'jobCategory', 'jobDistrict', 'jobLocationLabel',
+          'jobDate', 'startTime', 'customerName', 'offerAmount', 'estimatedArrivalTime',
+          'offerMessage', 'offerSubmittedAt', 'agreedPrice', 'dealConfirmedAt',
+          'workStartedAt', 'completedAt', 'cancelledAt', 'cancelledByUid',
           'liveTrackingAuthorized', 'workerRating', 'employerFeedback',
           'createdAt', 'updatedAt'
         ])
@@ -268,6 +294,24 @@ service cloud.firestore {
         && data.proposedWage is number && data.proposedWage >= 0 && data.proposedWage <= 500000
         && (!('note' in data) || (data.note is string && data.note.size() <= 600))
         && data.status in ['applied', 'invited', 'accepted', 'declined', 'work_completed']
+        && (!('dealStatus' in data) || isValidDealStatus(data.dealStatus))
+        && (!('initiatedBy' in data) || data.initiatedBy in ['customer_invite', 'customer_broadcast', 'worker_apply'])
+        && (!('jobCategory' in data) || (data.jobCategory is string && data.jobCategory.size() <= 80))
+        && (!('jobDistrict' in data) || (data.jobDistrict is string && data.jobDistrict.size() <= 80))
+        && (!('jobLocationLabel' in data) || (data.jobLocationLabel is string && data.jobLocationLabel.size() <= 160))
+        && (!('jobDate' in data) || (data.jobDate is string && data.jobDate.size() <= 30))
+        && (!('startTime' in data) || (data.startTime is string && data.startTime.size() <= 30))
+        && (!('customerName' in data) || (data.customerName is string && data.customerName.size() <= 160))
+        && (!('offerAmount' in data) || (data.offerAmount is number && data.offerAmount >= 0 && data.offerAmount <= 500000))
+        && (!('estimatedArrivalTime' in data) || (data.estimatedArrivalTime is string && data.estimatedArrivalTime.size() <= 80))
+        && (!('offerMessage' in data) || (data.offerMessage is string && data.offerMessage.size() <= 600))
+        && (!('offerSubmittedAt' in data) || data.offerSubmittedAt is timestamp)
+        && (!('agreedPrice' in data) || (data.agreedPrice is number && data.agreedPrice >= 0 && data.agreedPrice <= 500000))
+        && (!('dealConfirmedAt' in data) || data.dealConfirmedAt is timestamp)
+        && (!('workStartedAt' in data) || data.workStartedAt is timestamp)
+        && (!('completedAt' in data) || data.completedAt is timestamp)
+        && (!('cancelledAt' in data) || data.cancelledAt is timestamp)
+        && (!('cancelledByUid' in data) || isValidId(data.cancelledByUid))
         && data.liveTrackingAuthorized is bool
         && (!('workerRating' in data) || (data.workerRating is number && data.workerRating >= 1 && data.workerRating <= 5))
         && (!('employerFeedback' in data) || (data.employerFeedback is string && data.employerFeedback.size() <= 500))
@@ -513,7 +557,8 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'ownerUid', 'masterEnabled', 'matchingJobs', 'nearbyJobs',
           'applicationUpdates', 'bookingNotifications', 'announcements',
-          'preferredLanguage', 'createdAt', 'updatedAt'
+          'preferredLanguage', 'voiceAlertsEnabled', 'soundEnabled',
+          'preferredCategories', 'preferredRadiusKm', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.ownerUid)
         && data.masterEnabled is bool
@@ -523,6 +568,10 @@ service cloud.firestore {
         && data.bookingNotifications is bool
         && data.announcements is bool
         && data.preferredLanguage in ['en', 'hi', 'mr']
+        && (!('voiceAlertsEnabled' in data) || data.voiceAlertsEnabled is bool)
+        && (!('soundEnabled' in data) || data.soundEnabled is bool)
+        && (!('preferredCategories' in data) || (data.preferredCategories is list && data.preferredCategories.size() <= 35 && (data.preferredCategories.size() == 0 || data.preferredCategories[0] is string)))
+        && (!('preferredRadiusKm' in data) || data.preferredRadiusKm in [5, 10, 20, 30])
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -842,6 +891,131 @@ service cloud.firestore {
         && data.updatedAt is timestamp;
     }
 
+    function isValidNotificationRecord(data) {
+      return data.keys().hasAll([
+          'recipientUid', 'recipientRole', 'isDemo', 'category', 'title', 'body',
+          'language', 'targetRoute', 'dedupeKey', 'deliveryStatus', 'read',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'recipientUid', 'recipientRole', 'senderUid', 'senderName', 'isDemo',
+          'category', 'eventType', 'dealStatus', 'title', 'body', 'voiceScript',
+          'approxLocationLabel', 'distanceKm', 'customerName', 'jobCategory',
+          'playSound', 'speakVoice', 'metadataLabel',
+          'language', 'targetRoute', 'targetJobId', 'targetApplicationId',
+          'targetDemoJobId', 'dedupeKey', 'deliveryStatus', 'errorMessage',
+          'read', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.recipientUid)
+        && data.recipientRole in ['worker', 'employer', 'admin', 'demo_worker']
+        && (!('senderUid' in data) || isValidId(data.senderUid))
+        && (!('senderName' in data) || (data.senderName is string && data.senderName.size() <= 140))
+        && data.isDemo is bool
+        && data.category in ['matchingJobs', 'nearbyJobs', 'applicationUpdates', 'bookingNotifications', 'announcements']
+        && (!('eventType' in data) || (data.eventType is string && data.eventType.size() <= 60))
+        && (!('dealStatus' in data) || isValidDealStatus(data.dealStatus))
+        && data.title is string && data.title.size() >= 2 && data.title.size() <= 160
+        && data.body is string && data.body.size() >= 2 && data.body.size() <= 500
+        && (!('voiceScript' in data) || (data.voiceScript is string && data.voiceScript.size() <= 700))
+        && (!('approxLocationLabel' in data) || (data.approxLocationLabel is string && data.approxLocationLabel.size() <= 160))
+        && (!('distanceKm' in data) || (data.distanceKm is number && data.distanceKm >= 0 && data.distanceKm <= 5000))
+        && (!('customerName' in data) || (data.customerName is string && data.customerName.size() <= 160))
+        && (!('jobCategory' in data) || (data.jobCategory is string && data.jobCategory.size() <= 80))
+        && (!('playSound' in data) || data.playSound is bool)
+        && (!('speakVoice' in data) || data.speakVoice is bool)
+        && (!('metadataLabel' in data) || (data.metadataLabel is string && data.metadataLabel.size() <= 240))
+        && data.language in ['en', 'hi', 'mr']
+        && data.targetRoute is string && data.targetRoute.size() >= 2 && data.targetRoute.size() <= 60
+        && (!('targetJobId' in data) || isValidId(data.targetJobId))
+        && (!('targetApplicationId' in data) || isValidId(data.targetApplicationId))
+        && (!('targetDemoJobId' in data) || isValidId(data.targetDemoJobId))
+        && isValidId(data.dedupeKey)
+        && data.deliveryStatus in ['sent', 'failed', 'in_app_only']
+        && (!('errorMessage' in data) || (data.errorMessage is string && data.errorMessage.size() <= 400))
+        && data.read is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function canNotifyOnDealContext(data) {
+      return (
+        'targetApplicationId' in data
+        && exists(/databases/$(database)/documents/applications/$(data.targetApplicationId))
+        && (
+          (
+            get(/databases/$(database)/documents/applications/$(data.targetApplicationId)).data.employerUid == request.auth.uid
+            && get(/databases/$(database)/documents/applications/$(data.targetApplicationId)).data.workerUid == data.recipientUid
+          ) || (
+            get(/databases/$(database)/documents/applications/$(data.targetApplicationId)).data.workerUid == request.auth.uid
+            && get(/databases/$(database)/documents/applications/$(data.targetApplicationId)).data.employerUid == data.recipientUid
+          )
+        )
+      ) || (
+        'targetJobId' in data
+        && exists(/databases/$(database)/documents/jobs/$(data.targetJobId))
+        && (
+          get(/databases/$(database)/documents/jobs/$(data.targetJobId)).data.employerUid == request.auth.uid
+          || get(/databases/$(database)/documents/jobs/$(data.targetJobId)).data.employerUid == data.recipientUid
+        )
+      );
+    }
+
+    function isValidDealMessage(data) {
+      return data.keys().hasAll([
+          'applicationId', 'jobId', 'employerUid', 'workerUid',
+          'senderUid', 'senderRole', 'senderName', 'text', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'applicationId', 'jobId', 'employerUid', 'workerUid',
+          'senderUid', 'senderRole', 'senderName', 'text', 'createdAt'
+        ])
+        && isValidId(data.applicationId)
+        && isValidId(data.jobId)
+        && isValidId(data.employerUid)
+        && isValidId(data.workerUid)
+        && isValidId(data.senderUid)
+        && data.senderRole in ['customer', 'worker']
+        && data.senderName is string && data.senderName.size() >= 2 && data.senderName.size() <= 120
+        && data.text is string && data.text.size() >= 1 && data.text.size() <= 1000
+        && data.createdAt is timestamp;
+    }
+
+    function isValidDealLocationShare(data) {
+      return data.keys().hasAll([
+          'applicationId', 'jobId', 'ownerUid', 'authorizedUids',
+          'role', 'participantName', 'lat', 'lng', 'accuracyMeters',
+          'sharingActive', 'source', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'applicationId', 'jobId', 'ownerUid', 'authorizedUids',
+          'role', 'participantName', 'lat', 'lng', 'accuracyMeters',
+          'sharingActive', 'source', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.applicationId)
+        && isValidId(data.jobId)
+        && isValidId(data.ownerUid)
+        && data.authorizedUids is list && data.authorizedUids.size() == 2
+        && isValidId(data.authorizedUids[0]) && isValidId(data.authorizedUids[1])
+        && data.role in ['customer', 'worker']
+        && data.participantName is string && data.participantName.size() >= 2 && data.participantName.size() <= 120
+        && data.lat is number && data.lat >= -90 && data.lat <= 90
+        && data.lng is number && data.lng >= -180 && data.lng <= 180
+        && data.accuracyMeters is number && data.accuracyMeters >= 0 && data.accuracyMeters <= 200000
+        && data.sharingActive is bool
+        && data.source in ['gps_watch', 'gps_once', 'manual_pin', 'simulated_move']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isActiveAcceptedDeal(appId) {
+      return exists(/databases/$(database)/documents/applications/$(appId))
+        && get(/databases/$(database)/documents/applications/$(appId)).data.status == 'accepted'
+        && (
+          !('dealStatus' in get(/databases/$(database)/documents/applications/$(appId)).data)
+          || get(/databases/$(database)/documents/applications/$(appId)).data.dealStatus in ['OFFER_ACCEPTED', 'DEAL_CONFIRMED', 'WORK_IN_PROGRESS']
+        );
+    }
+
     // Collection Rules
 
     match /users/{userId} {
@@ -901,7 +1075,8 @@ service cloud.firestore {
               'displayName', 'primarySkill', 'skills', 'experienceYears',
               'expectedWage', 'wageUnit', 'preferredWorkType', 'availabilityStatus',
               'state', 'district', 'cityOrVillage', 'approxLat', 'approxLng',
-              'languagesKnown', 'gender', 'education', 'isWomenEnterprise', 'photoDocId', 'updatedAt'
+              'languagesKnown', 'gender', 'education', 'isWomenEnterprise', 'photoDocId',
+              'preferredLanguage', 'preferredRadiusKm', 'voiceAlertsEnabled', 'updatedAt'
             ])
           )
         );
@@ -1024,13 +1199,39 @@ service cloud.firestore {
               'workLocationLabel', 'lat', 'lng', 'jobDate', 'startTime',
               'duration', 'workType', 'offeredWage', 'wageUnit',
               'paymentTerms', 'contactPreference', 'isWomenFriendly',
-              'isAccessible', 'biddingEnabled', 'photoAttachment', 'photoAnalyzed', 'status', 'updatedAt'
+              'isAccessible', 'biddingEnabled', 'photoAttachment', 'photoAnalyzed',
+              'status', 'dealStatus', 'acceptedApplicationId', 'acceptedWorkerUid',
+              'notifiedWorkerUids', 'approxLocationLabel', 'initialRadiusKm',
+              'currentRadiusKm', 'radiusStageUpdatedAt', 'updatedAt'
             ])
           ) ||
           (
             existing().status == 'open'
-            && incoming().diff(existing()).affectedKeys().hasOnly(['applicationsCount', 'updatedAt'])
-            && incoming().applicationsCount == existing().applicationsCount + 1
+            && incoming().diff(existing()).affectedKeys().hasOnly(['applicationsCount', 'dealStatus', 'updatedAt'])
+            && incoming().applicationsCount >= existing().applicationsCount
+            && incoming().applicationsCount <= existing().applicationsCount + 1
+            && (!('dealStatus' in incoming()) || incoming().dealStatus in ['REQUESTED', 'NOTIFIED', 'OFFER_RECEIVED'])
+          ) ||
+          (
+            'acceptedWorkerUid' in existing()
+            && existing().acceptedWorkerUid == request.auth.uid
+            && !(existing().status in ['completed', 'cancelled'])
+            && incoming().diff(existing()).affectedKeys().hasOnly(['dealStatus', 'status', 'updatedAt'])
+            && isValidDealStatus(incoming().dealStatus)
+            && incoming().dealStatus in ['OFFER_ACCEPTED', 'DEAL_CONFIRMED', 'WORK_IN_PROGRESS', 'WORK_COMPLETED', 'CANCELLED']
+          ) ||
+          (
+            existing().status == 'open'
+            && 'acceptedApplicationId' in incoming()
+            && 'acceptedWorkerUid' in incoming()
+            && incoming().acceptedWorkerUid == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly(['acceptedApplicationId', 'acceptedWorkerUid', 'dealStatus', 'status', 'updatedAt'])
+            && incoming().status == 'in_progress'
+            && incoming().dealStatus == 'OFFER_ACCEPTED'
+            && exists(/databases/$(database)/documents/applications/$(incoming().acceptedApplicationId))
+            && get(/databases/$(database)/documents/applications/$(incoming().acceptedApplicationId)).data.workerUid == request.auth.uid
+            && get(/databases/$(database)/documents/applications/$(incoming().acceptedApplicationId)).data.jobId == jobId
+            && get(/databases/$(database)/documents/applications/$(incoming().acceptedApplicationId)).data.status in ['invited', 'accepted']
           )
         );
       allow delete: if isValidId(jobId) && isAdmin();
@@ -1062,16 +1263,27 @@ service cloud.firestore {
         && (
           isAdmin() ||
           (
-            existing().status != 'work_completed'
+            !(existing().status == 'work_completed' || ('dealStatus' in existing() && existing().dealStatus in ['WORK_COMPLETED', 'CANCELLED']))
             && isOwner(existing().workerUid)
-            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'proposedWage', 'note', 'liveTrackingAuthorized', 'updatedAt'])
-            && incoming().status in ['applied', 'accepted', 'declined']
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'dealStatus', 'proposedWage', 'offerAmount', 'estimatedArrivalTime',
+              'offerMessage', 'offerSubmittedAt', 'note', 'liveTrackingAuthorized',
+              'dealConfirmedAt', 'workStartedAt', 'completedAt', 'cancelledAt',
+              'cancelledByUid', 'updatedAt'
+            ])
+            && incoming().status in ['applied', 'accepted', 'declined', 'work_completed']
+            && (incoming().status != 'accepted' || existing().status in ['invited', 'accepted'])
+            && (incoming().status != 'work_completed' || existing().status == 'accepted')
             && (!incoming().liveTrackingAuthorized || incoming().status == 'accepted')
           ) ||
           (
-            existing().status != 'work_completed'
+            !(existing().status == 'work_completed' || ('dealStatus' in existing() && existing().dealStatus in ['WORK_COMPLETED', 'CANCELLED']))
             && isOwner(existing().employerUid)
-            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'workerRating', 'employerFeedback', 'updatedAt'])
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'dealStatus', 'agreedPrice', 'dealConfirmedAt',
+              'completedAt', 'cancelledAt', 'cancelledByUid',
+              'workerRating', 'employerFeedback', 'updatedAt'
+            ])
             && incoming().status in ['invited', 'accepted', 'declined', 'work_completed']
           )
         );
@@ -1299,7 +1511,20 @@ service cloud.firestore {
         && (existing().recipientUid == request.auth.uid || isAdmin());
       allow list: if isVerifiedUser()
         && (existing().recipientUid == request.auth.uid || isAdmin());
-      allow create, delete: if isAdmin();
+      allow create: if isAdmin() || (
+        isValidId(notificationId)
+        && isVerifiedUser()
+        && isValidNotificationRecord(incoming())
+        && incoming().senderUid == request.auth.uid
+        && incoming().recipientUid != request.auth.uid
+        && incoming().dedupeKey == notificationId
+        && !exists(/databases/$(database)/documents/notifications/$(notificationId))
+        && incoming().isDemo == false
+        && incoming().read == false
+        && isValidTimestampOnCreate()
+        && canNotifyOnDealContext(incoming())
+      );
+      allow delete: if isAdmin();
       allow update: if isValidId(notificationId)
         && isVerifiedUser()
         && isOwner(existing().recipientUid)
@@ -1631,6 +1856,74 @@ service cloud.firestore {
         && isValidMobileUniquenessLock(incoming())
         && isValidTimestampOnUpdate();
       allow delete: if isValidId(lockId)
+        && isVerifiedUser()
+        && (isOwner(existing().ownerUid) || isAdmin());
+    }
+
+    match /dealMessages/{messageId} {
+      allow get: if isValidId(messageId)
+        && isVerifiedUser()
+        && (existing().employerUid == request.auth.uid || existing().workerUid == request.auth.uid || isAdmin());
+      allow list: if isVerifiedUser()
+        && (existing().employerUid == request.auth.uid || existing().workerUid == request.auth.uid || isAdmin());
+      allow create: if isValidId(messageId)
+        && isVerifiedUser()
+        && isValidDealMessage(incoming())
+        && incoming().senderUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && exists(/databases/$(database)/documents/applications/$(incoming().applicationId))
+        && get(/databases/$(database)/documents/applications/$(incoming().applicationId)).data.employerUid == incoming().employerUid
+        && get(/databases/$(database)/documents/applications/$(incoming().applicationId)).data.workerUid == incoming().workerUid
+        && (
+          (incoming().senderRole == 'customer' && request.auth.uid == incoming().employerUid) ||
+          (incoming().senderRole == 'worker' && request.auth.uid == incoming().workerUid)
+        );
+      allow update: if false;
+      allow delete: if isValidId(messageId) && isAdmin();
+    }
+
+    match /dealLocationShares/{shareId} {
+      allow get: if isValidId(shareId)
+        && isVerifiedUser()
+        && (request.auth.uid in existing().authorizedUids || isAdmin());
+      allow list: if isVerifiedUser()
+        && (request.auth.uid in existing().authorizedUids || isAdmin());
+      allow create: if isValidId(shareId)
+        && isVerifiedUser()
+        && isValidDealLocationShare(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && request.auth.uid in incoming().authorizedUids
+        && isValidTimestampOnCreate()
+        && isActiveAcceptedDeal(incoming().applicationId)
+        && get(/databases/$(database)/documents/applications/$(incoming().applicationId)).data.employerUid in incoming().authorizedUids
+        && get(/databases/$(database)/documents/applications/$(incoming().applicationId)).data.workerUid in incoming().authorizedUids
+        && (
+          (incoming().role == 'customer' && request.auth.uid == get(/databases/$(database)/documents/applications/$(incoming().applicationId)).data.employerUid) ||
+          (incoming().role == 'worker' && request.auth.uid == get(/databases/$(database)/documents/applications/$(incoming().applicationId)).data.workerUid)
+        );
+      allow update: if isValidId(shareId)
+        && isVerifiedUser()
+        && isValidDealLocationShare(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().applicationId == existing().applicationId
+        && incoming().jobId == existing().jobId
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().role == existing().role
+        && incoming().authorizedUids == existing().authorizedUids
+        && (
+          isAdmin()
+          || (
+            isOwner(existing().ownerUid)
+            && (!incoming().sharingActive || isActiveAcceptedDeal(existing().applicationId))
+          )
+          || (
+            request.auth.uid in existing().authorizedUids
+            && incoming().sharingActive == false
+            && incoming().lat == existing().lat
+            && incoming().lng == existing().lng
+          )
+        );
+      allow delete: if isValidId(shareId)
         && isVerifiedUser()
         && (isOwner(existing().ownerUid) || isAdmin());
     }

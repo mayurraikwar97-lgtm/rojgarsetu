@@ -52,12 +52,17 @@ import {
   searchLocations,
   type GeoSearchCandidate,
 } from '../lib/locationService';
+import {
+  buildApproxLocationLabel,
+  SERVICE_RADIUS_STAGES,
+} from '../lib/smartVoiceJobAlert';
 import type {
   AiHirePrefill,
   JobWorkType,
   Language,
   PageRoute,
   PublicWorkerProfile,
+  ServiceRadiusKm,
   WageUnit,
 } from '../types/domain';
 import { LocationPinModal } from './LocationPinModal';
@@ -196,11 +201,14 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
   const [prefillPhotoAttachment, setPrefillPhotoAttachment] = useState<string>('');
   const [prefillPhotoAnalyzed, setPrefillPhotoAnalyzed] = useState<boolean>(false);
   const [checkoutRequestId, setCheckoutRequestId] = useState<string>('');
+  const [initialRadiusKm, setInitialRadiusKm] = useState<ServiceRadiusKm>(5);
   const [submitting, setSubmitting] = useState(false);
   const [checkoutError, setCheckoutError] = useState('');
   const [bookingResult, setBookingResult] = useState<{
     jobId: string;
     invitedCount: number;
+    notifiedCount: number;
+    finalRadiusKm?: ServiceRadiusKm;
     title: string;
   } | null>(null);
 
@@ -566,6 +574,7 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
     setOfferedWage(avgWage);
     setWageUnit(targetWorkers[0]?.wageUnit || 'daily');
     setWorkersRequired((prev) => Math.max(1, targetWorkers.length || prev));
+    setInitialRadiusKm(5);
     setCheckoutRequestId(`rsreq_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`);
     setLocality(
       locationPin?.label ||
@@ -650,6 +659,12 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
         ? new Date(Date.now() + 86400000).toISOString().split('T')[0]
         : jobDate;
 
+    const approxLocationLabel = buildApproxLocationLabel({
+      cityOrVillage: safeLocality.slice(0, 100),
+      district: effDistrict,
+      state: effState,
+    });
+
     setSubmitting(true);
     try {
       const result = await createInstantHireRequest(
@@ -665,6 +680,9 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
           district: effDistrict,
           cityOrVillage: safeLocality.slice(0, 100),
           workLocationLabel: `${safeLocality}, ${effDistrict}`.slice(0, 160),
+          approxLocationLabel: approxLocationLabel.slice(0, 160),
+          initialRadiusKm,
+          currentRadiusKm: initialRadiusKm,
           lat: coords.lat,
           lng: coords.lng,
           jobDate: scheduledDateStr,
@@ -687,7 +705,8 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
         },
         checkoutWorkers,
         rawDesc || `${timingLabel} · ${safeLocality}, ${effDistrict}`,
-        checkoutRequestId || undefined
+        checkoutRequestId || undefined,
+        workers
       );
 
       await recordCustomerOrderPreference(user.uid, {
@@ -703,11 +722,14 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
 
       void callNotificationApi('/api/notifications/send-matching-job', {
         jobId: result.jobId,
+        stageRadiusKm: result.finalRadiusKm ?? initialRadiusKm,
       }).catch(() => undefined);
 
       setBookingResult({
         jobId: result.jobId,
         invitedCount: result.invitedCount,
+        notifiedCount: result.notifiedCount,
+        finalRadiusKm: result.finalRadiusKm ?? initialRadiusKm,
         title: safeTitle,
       });
       setSelectedWorkerIds([]);
@@ -1406,15 +1428,15 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
                     {bookingResult.invitedCount > 0
                       ? tr(
                           lang,
-                          `Sent to ${bookingResult.invitedCount} worker(s) for “${bookingResult.title}”. Track acceptance live in your dashboard.`,
-                          `“${bookingResult.title}” के लिए ${bookingResult.invitedCount} कामगारों को निमंत्रण भेजा गया।`,
-                          `“${bookingResult.title}” साठी ${bookingResult.invitedCount} कामगारांना निमंत्रण पाठवले आहे.`
+                          `Sent to ${bookingResult.invitedCount} worker(s) for “${bookingResult.title}” (${bookingResult.notifiedCount} notified within ${bookingResult.finalRadiusKm || 5} km). Track acceptance, offers & expand search radius in your dashboard.`,
+                          `“${bookingResult.title}” के लिए ${bookingResult.invitedCount} कामगारों को निमंत्रण व ${bookingResult.finalRadiusKm || 5} किमी दायरे में सूचना भेजी गई।`,
+                          `“${bookingResult.title}” साठी ${bookingResult.invitedCount} कामगारांना निमंत्रण व ${bookingResult.finalRadiusKm || 5} किमी परिसरात सूचना पाठवली आहे.`
                         )
                       : tr(
                           lang,
-                          `Published “${bookingResult.title}” live for nearby workers.`,
-                          `“${bookingResult.title}” को नजदीकी कामगारों के लिए लाइव कर दिया गया है।`,
-                          `“${bookingResult.title}” जवळच्या कामगारांसाठी प्रकाशित झाले आहे.`
+                          `Published “${bookingResult.title}” and sent Smart Voice Alerts to ${bookingResult.notifiedCount} category worker(s) within ${bookingResult.finalRadiusKm || 5} km. Expand radius anytime from Employer Dashboard.`,
+                          `“${bookingResult.title}” प्रकाशित हुआ और ${bookingResult.finalRadiusKm || 5} किमी दायरे में ${bookingResult.notifiedCount} कामगारों को वॉइस अलर्ट भेजा गया।`,
+                          `“${bookingResult.title}” प्रकाशित झाले आणि ${bookingResult.finalRadiusKm || 5} किमी परिसरात ${bookingResult.notifiedCount} कामगारांना स्मार्ट व्हॉइस अलर्ट पाठवला.`
                         )}
                   </p>
                 </div>
@@ -1604,6 +1626,41 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
                       <option value="monthly">{tr(lang, 'Per Month', 'प्रति माह', 'प्रति महिना')}</option>
                     </select>
                   </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    {tr(
+                      lang,
+                      'Initial Search Radius Stage (Staged: 5 → 10 → 20 → 30 km)',
+                      'प्रारंभिक खोज दायरा (5 → 10 → 20 → 30 किमी)',
+                      'सुरुवातीचा शोध परिसर (5 → 10 → 20 → 30 किमी)'
+                    )}
+                  </label>
+                  <div className="grid grid-cols-4 gap-2">
+                    {SERVICE_RADIUS_STAGES.map((km) => (
+                      <button
+                        key={km}
+                        type="button"
+                        onClick={() => setInitialRadiusKm(km)}
+                        className={`py-1.5 px-2 rounded border text-xs font-mono-tabular font-bold cursor-pointer ${
+                          initialRadiusKm === km
+                            ? 'bg-[#0B3B75] border-[#0B3B75] text-white'
+                            : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-50'
+                        }`}
+                      >
+                        {km} km
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-1">
+                    {tr(
+                      lang,
+                      'Starts by alerting nearest available category workers; you can expand up to 30 km later without duplicates.',
+                      'पहले नजदीकी उपलब्ध कामगारों को अलर्ट जाता है; बाद में बिना दोहराव 30 किमी तक बढ़ा सकते हैं।',
+                      'प्रथम जवळच्या उपलब्ध कामगारांना अलर्ट जातो; नंतर दुबार न होता 30 किमी पर्यंत वाढवता येते.'
+                    )}
+                  </p>
                 </div>
 
                 <div>

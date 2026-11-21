@@ -7,7 +7,6 @@ import {
   CheckCircle2,
   ChevronRight,
   FileCheck2,
-  FlaskConical,
   GraduationCap,
   MapPin,
   Megaphone,
@@ -46,7 +45,6 @@ interface HomeViewProps {
   jobs: JobPosting[];
   announcements: PlatformAnnouncement[];
   totalApplicationsCount: number;
-  demoModeActive?: boolean;
 }
 
 export const HomeView: React.FC<HomeViewProps> = ({
@@ -57,7 +55,6 @@ export const HomeView: React.FC<HomeViewProps> = ({
   jobs,
   announcements,
   totalApplicationsCount,
-  demoModeActive = false,
 }) => {
   const { lang, t } = useLanguage();
   const [catQuery, setCatQuery] = useState('');
@@ -197,43 +194,6 @@ export const HomeView: React.FC<HomeViewProps> = ({
           </button>
         </div>
       </div>
-
-      {/* Pre-Launch Temporary 5-User Demo Mode Strip (Controlled by Admin & VITE_DEMO_MODE_ENABLED) */}
-      {demoModeActive && (
-        <div className="bg-amber-50 border-b border-amber-200">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-2 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs">
-            <div className="flex items-start sm:items-center gap-2 text-amber-950">
-              <FlaskConical className="w-4 h-4 text-[#C25E00] shrink-0 mt-0.5 sm:mt-0" />
-              <span>
-                <strong>
-                  {lang === 'hi'
-                    ? 'प्री-लॉन्च डेमो टेस्ट मोड सक्रिय (केवल 5 टेस्ट यूजर):'
-                    : lang === 'mr'
-                    ? 'प्री-लॉन्च डेमो टेस्ट मोड सुरू (फक्त 5 टेस्ट युझर):'
-                    : 'PRE-LAUNCH DEMO TESTING MODE (5 Test Users Only):'}
-                </strong>{' '}
-                {lang === 'hi'
-                  ? 'ग्राहक, प्लंबर, इलेक्ट्रीशियन, बढ़ई और ड्राइवर — GPS लोकेशन, जॉब व नोटिफिकेशन का एंड-टू-एंड परीक्षण करें।'
-                  : lang === 'mr'
-                  ? 'ग्राहक, प्लंबर, इलेक्ट्रिशियन, सुतार व ड्रायव्हर — GPS लोकेशन, काम व नोटिफिकेशनची संपूर्ण चाचणी करा.'
-                  : 'Test Customer, Plumber, Electrician, Carpenter & Driver — live GPS sharing, job acceptance & notifications without affecting production security.'}
-              </span>
-            </div>
-            <button
-              type="button"
-              onClick={() => onNavigate('demo-testing')}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#E06D1B] text-white font-bold hover:bg-[#c55b10] transition-colors whitespace-nowrap shrink-0 self-start sm:self-auto cursor-pointer"
-            >
-              <FlaskConical className="w-3.5 h-3.5" />
-              {lang === 'hi'
-                ? '5-यूजर डेमो टेस्ट खोलें'
-                : lang === 'mr'
-                ? '5-युझर डेमो टेस्ट उघडा'
-                : 'Open 5-User Demo Mode'}
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* B. Hero Showcase Banner + Quick Citizen Portal Grid (MahaEGS Above-the-Fold Split) */}
       <section className="py-6 sm:py-8 border-b border-slate-200 bg-white">

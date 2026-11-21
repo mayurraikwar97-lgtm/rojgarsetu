@@ -331,6 +331,12 @@ export async function subscribeForegroundPush(
     route?: string;
     jobId?: string;
     demoJobId?: string;
+    lang?: Language;
+    voiceScript?: string;
+    approxLocationLabel?: string;
+    distanceKm?: number;
+    playSound?: boolean;
+    speakVoice?: boolean;
   }) => void
 ): Promise<() => void> {
   const messaging = await getFirebaseMessaging();
@@ -339,12 +345,20 @@ export async function subscribeForegroundPush(
   return onMessage(messaging, (payload) => {
     const title = payload.notification?.title || payload.data?.title || 'ROJGAR SETU';
     const body = payload.notification?.body || payload.data?.body || 'New notification received.';
+    const distNum = payload.data?.distanceKm ? Number(payload.data.distanceKm) : NaN;
+    const rawLang = payload.data?.lang;
     onReceive({
       title,
       body,
       route: payload.data?.route,
       jobId: payload.data?.jobId,
       demoJobId: payload.data?.demoJobId,
+      lang: rawLang === 'mr' || rawLang === 'hi' || rawLang === 'en' ? rawLang : undefined,
+      voiceScript: payload.data?.voiceScript,
+      approxLocationLabel: payload.data?.approxLocationLabel,
+      ...(Number.isFinite(distNum) ? { distanceKm: distNum } : {}),
+      playSound: payload.data?.playSound !== 'false',
+      speakVoice: payload.data?.speakVoice !== 'false',
     });
   });
 }

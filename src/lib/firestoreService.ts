@@ -5,6 +5,7 @@ import {
   deleteField,
   doc,
   getDoc,
+  getDocs,
   increment,
   onSnapshot,
   orderBy,
@@ -19,10 +20,25 @@ import {
 import { auth, db, handleFirestoreError, OperationType } from './firebase';
 import { grantAcceptedCustomerPhoto } from './photoStorageService';
 import { normalizeTenDigitIndianMobile } from './pinAuth';
+import {
+  SERVICE_RADIUS_STAGES,
+  buildApproxLocationLabel,
+  buildSmartJobNotificationContent,
+  calculateValidDistanceKm,
+  doesCategoryMatch,
+  evaluateWorkerEligibilityForJob,
+  getNextRadiusStage,
+  normalizeCategoryToken,
+  normalizeRadiusKm,
+} from './smartVoiceJobAlert';
 import type {
   AppNotificationRecord,
   AuditLog,
   CustomerPreference,
+  DealLocationShare,
+  DealMessage,
+  DealNotificationEventType,
+  DealStatus,
   DemoJobApplication,
   DemoJobPosting,
   DemoWorkerAccount,
@@ -31,12 +47,15 @@ import type {
   GrievanceReport,
   JobApplication,
   JobPosting,
+  Language,
+  NotificationCategoryKey,
   NotificationDeliveryLog,
   NotificationPreferences,
   PartnershipEnquiry,
   PlatformAnnouncement,
   PublicEmployerProfile,
   PublicWorkerProfile,
+  ServiceRadiusKm,
   VehicleBooking,
   VehicleListing,
   VehiclePrivateInfo,
@@ -44,6 +63,8 @@ import type {
   VerificationStatus,
   WorkerPrivateInfo,
 } from '../types/domain';
+
+export { normalizeCategoryToken };
 
 export function subscribePublicWorkers(onData: (items: PublicWorkerProfile[]) => void): () => void {
   const path = 'publicWorkers';
@@ -268,6 +289,9 @@ export async function saveWorkerRegistration(
           ...(cleanPub.gender ? { gender: cleanPub.gender } : {}),
           ...(cleanPub.education ? { education: cleanPub.education } : {}),
           ...(typeof cleanPub.isWomenEnterprise === 'boolean' ? { isWomenEnterprise: cleanPub.isWomenEnterprise } : {}),
+          ...(cleanPub.preferredLanguage ? { preferredLanguage: cleanPub.preferredLanguage } : {}),
+          ...(cleanPub.preferredRadiusKm ? { preferredRadiusKm: cleanPub.preferredRadiusKm } : {}),
+          ...(typeof cleanPub.voiceAlertsEnabled === 'boolean' ? { voiceAlertsEnabled: cleanPub.voiceAlertsEnabled } : {}),
           ...(publicData.photoDocId === ''
             ? { photoDocId: deleteField() }
             : cleanPub.photoDocId
@@ -459,48 +483,461 @@ export async function saveEmployerRegistration(
   }
 }
 
+export function doesWorkerMatchJob(
+  job: Pick<JobPosting, 'category' | 'requiredSkills' | 'district' | 'employerUid'>,
+  worker: Pick<PublicWorkerProfile, 'ownerUid' | 'primarySkill' | 'skills' | 'district' | 'verificationStatus' | 'availabilityStatus'>
+): { matches: boolean; skillMatches: boolean; locationMatches: boolean } {
+  if (worker.ownerUid && job.employerUid && worker.ownerUid === job.employerUid) {
+    return { matches: false, skillMatches: false, locationMatches: false };
+  }
+  if (worker.verificationStatus === 'suspended' || worker.availabilityStatus !== 'available') {
+    return { matches: false, skillMatches: false, locationMatches: false };
+  }
+  const skillMatches = doesCategoryMatch(
+    job.category || '',
+    job.requiredSkills || [],
+    worker.primarySkill || '',
+    worker.skills || []
+  );
+
+  const locationMatches =
+    Boolean(job.district) &&
+    Boolean(worker.district) &&
+    job.district.toLowerCase().trim() === worker.district.toLowerCase().trim();
+
+  return {
+    matches: skillMatches,
+    skillMatches,
+    locationMatches,
+  };
+}
+
+function sanitizeSafeId(raw: string, fallbackPrefix = 'ntf'): string {
+  const clean = raw.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 115);
+  if (clean.length >= 8) return clean;
+  return `${fallbackPrefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function getEffectiveDealStatus(
+  app: Pick<JobApplication, 'status' | 'dealStatus' | 'offerSubmittedAt'>
+): DealStatus {
+  if (app.dealStatus) return app.dealStatus;
+  switch (app.status) {
+    case 'invited':
+      return 'NOTIFIED';
+    case 'applied':
+      return 'OFFER_RECEIVED';
+    case 'accepted':
+      return 'OFFER_ACCEPTED';
+    case 'work_completed':
+      return 'WORK_COMPLETED';
+    case 'declined':
+      return 'REJECTED';
+    default:
+      return 'REQUESTED';
+  }
+}
+
+export async function dispatchTwoWayDealNotification(params: {
+  recipientUid: string;
+  recipientRole: 'worker' | 'employer';
+  senderUid: string;
+  senderName: string;
+  category: NotificationCategoryKey;
+  eventType: DealNotificationEventType;
+  dealStatus?: DealStatus;
+  title: string;
+  body: string;
+  language?: Language;
+  voiceScript?: string;
+  approxLocationLabel?: string;
+  distanceKm?: number | null;
+  customerName?: string;
+  jobCategory?: string;
+  playSound?: boolean;
+  speakVoice?: boolean;
+  metadataLabel?: string;
+  targetRoute: string;
+  targetJobId?: string;
+  targetApplicationId?: string;
+  dedupeKey: string;
+  pushPayload?: {
+    workerName: string;
+    jobTitle: string;
+    proposedWage?: number;
+    eta?: string;
+    locationLabel?: string;
+    messageSnippet?: string;
+  };
+}): Promise<void> {
+  if (!params.recipientUid || params.recipientUid === params.senderUid) return;
+  const safeId = sanitizeSafeId(params.dedupeKey, 'ntf');
+  const notifRef = doc(db, 'notifications', safeId);
+
+  const validDist =
+    typeof params.distanceKm === 'number' &&
+    Number.isFinite(params.distanceKm) &&
+    params.distanceKm >= 0 &&
+    params.distanceKm <= 5000
+      ? params.distanceKm
+      : undefined;
+
+  try {
+    const existing = await getDoc(notifRef);
+    if (!existing.exists()) {
+      await setDoc(notifRef, {
+        recipientUid: params.recipientUid,
+        recipientRole: params.recipientRole,
+        senderUid: params.senderUid,
+        senderName: (params.senderName || 'ROJGAR SETU User').slice(0, 140),
+        isDemo: false,
+        category: params.category,
+        eventType: params.eventType,
+        ...(params.dealStatus ? { dealStatus: params.dealStatus } : {}),
+        title: params.title.slice(0, 160),
+        body: params.body.slice(0, 500),
+        ...(params.voiceScript ? { voiceScript: params.voiceScript.slice(0, 680) } : {}),
+        ...(params.approxLocationLabel ? { approxLocationLabel: params.approxLocationLabel.slice(0, 155) } : {}),
+        ...(validDist !== undefined ? { distanceKm: validDist } : {}),
+        ...(params.customerName ? { customerName: params.customerName.slice(0, 155) } : {}),
+        ...(params.jobCategory ? { jobCategory: params.jobCategory.slice(0, 75) } : {}),
+        ...(typeof params.playSound === 'boolean' ? { playSound: params.playSound } : {}),
+        ...(typeof params.speakVoice === 'boolean' ? { speakVoice: params.speakVoice } : {}),
+        ...(params.metadataLabel ? { metadataLabel: params.metadataLabel.slice(0, 240) } : {}),
+        language: params.language || 'en',
+        targetRoute: params.targetRoute.slice(0, 60),
+        ...(params.targetJobId ? { targetJobId: params.targetJobId } : {}),
+        ...(params.targetApplicationId ? { targetApplicationId: params.targetApplicationId } : {}),
+        dedupeKey: safeId,
+        deliveryStatus: 'in_app_only',
+        read: false,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+  } catch (err) {
+    console.warn('In-app notification record creation skipped or rejected:', err);
+  }
+
+  // Also trigger backend FCM push if messaging credentials are configured
+  if (params.pushPayload) {
+    void callNotificationApi('/api/notifications/send-customer-event', {
+      recipientUid: params.recipientUid,
+      recipientRole: params.recipientRole,
+      eventType: params.eventType,
+      workerName: params.pushPayload.workerName,
+      jobTitle: params.pushPayload.jobTitle,
+      ...(params.targetJobId ? { jobId: params.targetJobId } : {}),
+      ...(typeof params.pushPayload.proposedWage === 'number'
+        ? { proposedWage: params.pushPayload.proposedWage }
+        : {}),
+      ...(params.pushPayload.eta ? { eta: params.pushPayload.eta } : {}),
+      ...(params.pushPayload.locationLabel ? { locationLabel: params.pushPayload.locationLabel } : {}),
+      ...(params.pushPayload.messageSnippet ? { messageSnippet: params.pushPayload.messageSnippet } : {}),
+      dedupeKey: safeId,
+      targetRoute: params.targetRoute,
+    }).catch(() => undefined);
+  }
+}
+
 export async function createJobPosting(
   payload: Omit<JobPosting, 'id' | 'status' | 'applicationsCount' | 'createdAt' | 'updatedAt'>,
   idempotencyKey?: string
 ): Promise<string> {
   const path = 'jobs';
   const safeKey = idempotencyKey ? idempotencyKey.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120) : '';
+  const approxLocationLabel =
+    payload.approxLocationLabel ||
+    buildApproxLocationLabel({
+      cityOrVillage: payload.cityOrVillage,
+      district: payload.district,
+      state: payload.state,
+    });
+  const initialRadiusKm = normalizeRadiusKm(payload.initialRadiusKm ?? 5, 5);
+  const currentRadiusKm = normalizeRadiusKm(payload.currentRadiusKm ?? initialRadiusKm, initialRadiusKm);
+
   try {
+    const baseDoc = {
+      ...payload,
+      approxLocationLabel: approxLocationLabel.slice(0, 160),
+      initialRadiusKm,
+      currentRadiusKm,
+      radiusStageUpdatedAt: serverTimestamp(),
+      status: 'open' as const,
+      dealStatus: payload.dealStatus || ('REQUESTED' as const),
+      applicationsCount: 0,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+
     if (safeKey && safeKey.length >= 8) {
       const targetRef = doc(db, path, safeKey);
       const existingSnap = await getDoc(targetRef);
       if (existingSnap.exists()) {
         return existingSnap.id;
       }
-      await setDoc(targetRef, {
-        ...payload,
-        status: 'open',
-        applicationsCount: 0,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
+      await setDoc(targetRef, baseDoc);
       return safeKey;
     }
 
-    const ref = await addDoc(collection(db, path), {
-      ...payload,
-      status: 'open',
-      applicationsCount: 0,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
+    const ref = await addDoc(collection(db, path), baseDoc);
     return ref.id;
   } catch (err) {
     handleFirestoreError(err, OperationType.CREATE, path);
   }
 }
 
+export type SmartBroadcastJobInput = Pick<
+  JobPosting,
+  | 'employerUid'
+  | 'employerName'
+  | 'title'
+  | 'category'
+  | 'requiredSkills'
+  | 'district'
+  | 'state'
+  | 'cityOrVillage'
+  | 'workLocationLabel'
+  | 'jobDate'
+  | 'startTime'
+  | 'offeredWage'
+  | 'wageUnit'
+  | 'description'
+> & {
+  lat?: number;
+  lng?: number;
+  approxLocationLabel?: string;
+  initialRadiusKm?: ServiceRadiusKm;
+  currentRadiusKm?: ServiceRadiusKm;
+};
+
+export async function broadcastSmartJobAlerts(params: {
+  jobId: string;
+  job: SmartBroadcastJobInput;
+  workers: PublicWorkerProfile[];
+  alreadyNotifiedUids?: string[];
+  stageRadiusKm?: ServiceRadiusKm;
+  autoExpandIfEmpty?: boolean;
+}): Promise<{
+  notifiedCount: number;
+  finalRadiusKm: ServiceRadiusKm;
+  hasNextStage: boolean;
+  notifiedWorkerUids: string[];
+}> {
+  const {
+    jobId,
+    job,
+    workers,
+    alreadyNotifiedUids = [],
+    stageRadiusKm,
+    autoExpandIfEmpty = true,
+  } = params;
+
+  const seenUids = new Set(alreadyNotifiedUids.filter(Boolean));
+  let activeRadius: ServiceRadiusKm = normalizeRadiusKm(
+    stageRadiusKm ?? job.currentRadiusKm ?? job.initialRadiusKm ?? 5,
+    5
+  );
+
+  const evaluateAtStage = (radiusKm: ServiceRadiusKm) =>
+    workers
+      .map((w) => {
+        const evalRes = evaluateWorkerEligibilityForJob({
+          job: {
+            employerUid: job.employerUid,
+            category: job.category,
+            requiredSkills: job.requiredSkills || [],
+            district: job.district,
+            cityOrVillage: job.cityOrVillage,
+            lat: Number(job.lat),
+            lng: Number(job.lng),
+          },
+          worker: {
+            ownerUid: w.ownerUid,
+            displayName: w.displayName,
+            primarySkill: w.primarySkill,
+            skills: w.skills || [],
+            district: w.district,
+            cityOrVillage: w.cityOrVillage,
+            approxLat: w.approxLat,
+            approxLng: w.approxLng,
+            verificationStatus: w.verificationStatus,
+            availabilityStatus: w.availabilityStatus,
+            preferredLanguage: w.preferredLanguage,
+            preferredRadiusKm: w.preferredRadiusKm,
+          },
+          stageRadiusKm: radiusKm,
+          alreadyNotifiedUids: seenUids,
+        });
+        return { worker: w, evalRes };
+      })
+      .filter((entry) => entry.evalRes.eligible);
+
+  let matchedEntries = evaluateAtStage(activeRadius);
+
+  if (matchedEntries.length === 0 && autoExpandIfEmpty) {
+    for (const candidateStage of SERVICE_RADIUS_STAGES) {
+      if (candidateStage <= activeRadius) continue;
+      activeRadius = candidateStage;
+      matchedEntries = evaluateAtStage(activeRadius);
+      if (matchedEntries.length > 0) break;
+    }
+  }
+
+  const approxLocLabel =
+    job.approxLocationLabel ||
+    buildApproxLocationLabel({
+      cityOrVillage: job.cityOrVillage,
+      district: job.district,
+      state: job.state,
+    });
+  const wageSummary = job.offeredWage > 0 ? `₹${job.offeredWage}/${job.wageUnit}` : '';
+
+  const notifiedUids: string[] = [...alreadyNotifiedUids];
+  let dispatchedCount = 0;
+
+  for (const { worker: w, evalRes } of matchedEntries.slice(0, 40)) {
+    notifiedUids.push(w.ownerUid);
+    dispatchedCount += 1;
+
+    const workerLang: Language = w.preferredLanguage || 'en';
+    const speakVoice = w.voiceAlertsEnabled !== false;
+    const msg = buildSmartJobNotificationContent({
+      lang: workerLang,
+      customerName: job.employerName,
+      title: job.title,
+      category: job.category,
+      description: job.description || job.title,
+      approxLocationLabel: approxLocLabel,
+      distanceKm: evalRes.distanceKm,
+      offeredWage: job.offeredWage,
+      wageUnit: job.wageUnit,
+    });
+
+    await dispatchTwoWayDealNotification({
+      recipientUid: w.ownerUid,
+      recipientRole: 'worker',
+      senderUid: job.employerUid,
+      senderName: job.employerName,
+      category: 'matchingJobs',
+      eventType: 'hiring_request_created',
+      dealStatus: 'NOTIFIED',
+      title: msg.title,
+      body: msg.body,
+      language: workerLang,
+      voiceScript: msg.voiceScript,
+      approxLocationLabel: approxLocLabel,
+      distanceKm: evalRes.distanceKm,
+      customerName: job.employerName,
+      jobCategory: job.category,
+      playSound: true,
+      speakVoice,
+      metadataLabel: `${job.category} · ${approxLocLabel}${evalRes.distanceKm !== null ? ` (~${evalRes.distanceKm} km)` : ''}${wageSummary ? ` · ${wageSummary}` : ''}`,
+      targetRoute: 'worker-dashboard',
+      targetJobId: jobId,
+      dedupeKey: sanitizeSafeId(`job_${jobId}_${w.ownerUid}`),
+    });
+  }
+
+  const mergedNotified = Array.from(new Set(notifiedUids)).slice(0, 100);
+  await updateDoc(doc(db, 'jobs', jobId), {
+    currentRadiusKm: activeRadius,
+    radiusStageUpdatedAt: serverTimestamp(),
+    ...(dispatchedCount > 0 ? { dealStatus: 'NOTIFIED', notifiedWorkerUids: mergedNotified } : {}),
+    updatedAt: serverTimestamp(),
+  }).catch(() => undefined);
+
+  return {
+    notifiedCount: dispatchedCount,
+    finalRadiusKm: activeRadius,
+    hasNextStage: getNextRadiusStage(activeRadius) !== null,
+    notifiedWorkerUids: mergedNotified,
+  };
+}
+
+export async function notifyMatchingWorkersInApp(params: {
+  jobId: string;
+  job: SmartBroadcastJobInput;
+  workers: PublicWorkerProfile[];
+  alreadyNotifiedUids?: string[];
+  stageRadiusKm?: ServiceRadiusKm;
+  autoExpandIfEmpty?: boolean;
+}): Promise<number> {
+  const res = await broadcastSmartJobAlerts(params);
+  return res.notifiedCount;
+}
+
+export async function expandJobSearchRadius(params: {
+  job: JobPosting;
+  workers: PublicWorkerProfile[];
+  targetRadiusKm?: ServiceRadiusKm;
+}): Promise<{
+  previousRadiusKm: ServiceRadiusKm;
+  currentRadiusKm: ServiceRadiusKm;
+  hasNextStage: boolean;
+  newlyNotifiedCount: number;
+  totalNotifiedCount: number;
+}> {
+  const { job, workers, targetRadiusKm } = params;
+  let freshJob: JobPosting = job;
+
+  try {
+    const freshSnap = await getDoc(doc(db, 'jobs', job.id));
+    if (freshSnap.exists()) {
+      freshJob = { id: freshSnap.id, ...freshSnap.data() } as JobPosting;
+    }
+  } catch {
+    // Fallback to passed snapshot
+  }
+
+  const prevRadius = normalizeRadiusKm(freshJob.currentRadiusKm ?? freshJob.initialRadiusKm ?? 5, 5);
+  const nextRadius = targetRadiusKm ?? getNextRadiusStage(prevRadius);
+
+  const existingNotified = Array.isArray(freshJob.notifiedWorkerUids)
+    ? freshJob.notifiedWorkerUids
+    : [];
+
+  if (!nextRadius || nextRadius <= prevRadius) {
+    return {
+      previousRadiusKm: prevRadius,
+      currentRadiusKm: prevRadius,
+      hasNextStage: false,
+      newlyNotifiedCount: 0,
+      totalNotifiedCount: existingNotified.length,
+    };
+  }
+
+  const broadcastResult = await broadcastSmartJobAlerts({
+    jobId: freshJob.id,
+    job: freshJob,
+    workers,
+    alreadyNotifiedUids: existingNotified,
+    stageRadiusKm: nextRadius,
+    autoExpandIfEmpty: false,
+  });
+
+  // Trigger server FCM push for newly eligible workers cleanly without blocking UI
+  void callNotificationApi('/api/notifications/expand-job-radius', {
+    jobId: freshJob.id,
+    targetRadiusKm: nextRadius,
+  }).catch(() => undefined);
+
+  return {
+    previousRadiusKm: prevRadius,
+    currentRadiusKm: nextRadius,
+    hasNextStage: getNextRadiusStage(nextRadius) !== null,
+    newlyNotifiedCount: broadcastResult.notifiedCount,
+    totalNotifiedCount: broadcastResult.notifiedWorkerUids.length,
+  };
+}
+
 export async function createInstantHireRequest(
   jobPayload: Omit<JobPosting, 'id' | 'status' | 'applicationsCount' | 'createdAt' | 'updatedAt'>,
   selectedWorkers: PublicWorkerProfile[],
   inviteNote?: string,
-  idempotencyKey?: string
-): Promise<{ jobId: string; invitedCount: number }> {
+  idempotencyKey?: string,
+  allMatchingWorkersPool?: PublicWorkerProfile[]
+): Promise<{ jobId: string; invitedCount: number; notifiedCount: number; finalRadiusKm?: ServiceRadiusKm }> {
   const safeKey = idempotencyKey ? idempotencyKey.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120) : '';
   let alreadyExisted = false;
   if (safeKey && safeKey.length >= 8) {
@@ -512,74 +949,721 @@ export async function createInstantHireRequest(
     }
   }
 
-  // Create job document first so Firestore security rule `get(/databases/.../jobs/$(jobId))`
-  // resolves cleanly when creating invited applications immediately afterward.
-  const jobId = await createJobPosting(jobPayload, safeKey || undefined);
+  const approxLocLabel =
+    jobPayload.approxLocationLabel ||
+    buildApproxLocationLabel({
+      cityOrVillage: jobPayload.cityOrVillage,
+      district: jobPayload.district,
+      state: jobPayload.state,
+    });
+  const initialStageKm = normalizeRadiusKm(jobPayload.initialRadiusKm ?? 5, 5);
 
-  if (selectedWorkers.length === 0 || alreadyExisted) {
-    return { jobId, invitedCount: alreadyExisted ? selectedWorkers.length : 0 };
+  // Create job document first so Firestore security rule `get(/databases/.../jobs/$(jobId))`
+  // resolves cleanly when creating invited applications and notifications immediately afterward.
+  const jobId = await createJobPosting(
+    {
+      ...jobPayload,
+      approxLocationLabel: approxLocLabel.slice(0, 160),
+      initialRadiusKm: initialStageKm,
+      currentRadiusKm: normalizeRadiusKm(jobPayload.currentRadiusKm ?? initialStageKm, initialStageKm),
+      dealStatus: selectedWorkers.length > 0 ? 'NOTIFIED' : 'REQUESTED',
+      notifiedWorkerUids: selectedWorkers.map((w) => w.ownerUid).slice(0, 80),
+    },
+    safeKey || undefined
+  );
+
+  if (alreadyExisted) {
+    return { jobId, invitedCount: selectedWorkers.length, notifiedCount: 0, finalRadiusKm: initialStageKm };
   }
 
-  const batch = writeBatch(db);
   const safeTitle = jobPayload.title.trim().slice(0, 140) || 'Instant Hire Request';
   const safeNote = (inviteNote ?? '').trim().slice(0, 600);
+  const createdAppIds: Array<{ worker: PublicWorkerProfile; appId: string }> = [];
 
-  for (const worker of selectedWorkers) {
-    const appRef = doc(collection(db, 'applications'));
-    batch.set(appRef, {
+  if (selectedWorkers.length > 0) {
+    const batch = writeBatch(db);
+    for (const worker of selectedWorkers) {
+      const appId = sanitizeSafeId(`app_${jobId}_${worker.ownerUid}`);
+      const appRef = doc(db, 'applications', appId);
+      createdAppIds.push({ worker, appId });
+      batch.set(appRef, {
+        jobId,
+        jobTitle: safeTitle,
+        employerUid: jobPayload.employerUid,
+        customerName: (jobPayload.employerName.trim() || 'Customer').slice(0, 160),
+        jobCategory: (jobPayload.category.trim() || 'General').slice(0, 80),
+        jobDistrict: (jobPayload.district.trim() || 'India').slice(0, 80),
+        jobLocationLabel: approxLocLabel.slice(0, 160),
+        ...(jobPayload.jobDate ? { jobDate: jobPayload.jobDate.slice(0, 30) } : {}),
+        ...(jobPayload.startTime ? { startTime: jobPayload.startTime.slice(0, 30) } : {}),
+        workerUid: worker.ownerUid,
+        workerRegistrationId: worker.registrationId,
+        workerName: worker.displayName,
+        workerPrimarySkill: worker.primarySkill,
+        ...(worker.photoDocId ? { workerPhotoDocId: worker.photoDocId } : {}),
+        proposedWage: jobPayload.offeredWage > 0 ? jobPayload.offeredWage : worker.expectedWage,
+        ...(safeNote ? { note: safeNote } : {}),
+        status: 'invited',
+        dealStatus: 'NOTIFIED',
+        initiatedBy: 'customer_invite',
+        liveTrackingAuthorized: false,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+
+    try {
+      await batch.commit();
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `applications/instant-hire-${jobId}`);
+    }
+
+    // Dispatch guaranteed in-app + optional push notifications for each invited worker AFTER commit
+    for (const entry of createdAppIds) {
+      const w = entry.worker;
+      const distKm = calculateValidDistanceKm(jobPayload.lat, jobPayload.lng, w.approxLat, w.approxLng);
+      const workerLang: Language = w.preferredLanguage || 'en';
+      const msg = buildSmartJobNotificationContent({
+        lang: workerLang,
+        customerName: jobPayload.employerName,
+        title: safeTitle,
+        category: jobPayload.category,
+        description: safeNote || jobPayload.description || safeTitle,
+        approxLocationLabel: approxLocLabel,
+        distanceKm: distKm,
+        offeredWage: jobPayload.offeredWage,
+        wageUnit: jobPayload.wageUnit,
+      });
+
+      await dispatchTwoWayDealNotification({
+        recipientUid: w.ownerUid,
+        recipientRole: 'worker',
+        senderUid: jobPayload.employerUid,
+        senderName: jobPayload.employerName,
+        category: 'matchingJobs',
+        eventType: 'hiring_request_created',
+        dealStatus: 'NOTIFIED',
+        title: msg.title,
+        body: msg.body,
+        language: workerLang,
+        voiceScript: msg.voiceScript,
+        approxLocationLabel: approxLocLabel,
+        distanceKm: distKm,
+        customerName: jobPayload.employerName,
+        jobCategory: jobPayload.category,
+        playSound: true,
+        speakVoice: w.voiceAlertsEnabled !== false,
+        metadataLabel: `${jobPayload.category} · ${approxLocLabel}${distKm !== null ? ` (~${distKm} km)` : ''}`,
+        targetRoute: 'worker-dashboard',
+        targetJobId: jobId,
+        targetApplicationId: entry.appId,
+        dedupeKey: sanitizeSafeId(`job_${jobId}_${w.ownerUid}`),
+        pushPayload: {
+          workerName: jobPayload.employerName,
+          jobTitle: safeTitle,
+          proposedWage: jobPayload.offeredWage,
+          locationLabel: approxLocLabel,
+        },
+      });
+    }
+  }
+
+  // Broadcast category-wise staged voice job alerts when broadcasting to eligible workers
+  let extraNotified = 0;
+  let finalRadiusKm: ServiceRadiusKm = initialStageKm;
+  if (allMatchingWorkersPool && allMatchingWorkersPool.length > 0 && selectedWorkers.length === 0) {
+    const broadcastRes = await broadcastSmartJobAlerts({
       jobId,
-      jobTitle: safeTitle,
-      employerUid: jobPayload.employerUid,
-      workerUid: worker.ownerUid,
-      workerRegistrationId: worker.registrationId,
-      workerName: worker.displayName,
-      workerPrimarySkill: worker.primarySkill,
-      ...(worker.photoDocId ? { workerPhotoDocId: worker.photoDocId } : {}),
-      proposedWage: jobPayload.offeredWage > 0 ? jobPayload.offeredWage : worker.expectedWage,
-      ...(safeNote ? { note: safeNote } : {}),
-      status: 'invited',
-      liveTrackingAuthorized: false,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
+      job: {
+        ...jobPayload,
+        approxLocationLabel: approxLocLabel,
+        initialRadiusKm: initialStageKm,
+      },
+      workers: allMatchingWorkersPool,
+      alreadyNotifiedUids: selectedWorkers.map((w) => w.ownerUid),
+      stageRadiusKm: initialStageKm,
+      autoExpandIfEmpty: true,
     });
+    extraNotified = broadcastRes.notifiedCount;
+    finalRadiusKm = broadcastRes.finalRadiusKm;
   }
 
-  try {
-    await batch.commit();
-    return { jobId, invitedCount: selectedWorkers.length };
-  } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, `applications/instant-hire-${jobId}`);
-  }
+  return {
+    jobId,
+    invitedCount: selectedWorkers.length,
+    notifiedCount: selectedWorkers.length + extraNotified,
+    finalRadiusKm,
+  };
 }
 
 export async function applyToJob(
-  payload: Omit<JobApplication, 'id' | 'status' | 'liveTrackingAuthorized' | 'createdAt' | 'updatedAt'>
-): Promise<void> {
-  const appRef = doc(collection(db, 'applications'));
+  payload: Omit<JobApplication, 'id' | 'status' | 'liveTrackingAuthorized' | 'createdAt' | 'updatedAt'> & {
+    jobMeta?: Pick<
+      JobPosting,
+      'category' | 'district' | 'cityOrVillage' | 'workLocationLabel' | 'jobDate' | 'startTime' | 'employerName'
+    >;
+  }
+): Promise<string> {
+  const deterministicAppId = sanitizeSafeId(`app_${payload.jobId}_${payload.workerUid}`);
+  const appRef = doc(db, 'applications', deterministicAppId);
   const jobRef = doc(db, 'jobs', payload.jobId);
-  const batch = writeBatch(db);
-  batch.set(appRef, {
-    ...payload,
-    status: 'applied',
-    liveTrackingAuthorized: false,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
-  batch.update(jobRef, {
-    applicationsCount: increment(1),
-    updatedAt: serverTimestamp(),
-  });
 
   try {
-    await batch.commit();
+    const existingSnap = await getDoc(appRef);
+    const { jobMeta, ...cleanPayload } = payload;
+    const locLabel = jobMeta
+      ? buildApproxLocationLabel({
+          cityOrVillage: jobMeta.cityOrVillage,
+          district: jobMeta.district,
+        })
+      : payload.jobLocationLabel || '';
+
+    if (existingSnap.exists()) {
+      await updateDoc(appRef, {
+        proposedWage: cleanPayload.proposedWage,
+        offerAmount: cleanPayload.offerAmount ?? cleanPayload.proposedWage,
+        ...(cleanPayload.estimatedArrivalTime
+          ? { estimatedArrivalTime: cleanPayload.estimatedArrivalTime.slice(0, 80) }
+          : {}),
+        ...(cleanPayload.offerMessage
+          ? { offerMessage: cleanPayload.offerMessage.slice(0, 600) }
+          : {}),
+        ...(cleanPayload.note ? { note: cleanPayload.note.slice(0, 600) } : {}),
+        status: 'applied',
+        dealStatus: 'OFFER_RECEIVED',
+        offerSubmittedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(appRef, {
+        ...cleanPayload,
+        ...(jobMeta?.employerName ? { customerName: jobMeta.employerName.slice(0, 160) } : {}),
+        ...(jobMeta?.category ? { jobCategory: jobMeta.category.slice(0, 80) } : {}),
+        ...(jobMeta?.district ? { jobDistrict: jobMeta.district.slice(0, 80) } : {}),
+        ...(locLabel ? { jobLocationLabel: locLabel.slice(0, 160) } : {}),
+        ...(jobMeta?.jobDate ? { jobDate: jobMeta.jobDate.slice(0, 30) } : {}),
+        ...(jobMeta?.startTime ? { startTime: jobMeta.startTime.slice(0, 30) } : {}),
+        offerAmount: cleanPayload.offerAmount ?? cleanPayload.proposedWage,
+        offerSubmittedAt: serverTimestamp(),
+        status: 'applied',
+        dealStatus: 'OFFER_RECEIVED',
+        initiatedBy: cleanPayload.initiatedBy || 'worker_apply',
+        liveTrackingAuthorized: false,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      await updateDoc(jobRef, {
+        applicationsCount: increment(1),
+        dealStatus: 'OFFER_RECEIVED',
+        updatedAt: serverTimestamp(),
+      }).catch(() => undefined);
+    }
+
+    await dispatchTwoWayDealNotification({
+      recipientUid: payload.employerUid,
+      recipientRole: 'employer',
+      senderUid: payload.workerUid,
+      senderName: payload.workerName,
+      category: 'applicationUpdates',
+      eventType: 'worker_offer_sent',
+      dealStatus: 'OFFER_RECEIVED',
+      title: `New Worker Offer: ${payload.jobTitle}`,
+      body: `${payload.workerName} (${payload.workerPrimarySkill}) offered ₹${payload.offerAmount ?? payload.proposedWage}${payload.estimatedArrivalTime ? ` · ETA: ${payload.estimatedArrivalTime}` : ''}${payload.offerMessage || payload.note ? ` — "${(payload.offerMessage || payload.note || '').slice(0, 100)}"` : ''}`,
+      metadataLabel: `₹${payload.offerAmount ?? payload.proposedWage}${payload.estimatedArrivalTime ? ` · ETA ${payload.estimatedArrivalTime}` : ''}`,
+      targetRoute: 'employer-dashboard',
+      targetJobId: payload.jobId,
+      targetApplicationId: deterministicAppId,
+      dedupeKey: sanitizeSafeId(`offer_${deterministicAppId}_${Date.now()}`),
+      pushPayload: {
+        workerName: payload.workerName,
+        jobTitle: payload.jobTitle,
+        proposedWage: payload.offerAmount ?? payload.proposedWage,
+        eta: payload.estimatedArrivalTime,
+        messageSnippet: payload.offerMessage || payload.note,
+      },
+    });
+
+    return deterministicAppId;
   } catch (err) {
-    handleFirestoreError(err, OperationType.WRITE, `applications/${appRef.id}`);
+    handleFirestoreError(err, OperationType.WRITE, `applications/${deterministicAppId}`);
+  }
+}
+
+export async function submitWorkerOffer(params: {
+  job: JobPosting;
+  worker: PublicWorkerProfile;
+  workerUid: string;
+  offeredPrice: number;
+  estimatedArrivalTime: string;
+  offerMessage: string;
+  existingApplicationId?: string;
+}): Promise<string> {
+  const { job, worker, workerUid, offeredPrice, estimatedArrivalTime, offerMessage, existingApplicationId } = params;
+  const price = Math.max(0, Number(offeredPrice) || job.offeredWage || worker.expectedWage);
+  const eta = estimatedArrivalTime.trim().slice(0, 80) || 'Within 1 hour';
+  const message = offerMessage.trim().slice(0, 600);
+
+  if (existingApplicationId) {
+    const appRef = doc(db, 'applications', existingApplicationId);
+    try {
+      await updateDoc(appRef, {
+        status: 'applied',
+        dealStatus: 'OFFER_RECEIVED',
+        proposedWage: price,
+        offerAmount: price,
+        estimatedArrivalTime: eta,
+        ...(message ? { offerMessage: message, note: message } : {}),
+        offerSubmittedAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+      await updateDoc(doc(db, 'jobs', job.id), {
+        dealStatus: 'OFFER_RECEIVED',
+        updatedAt: serverTimestamp(),
+      }).catch(() => undefined);
+
+      await dispatchTwoWayDealNotification({
+        recipientUid: job.employerUid,
+        recipientRole: 'employer',
+        senderUid: workerUid,
+        senderName: worker.displayName,
+        category: 'applicationUpdates',
+        eventType: 'worker_offer_sent',
+        dealStatus: 'OFFER_RECEIVED',
+        title: `New Offer from ${worker.displayName}: ${job.title}`,
+        body: `${worker.displayName} (${worker.primarySkill}) sent an offer of ₹${price} · ETA: ${eta}${message ? ` — "${message.slice(0, 100)}"` : ''}`,
+        metadataLabel: `₹${price} · ETA: ${eta}`,
+        targetRoute: 'employer-dashboard',
+        targetJobId: job.id,
+        targetApplicationId: existingApplicationId,
+        dedupeKey: sanitizeSafeId(`offer_${existingApplicationId}_${Date.now()}`),
+        pushPayload: {
+          workerName: worker.displayName,
+          jobTitle: job.title,
+          proposedWage: price,
+          eta,
+          messageSnippet: message,
+        },
+      });
+      return existingApplicationId;
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `applications/${existingApplicationId}`);
+    }
+  }
+
+  return applyToJob({
+    jobId: job.id,
+    jobTitle: job.title,
+    employerUid: job.employerUid,
+    workerUid,
+    workerRegistrationId: worker.registrationId,
+    workerName: worker.displayName,
+    workerPrimarySkill: worker.primarySkill,
+    ...(worker.photoDocId ? { workerPhotoDocId: worker.photoDocId } : {}),
+    proposedWage: price,
+    offerAmount: price,
+    estimatedArrivalTime: eta,
+    offerMessage: message,
+    note: message || `Offer ₹${price} · Arrival: ${eta}`,
+    jobMeta: job,
+  });
+}
+
+export async function respondToHiringInvite(params: {
+  app: JobApplication;
+  decision: 'accepted' | 'declined';
+  workerName: string;
+  jobLocationLabel?: string;
+}): Promise<void> {
+  const { app, decision, workerName, jobLocationLabel } = params;
+  const nextDealStatus: DealStatus = decision === 'accepted' ? 'OFFER_ACCEPTED' : 'REJECTED';
+  const path = `applications/${app.id}`;
+
+  try {
+    await updateDoc(doc(db, 'applications', app.id), {
+      status: decision,
+      dealStatus: nextDealStatus,
+      liveTrackingAuthorized: decision === 'accepted',
+      updatedAt: serverTimestamp(),
+    });
+
+    if (decision === 'accepted') {
+      await updateDoc(doc(db, 'jobs', app.jobId), {
+        status: 'in_progress',
+        dealStatus: 'OFFER_ACCEPTED',
+        acceptedApplicationId: app.id,
+        acceptedWorkerUid: app.workerUid,
+        updatedAt: serverTimestamp(),
+      }).catch(() => undefined);
+    }
+
+    await dispatchTwoWayDealNotification({
+      recipientUid: app.employerUid,
+      recipientRole: 'employer',
+      senderUid: app.workerUid,
+      senderName: workerName || app.workerName,
+      category: 'bookingNotifications',
+      eventType: decision === 'accepted' ? 'job_request_accepted' : 'job_request_rejected',
+      dealStatus: nextDealStatus,
+      title:
+        decision === 'accepted'
+          ? `Request Accepted: ${app.jobTitle}`
+          : `Request Declined: ${app.jobTitle}`,
+      body:
+        decision === 'accepted'
+          ? `${workerName || app.workerName} accepted your hiring request at ₹${app.proposedWage}${jobLocationLabel ? ` (${jobLocationLabel})` : ''}. Confirm deal or share live location on Customer Dashboard.`
+          : `${workerName || app.workerName} declined your hiring request for ${app.jobTitle}.`,
+      metadataLabel: `₹${app.proposedWage} · ${nextDealStatus}`,
+      targetRoute: 'employer-dashboard',
+      targetJobId: app.jobId,
+      targetApplicationId: app.id,
+      dedupeKey: sanitizeSafeId(`invite_resp_${app.id}_${decision}_${Date.now()}`),
+      pushPayload: {
+        workerName: workerName || app.workerName,
+        jobTitle: app.jobTitle,
+        proposedWage: app.proposedWage,
+        locationLabel: jobLocationLabel || app.jobLocationLabel,
+      },
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
+export async function respondToWorkerOffer(params: {
+  app: JobApplication;
+  decision: 'accepted' | 'declined';
+  customerName: string;
+  jobLocationLabel?: string;
+  photoGrantContext?: {
+    customerUid: string;
+    workerUid: string;
+    customerPhotoDocId?: string;
+  };
+}): Promise<void> {
+  const { app, decision, customerName, jobLocationLabel, photoGrantContext } = params;
+  const agreedPrice = app.offerAmount ?? app.proposedWage;
+  const nextDealStatus: DealStatus = decision === 'accepted' ? 'OFFER_ACCEPTED' : 'REJECTED';
+  const loc = jobLocationLabel || app.jobLocationLabel || app.jobDistrict || '';
+  const path = `applications/${app.id}`;
+
+  try {
+    await updateDoc(doc(db, 'applications', app.id), {
+      status: decision,
+      dealStatus: nextDealStatus,
+      ...(decision === 'accepted' ? { agreedPrice } : {}),
+      updatedAt: serverTimestamp(),
+    });
+
+    if (decision === 'accepted') {
+      await updateDoc(doc(db, 'jobs', app.jobId), {
+        status: 'in_progress',
+        dealStatus: 'OFFER_ACCEPTED',
+        acceptedApplicationId: app.id,
+        acceptedWorkerUid: app.workerUid,
+        updatedAt: serverTimestamp(),
+      }).catch(() => undefined);
+
+      if (photoGrantContext?.customerPhotoDocId) {
+        await grantAcceptedCustomerPhoto({
+          customerUid: photoGrantContext.customerUid,
+          workerUid: photoGrantContext.workerUid,
+          sourceType: 'job_application',
+          sourceId: app.id,
+          customerPhotoDocId: photoGrantContext.customerPhotoDocId,
+        }).catch(() => undefined);
+      }
+    }
+
+    await dispatchTwoWayDealNotification({
+      recipientUid: app.workerUid,
+      recipientRole: 'worker',
+      senderUid: app.employerUid,
+      senderName: customerName,
+      category: 'applicationUpdates',
+      eventType: decision === 'accepted' ? 'offer_accepted' : 'offer_rejected',
+      dealStatus: nextDealStatus,
+      title:
+        decision === 'accepted'
+          ? `Congratulations! Offer Accepted: ${app.jobTitle}`
+          : `Offer Not Accepted: ${app.jobTitle}`,
+      body:
+        decision === 'accepted'
+          ? `Congratulations! The customer (${customerName}) has accepted your offer for "${app.jobTitle}" at ₹${agreedPrice}${loc ? ` · Location: ${loc}` : ''}. Open Worker Dashboard to confirm & share live location.`
+          : `${customerName} declined your offer for "${app.jobTitle}".`,
+      metadataLabel:
+        decision === 'accepted'
+          ? `Agreed ₹${agreedPrice}${loc ? ` · ${loc}` : ''}`
+          : app.jobTitle,
+      targetRoute: 'worker-dashboard',
+      targetJobId: app.jobId,
+      targetApplicationId: app.id,
+      dedupeKey: sanitizeSafeId(`offer_resp_${app.id}_${decision}_${Date.now()}`),
+      pushPayload: {
+        workerName: customerName,
+        jobTitle: app.jobTitle,
+        proposedWage: agreedPrice,
+        locationLabel: loc,
+      },
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
+export async function confirmDealByParticipant(params: {
+  app: JobApplication;
+  actorUid: string;
+  actorRole: 'customer' | 'worker';
+  actorName: string;
+}): Promise<void> {
+  const { app, actorUid, actorRole, actorName } = params;
+  const agreedPrice = app.agreedPrice ?? app.offerAmount ?? app.proposedWage;
+  const path = `applications/${app.id}`;
+
+  try {
+    await updateDoc(doc(db, 'applications', app.id), {
+      dealStatus: 'DEAL_CONFIRMED',
+      dealConfirmedAt: serverTimestamp(),
+      ...(actorRole === 'worker' ? { liveTrackingAuthorized: true } : { agreedPrice }),
+      updatedAt: serverTimestamp(),
+    });
+
+    await updateDoc(doc(db, 'jobs', app.jobId), {
+      dealStatus: 'DEAL_CONFIRMED',
+      status: 'in_progress',
+      updatedAt: serverTimestamp(),
+    }).catch(() => undefined);
+
+    const counterpartyUid = actorRole === 'customer' ? app.workerUid : app.employerUid;
+    const counterpartyRole = actorRole === 'customer' ? 'worker' : 'employer';
+    const counterpartyRoute = actorRole === 'customer' ? 'worker-dashboard' : 'employer-dashboard';
+
+    await dispatchTwoWayDealNotification({
+      recipientUid: counterpartyUid,
+      recipientRole: counterpartyRole,
+      senderUid: actorUid,
+      senderName: actorName,
+      category: 'bookingNotifications',
+      eventType: 'deal_confirmed',
+      dealStatus: 'DEAL_CONFIRMED',
+      title: `Deal Confirmed: ${app.jobTitle}`,
+      body: `${actorName} confirmed the deal for "${app.jobTitle}" (Agreed: ₹${agreedPrice}). Two-way live location sharing is now active.`,
+      metadataLabel: `DEAL_CONFIRMED · ₹${agreedPrice}`,
+      targetRoute: counterpartyRoute,
+      targetJobId: app.jobId,
+      targetApplicationId: app.id,
+      dedupeKey: sanitizeSafeId(`deal_conf_${app.id}_${Date.now()}`),
+      pushPayload: {
+        workerName: actorName,
+        jobTitle: app.jobTitle,
+        proposedWage: agreedPrice,
+        locationLabel: app.jobLocationLabel || app.jobDistrict,
+      },
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
+export async function startWorkByWorker(params: {
+  app: JobApplication;
+  workerName: string;
+}): Promise<void> {
+  const { app, workerName } = params;
+  const path = `applications/${app.id}`;
+  try {
+    await updateDoc(doc(db, 'applications', app.id), {
+      dealStatus: 'WORK_IN_PROGRESS',
+      workStartedAt: serverTimestamp(),
+      liveTrackingAuthorized: true,
+      updatedAt: serverTimestamp(),
+    });
+    await updateDoc(doc(db, 'jobs', app.jobId), {
+      dealStatus: 'WORK_IN_PROGRESS',
+      status: 'in_progress',
+      updatedAt: serverTimestamp(),
+    }).catch(() => undefined);
+
+    await dispatchTwoWayDealNotification({
+      recipientUid: app.employerUid,
+      recipientRole: 'employer',
+      senderUid: app.workerUid,
+      senderName: workerName,
+      category: 'bookingNotifications',
+      eventType: 'work_started',
+      dealStatus: 'WORK_IN_PROGRESS',
+      title: `Work Started: ${app.jobTitle}`,
+      body: `${workerName} has arrived / started work on "${app.jobTitle}".`,
+      metadataLabel: `WORK_IN_PROGRESS`,
+      targetRoute: 'employer-dashboard',
+      targetJobId: app.jobId,
+      targetApplicationId: app.id,
+      dedupeKey: sanitizeSafeId(`work_start_${app.id}_${Date.now()}`),
+      pushPayload: {
+        workerName,
+        jobTitle: app.jobTitle,
+      },
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
+export async function stopDealLocationSharing(applicationId: string): Promise<void> {
+  const shareIds = [`${applicationId}_customer`, `${applicationId}_worker`];
+  for (const sid of shareIds) {
+    const shareRef = doc(db, 'dealLocationShares', sid);
+    try {
+      const snap = await getDoc(shareRef);
+      if (snap.exists() && snap.data()?.sharingActive === true) {
+        await updateDoc(shareRef, {
+          sharingActive: false,
+          updatedAt: serverTimestamp(),
+        });
+      }
+    } catch {
+      // Ignore if share record doesn't exist or already stopped
+    }
+  }
+}
+
+export async function completeDeal(params: {
+  app: JobApplication;
+  actorUid: string;
+  actorRole: 'customer' | 'worker';
+  actorName: string;
+  rating?: number;
+  feedback?: string;
+  photoGrantContext?: {
+    customerUid: string;
+    workerUid: string;
+    customerPhotoDocId?: string;
+  };
+}): Promise<void> {
+  const { app, actorUid, actorRole, actorName, rating, feedback, photoGrantContext } = params;
+  const path = `applications/${app.id}`;
+
+  try {
+    await updateDoc(doc(db, 'applications', app.id), {
+      status: 'work_completed',
+      dealStatus: 'WORK_COMPLETED',
+      completedAt: serverTimestamp(),
+      ...(typeof rating === 'number' && actorRole === 'customer' ? { workerRating: rating } : {}),
+      ...(feedback?.trim() && actorRole === 'customer' ? { employerFeedback: feedback.trim().slice(0, 500) } : {}),
+      updatedAt: serverTimestamp(),
+    });
+
+    await updateDoc(doc(db, 'jobs', app.jobId), {
+      status: 'completed',
+      dealStatus: 'WORK_COMPLETED',
+      updatedAt: serverTimestamp(),
+    }).catch(() => undefined);
+
+    // Immediately turn off live location sharing on deal completion
+    await stopDealLocationSharing(app.id);
+
+    if (photoGrantContext?.customerPhotoDocId) {
+      await grantAcceptedCustomerPhoto({
+        customerUid: photoGrantContext.customerUid,
+        workerUid: photoGrantContext.workerUid,
+        sourceType: 'job_application',
+        sourceId: app.id,
+        customerPhotoDocId: photoGrantContext.customerPhotoDocId,
+      }).catch(() => undefined);
+    }
+
+    const counterpartyUid = actorRole === 'customer' ? app.workerUid : app.employerUid;
+    const counterpartyRole = actorRole === 'customer' ? 'worker' : 'employer';
+    const counterpartyRoute = actorRole === 'customer' ? 'worker-dashboard' : 'employer-dashboard';
+
+    await dispatchTwoWayDealNotification({
+      recipientUid: counterpartyUid,
+      recipientRole: counterpartyRole,
+      senderUid: actorUid,
+      senderName: actorName,
+      category: 'bookingNotifications',
+      eventType: 'work_completed',
+      dealStatus: 'WORK_COMPLETED',
+      title: `Work Completed: ${app.jobTitle}`,
+      body: `${actorName} marked "${app.jobTitle}" as completed. Live location sharing has been automatically stopped.`,
+      metadataLabel: 'WORK_COMPLETED · Live location stopped',
+      targetRoute: counterpartyRoute,
+      targetJobId: app.jobId,
+      targetApplicationId: app.id,
+      dedupeKey: sanitizeSafeId(`work_done_${app.id}_${Date.now()}`),
+      pushPayload: {
+        workerName: actorName,
+        jobTitle: app.jobTitle,
+      },
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
+export async function cancelDeal(params: {
+  app: JobApplication;
+  actorUid: string;
+  actorRole: 'customer' | 'worker';
+  actorName: string;
+  reason?: string;
+}): Promise<void> {
+  const { app, actorUid, actorRole, actorName, reason } = params;
+  const path = `applications/${app.id}`;
+
+  try {
+    await updateDoc(doc(db, 'applications', app.id), {
+      status: 'declined',
+      dealStatus: 'CANCELLED',
+      cancelledAt: serverTimestamp(),
+      cancelledByUid: actorUid,
+      ...(actorRole === 'worker' ? { liveTrackingAuthorized: false } : {}),
+      ...(reason?.trim() && actorRole === 'worker' ? { note: reason.trim().slice(0, 600) } : {}),
+      ...(reason?.trim() && actorRole === 'customer' ? { employerFeedback: reason.trim().slice(0, 500) } : {}),
+      updatedAt: serverTimestamp(),
+    });
+
+    await updateDoc(doc(db, 'jobs', app.jobId), {
+      status: 'cancelled',
+      dealStatus: 'CANCELLED',
+      updatedAt: serverTimestamp(),
+    }).catch(() => undefined);
+
+    // Immediately stop live location sharing on cancellation
+    await stopDealLocationSharing(app.id);
+
+    const counterpartyUid = actorRole === 'customer' ? app.workerUid : app.employerUid;
+    const counterpartyRole = actorRole === 'customer' ? 'worker' : 'employer';
+    const counterpartyRoute = actorRole === 'customer' ? 'worker-dashboard' : 'employer-dashboard';
+
+    await dispatchTwoWayDealNotification({
+      recipientUid: counterpartyUid,
+      recipientRole: counterpartyRole,
+      senderUid: actorUid,
+      senderName: actorName,
+      category: 'bookingNotifications',
+      eventType: 'deal_cancelled',
+      dealStatus: 'CANCELLED',
+      title: `Deal Cancelled: ${app.jobTitle}`,
+      body: `${actorName} cancelled the deal for "${app.jobTitle}"${reason ? ` (${reason.slice(0, 100)})` : ''}. Live location sharing has been stopped.`,
+      metadataLabel: 'CANCELLED · Live location stopped',
+      targetRoute: counterpartyRoute,
+      targetJobId: app.jobId,
+      targetApplicationId: app.id,
+      dedupeKey: sanitizeSafeId(`deal_cancel_${app.id}_${Date.now()}`),
+      pushPayload: {
+        workerName: actorName,
+        jobTitle: app.jobTitle,
+      },
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
   }
 }
 
 export async function updateApplicationByWorker(
   applicationId: string,
-  updates: { status?: 'applied' | 'accepted' | 'declined'; liveTrackingAuthorized?: boolean; note?: string }
+  updates: { status?: 'applied' | 'accepted' | 'declined'; dealStatus?: DealStatus; liveTrackingAuthorized?: boolean; note?: string }
 ): Promise<void> {
   const path = `applications/${applicationId}`;
   try {
@@ -596,6 +1680,8 @@ export async function updateApplicationByEmployer(
   applicationId: string,
   updates: {
     status: 'invited' | 'accepted' | 'declined' | 'work_completed';
+    dealStatus?: DealStatus;
+    agreedPrice?: number;
     workerRating?: number;
     employerFeedback?: string;
   },
@@ -1126,6 +2212,10 @@ export async function saveNotificationPreferences(
       | 'bookingNotifications'
       | 'announcements'
       | 'preferredLanguage'
+      | 'voiceAlertsEnabled'
+      | 'soundEnabled'
+      | 'preferredCategories'
+      | 'preferredRadiusKm'
     >
   >
 ): Promise<void> {
@@ -1148,9 +2238,33 @@ export async function saveNotificationPreferences(
         bookingNotifications: updates.bookingNotifications ?? true,
         announcements: updates.announcements ?? true,
         preferredLanguage: updates.preferredLanguage ?? 'en',
+        voiceAlertsEnabled: updates.voiceAlertsEnabled ?? true,
+        soundEnabled: updates.soundEnabled ?? true,
+        preferredRadiusKm: updates.preferredRadiusKm ?? 10,
+        ...(Array.isArray(updates.preferredCategories)
+          ? { preferredCategories: updates.preferredCategories.slice(0, 35) }
+          : {}),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
+    }
+
+    // Sync non-PII worker broadcast preferences onto publicWorkers/{uid} if a worker profile exists
+    const workerSync: Record<string, unknown> = {};
+    if (updates.preferredLanguage) workerSync.preferredLanguage = updates.preferredLanguage;
+    if (updates.preferredRadiusKm) workerSync.preferredRadiusKm = updates.preferredRadiusKm;
+    if (typeof updates.voiceAlertsEnabled === 'boolean') {
+      workerSync.voiceAlertsEnabled = updates.voiceAlertsEnabled;
+    }
+    if (Object.keys(workerSync).length > 0) {
+      const workerRef = doc(db, 'publicWorkers', uid);
+      const workerSnap = await getDoc(workerRef);
+      if (workerSnap.exists()) {
+        await updateDoc(workerRef, {
+          ...workerSync,
+          updatedAt: serverTimestamp(),
+        }).catch(() => undefined);
+      }
     }
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);
@@ -1215,6 +2329,180 @@ export async function markNotificationRead(notificationId: string): Promise<void
     });
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
+export async function markAllNotificationsRead(notifications: AppNotificationRecord[]): Promise<void> {
+  const unread = notifications.filter((n) => !n.read);
+  if (unread.length === 0) return;
+  for (let i = 0; i < unread.length; i += 400) {
+    const chunk = unread.slice(i, i + 400);
+    const batch = writeBatch(db);
+    chunk.forEach((n) => {
+      batch.update(doc(db, 'notifications', n.id), {
+        read: true,
+        updatedAt: serverTimestamp(),
+      });
+    });
+    await batch.commit().catch(() => undefined);
+  }
+}
+
+export function subscribeDealMessages(
+  applicationId: string,
+  onData: (items: DealMessage[]) => void
+): () => void {
+  const path = 'dealMessages';
+  const q = query(collection(db, path), where('applicationId', '==', applicationId));
+  return onSnapshot(
+    q,
+    (snap) => {
+      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as DealMessage));
+      list.sort((a, b) => {
+        const ta = (a.createdAt as { seconds?: number })?.seconds ?? 0;
+        const tb = (b.createdAt as { seconds?: number })?.seconds ?? 0;
+        return ta - tb;
+      });
+      onData(list);
+    },
+    (err) => handleFirestoreError(err, OperationType.LIST, path)
+  );
+}
+
+export async function sendDealMessage(params: {
+  app: JobApplication;
+  senderUid: string;
+  senderRole: 'customer' | 'worker';
+  senderName: string;
+  text: string;
+}): Promise<void> {
+  const cleanText = params.text.trim().slice(0, 1000);
+  if (!cleanText) return;
+  const path = 'dealMessages';
+  try {
+    const safeSenderName =
+      params.senderName.trim().length >= 2 ? params.senderName.trim().slice(0, 120) : 'Participant';
+    await addDoc(collection(db, path), {
+      applicationId: params.app.id,
+      jobId: params.app.jobId,
+      employerUid: params.app.employerUid,
+      workerUid: params.app.workerUid,
+      senderUid: params.senderUid,
+      senderRole: params.senderRole,
+      senderName: safeSenderName,
+      text: cleanText,
+      createdAt: serverTimestamp(),
+    });
+
+    const recipientUid = params.senderRole === 'customer' ? params.app.workerUid : params.app.employerUid;
+    const recipientRole = params.senderRole === 'customer' ? 'worker' : 'employer';
+    const targetRoute = params.senderRole === 'customer' ? 'worker-dashboard' : 'employer-dashboard';
+    const eventType: DealNotificationEventType =
+      params.senderRole === 'customer' ? 'customer_message' : 'worker_message';
+
+    await dispatchTwoWayDealNotification({
+      recipientUid,
+      recipientRole,
+      senderUid: params.senderUid,
+      senderName: params.senderName,
+      category: 'applicationUpdates',
+      eventType,
+      dealStatus: getEffectiveDealStatus(params.app),
+      title: `Message from ${params.senderName}: ${params.app.jobTitle}`,
+      body: `${params.senderName}: "${cleanText.slice(0, 160)}"`,
+      metadataLabel: params.app.jobTitle,
+      targetRoute,
+      targetJobId: params.app.jobId,
+      targetApplicationId: params.app.id,
+      dedupeKey: sanitizeSafeId(`msg_${params.app.id}_${params.senderUid}_${Date.now()}`),
+      pushPayload: {
+        workerName: params.senderName,
+        jobTitle: params.app.jobTitle,
+        messageSnippet: cleanText.slice(0, 160),
+      },
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.CREATE, path);
+  }
+}
+
+export function subscribeDealLocationShares(
+  applicationId: string,
+  onData: (shares: DealLocationShare[]) => void
+): () => void {
+  const path = 'dealLocationShares';
+  const q = query(collection(db, path), where('applicationId', '==', applicationId));
+  return onSnapshot(
+    q,
+    (snap) => {
+      onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DealLocationShare)));
+    },
+    (err) => handleFirestoreError(err, OperationType.LIST, path)
+  );
+}
+
+export async function updateDealLiveLocation(params: {
+  app: JobApplication;
+  ownerUid: string;
+  role: 'customer' | 'worker';
+  participantName: string;
+  lat: number;
+  lng: number;
+  accuracyMeters: number;
+  sharingActive: boolean;
+  source?: DealLocationShare['source'];
+}): Promise<void> {
+  const shareId = sanitizeSafeId(`${params.app.id}_${params.role}`);
+  const shareRef = doc(db, 'dealLocationShares', shareId);
+  const path = `dealLocationShares/${shareId}`;
+
+  try {
+    const existing = await getDoc(shareRef);
+    const authorizedUids = [params.app.employerUid, params.app.workerUid];
+    const safeParticipantName =
+      params.participantName.trim().length >= 2
+        ? params.participantName.trim().slice(0, 120)
+        : params.role === 'customer'
+          ? 'Customer'
+          : 'Worker';
+    if (!existing.exists()) {
+      await setDoc(shareRef, {
+        applicationId: params.app.id,
+        jobId: params.app.jobId,
+        ownerUid: params.ownerUid,
+        authorizedUids,
+        role: params.role,
+        participantName: safeParticipantName,
+        lat: Number(params.lat),
+        lng: Number(params.lng),
+        accuracyMeters: Math.max(0, Math.min(200000, Number(params.accuracyMeters) || 50)),
+        sharingActive: params.sharingActive,
+        source: params.source || 'gps_once',
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await updateDoc(shareRef, {
+        participantName: safeParticipantName,
+        lat: Number(params.lat),
+        lng: Number(params.lng),
+        accuracyMeters: Math.max(0, Math.min(200000, Number(params.accuracyMeters) || 50)),
+        sharingActive: params.sharingActive,
+        source: params.source || 'gps_once',
+        updatedAt: serverTimestamp(),
+      });
+    }
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, path);
+  }
+}
+
+export async function fetchAllNotificationRecipientsForJob(jobId: string): Promise<string[]> {
+  try {
+    const snap = await getDocs(query(collection(db, 'notifications'), where('targetJobId', '==', jobId)));
+    return snap.docs.map((d) => String(d.data().recipientUid || '')).filter(Boolean);
+  } catch {
+    return [];
   }
 }
 

@@ -1,21 +1,33 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, BellRing, X } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { AlertTriangle, BellRing, Volume2, VolumeX, X } from 'lucide-react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
-import { LanguageProvider } from './i18n/LanguageContext';
+import { LanguageProvider, useLanguage } from './i18n/LanguageContext';
 import { subscribeForegroundPush } from './lib/pushNotifications';
 import {
+  markAllNotificationsRead,
+  markNotificationRead,
   subscribeAllApplicationsAdmin,
   subscribeAnnouncements,
   subscribeJobs,
+  subscribeNotificationPreferences,
   subscribePublicEmployers,
   subscribePublicWorkers,
+  subscribeUserNotifications,
   subscribeVehicleListings,
 } from './lib/firestoreService';
-import { isDemoModeEnvEnabled, subscribeDemoModeConfig } from './lib/demoService';
+import { buildSmartJobVoiceScript } from './lib/smartVoiceJobAlert';
+import {
+  playNotificationChime,
+  speakJobAlert,
+  stopVoiceAlert,
+  unlockAudioOnUserGesture,
+} from './lib/voiceAlertEngine';
 import type {
   AiHirePrefill,
-  DemoModeConfig,
+  AppNotificationRecord,
   JobPosting,
+  Language,
+  NotificationPreferences,
   PageRoute,
   PlatformAnnouncement,
   PublicEmployerProfile,
@@ -39,7 +51,6 @@ import {
   EmployerDashboardView,
   WorkerDashboardView,
 } from './components/DashboardsView';
-import { DemoTestingCenter } from './components/DemoTestingCenter';
 import {
   AboutUsView,
   ContactView,
@@ -77,12 +88,20 @@ function isValidRoute(value: string | undefined | null): value is PageRoute {
 
 const AppShell: React.FC = () => {
   const { user, isAdmin } = useAuth();
+  const { lang } = useLanguage();
   const [route, setRoute] = useState<PageRoute>('home');
   const [categoryFilter, setCategoryFilter] = useState('');
   const [highlightedJobId, setHighlightedJobId] = useState('');
   const [highlightedDemoJobId, setHighlightedDemoJobId] = useState('');
   const [gmpQuotaExceeded, setGmpQuotaExceeded] = useState(false);
-  const [demoConfig, setDemoConfig] = useState<DemoModeConfig | null>(null);
+
+  const [notifPrefs, setNotifPrefs] = useState<NotificationPreferences | null>(null);
+  const [voiceMuted, setVoiceMuted] = useState(false);
+  const [bootSpeakRequest, setBootSpeakRequest] = useState<{
+    jobId: string;
+    lang?: Language;
+    voiceScript?: string;
+  } | null>(null);
 
   const [foregroundPush, setForegroundPush] = useState<{
     title: string;
@@ -90,6 +109,13 @@ const AppShell: React.FC = () => {
     route?: PageRoute;
     jobId?: string;
     demoJobId?: string;
+    voiceScript?: string;
+    lang?: Language;
+    approxLocationLabel?: string;
+    distanceKm?: number;
+    playSound?: boolean;
+    speakVoice?: boolean;
+    speechBlockedHint?: boolean;
   } | null>(null);
 
   const [workers, setWorkers] = useState<PublicWorkerProfile[]>([]);
@@ -98,6 +124,9 @@ const AppShell: React.FC = () => {
   const [vehicles, setVehicles] = useState<VehicleListing[]>([]);
   const [announcements, setAnnouncements] = useState<PlatformAnnouncement[]>([]);
   const [adminAppsCount, setAdminAppsCount] = useState(0);
+  const [notifications, setNotifications] = useState<AppNotificationRecord[]>([]);
+  const seenNotifIdsRef = useRef<Set<string>>(new Set());
+  const initialNotifLoadRef = useRef(true);
 
   const [aiOpen, setAiOpen] = useState(false);
   const [aiLocationHint, setAiLocationHint] = useState('');
@@ -118,7 +147,56 @@ const AppShell: React.FC = () => {
     [navigate]
   );
 
-  // Parse deep links from URL query parameters on boot (?route=find-work&jobId=...)
+  const triggerSmartVoicePlayback = useCallback(
+    async (opts: {
+      voiceScript?: string;
+      lang?: Language;
+      playSound?: boolean;
+      speakVoice?: boolean;
+    }) => {
+      if (voiceMuted) return;
+      if (notifPrefs && notifPrefs.masterEnabled === false) return;
+
+      const allowSound = opts.playSound !== false && (!notifPrefs || notifPrefs.soundEnabled !== false);
+      const allowVoice =
+        opts.speakVoice !== false && (!notifPrefs || notifPrefs.voiceAlertsEnabled !== false);
+
+      if (allowVoice && opts.voiceScript) {
+        const res = await speakJobAlert({
+          text: opts.voiceScript,
+          lang: opts.lang || notifPrefs?.preferredLanguage || lang,
+          soundEnabled: allowSound,
+          voiceEnabled: true,
+        });
+        if (res.speechStatus === 'blocked_or_silent') {
+          setForegroundPush((prev) => (prev ? { ...prev, speechBlockedHint: true } : prev));
+        }
+      } else if (allowSound) {
+        await playNotificationChime();
+      }
+    },
+    [voiceMuted, notifPrefs, lang]
+  );
+
+  // Unlock Web Audio & Web Speech on first user gesture
+  useEffect(() => {
+    const onPointerDown = () => {
+      unlockAudioOnUserGesture();
+    };
+    window.addEventListener('pointerdown', onPointerDown, { once: true });
+    return () => window.removeEventListener('pointerdown', onPointerDown);
+  }, []);
+
+  // Subscribe to notification & voice preferences
+  useEffect(() => {
+    if (!user?.emailVerified) {
+      setNotifPrefs(null);
+      return;
+    }
+    return subscribeNotificationPreferences(user.uid, setNotifPrefs);
+  }, [user?.uid, user?.emailVerified]);
+
+  // Parse deep links from URL query parameters on boot (?route=worker-dashboard&jobId=...&speak=1&lang=mr)
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
@@ -126,23 +204,68 @@ const AppShell: React.FC = () => {
     const jId = params.get('jobId') || '';
     const djId = params.get('demoJobId') || '';
     const cat = params.get('category') || '';
+    const speak = params.get('speak') === '1';
+    const qLang = params.get('lang');
+    const parsedLang: Language | undefined =
+      qLang === 'mr' || qLang === 'hi' || qLang === 'en' ? qLang : undefined;
 
     if (jId) setHighlightedJobId(jId);
     if (djId) setHighlightedDemoJobId(djId);
+    if (speak && jId) {
+      setBootSpeakRequest({ jobId: jId, lang: parsedLang });
+    }
     if (isValidRoute(r)) {
       setRoute(r);
       if (cat) setCategoryFilter(cat);
     } else if (jId) {
-      setRoute('find-work');
+      setRoute('worker-dashboard');
     } else if (djId) {
       setRoute('worker-dashboard');
     }
 
-    if (r || jId || djId || cat) {
+    if (r || jId || djId || cat || speak || qLang) {
       const cleanUrl = window.location.pathname + window.location.hash;
       window.history.replaceState({}, document.title, cleanUrl);
     }
   }, []);
+
+  // Auto-play TTS once matching job loads when opened via OS notification "Open & Listen"
+  useEffect(() => {
+    if (!bootSpeakRequest) return;
+    const job = jobs.find((j) => j.id === bootSpeakRequest.jobId);
+    if (!job && !bootSpeakRequest.voiceScript) return;
+
+    const spokenLang = bootSpeakRequest.lang || notifPrefs?.preferredLanguage || lang;
+    const script =
+      bootSpeakRequest.voiceScript ||
+      buildSmartJobVoiceScript({
+        lang: spokenLang,
+        customerName: job?.employerName || 'Customer',
+        category: job?.category || 'Service',
+        jobTitle: job?.title,
+        jobDescription: job?.title || job?.description || 'New work request',
+        approxLocationLabel: job?.approxLocationLabel || job?.cityOrVillage || job?.district || 'Nearby area',
+        distanceKm: null,
+      });
+
+    setBootSpeakRequest(null);
+    setForegroundPush({
+      title: job?.title || 'Smart Voice Job Alert',
+      body: job?.approxLocationLabel || job?.district || 'Tap Replay Voice to hear full details.',
+      route: 'worker-dashboard',
+      jobId: job?.id || bootSpeakRequest.jobId,
+      voiceScript: script,
+      lang: spokenLang,
+      playSound: true,
+      speakVoice: true,
+    });
+    void triggerSmartVoicePlayback({
+      voiceScript: script,
+      lang: spokenLang,
+      playSound: true,
+      speakVoice: true,
+    });
+  }, [bootSpeakRequest, jobs, notifPrefs?.preferredLanguage, lang, triggerSmartVoicePlayback]);
 
   // Handle Service Worker notification click deep-link messages when app is already open
   useEffect(() => {
@@ -153,6 +276,9 @@ const AppShell: React.FC = () => {
         route?: string;
         jobId?: string;
         demoJobId?: string;
+        voiceScript?: string;
+        lang?: Language;
+        speak?: boolean;
       } | null;
       if (data?.type === 'ROJGAR_SETU_DEEP_LINK') {
         const nextRoute = isValidRoute(data.route)
@@ -160,9 +286,16 @@ const AppShell: React.FC = () => {
           : data.demoJobId
           ? 'worker-dashboard'
           : data.jobId
-          ? 'find-work'
+          ? 'worker-dashboard'
           : 'home';
         navigateToTarget(nextRoute, data.jobId, data.demoJobId);
+        if (data.speak && (data.voiceScript || data.jobId)) {
+          setBootSpeakRequest({
+            jobId: data.jobId || '',
+            lang: data.lang,
+            voiceScript: data.voiceScript,
+          });
+        }
       }
     };
     navigator.serviceWorker.addEventListener('message', onMessage);
@@ -181,14 +314,27 @@ const AppShell: React.FC = () => {
         : payload.demoJobId
         ? 'worker-dashboard'
         : payload.jobId
-        ? 'find-work'
+        ? 'worker-dashboard'
         : 'home';
+      const spokenLang = payload.lang || notifPrefs?.preferredLanguage || lang;
       setForegroundPush({
         title: payload.title,
         body: payload.body,
         route: targetRoute,
         jobId: payload.jobId,
         demoJobId: payload.demoJobId,
+        voiceScript: payload.voiceScript,
+        lang: spokenLang,
+        approxLocationLabel: payload.approxLocationLabel,
+        distanceKm: payload.distanceKm,
+        playSound: payload.playSound,
+        speakVoice: payload.speakVoice,
+      });
+      void triggerSmartVoicePlayback({
+        voiceScript: payload.voiceScript,
+        lang: spokenLang,
+        playSound: payload.playSound,
+        speakVoice: payload.speakVoice,
       });
     }).then((fn) => {
       if (active) unsub = fn;
@@ -198,7 +344,7 @@ const AppShell: React.FC = () => {
       active = false;
       unsub();
     };
-  }, [user?.uid, user?.emailVerified]);
+  }, [user?.uid, user?.emailVerified, notifPrefs?.preferredLanguage, lang, triggerSmartVoicePlayback]);
 
   useEffect(() => {
     const onQuota = () => setGmpQuotaExceeded(true);
@@ -212,19 +358,14 @@ const AppShell: React.FC = () => {
     const u3 = subscribeJobs(setJobs);
     const u4 = subscribeAnnouncements(setAnnouncements);
     const u5 = subscribeVehicleListings(setVehicles);
-    const u6 = subscribeDemoModeConfig(setDemoConfig);
     return () => {
       u1();
       u2();
       u3();
       u4();
       u5();
-      u6();
     };
   }, []);
-
-  const demoModeActive =
-    isDemoModeEnvEnabled() && (Boolean(demoConfig?.enabled) || isAdmin);
 
   useEffect(() => {
     if (!isAdmin) {
@@ -235,9 +376,82 @@ const AppShell: React.FC = () => {
     return () => u();
   }, [isAdmin]);
 
+  // Global real-time in-app notification subscription + instant live toast & voice alert
+  useEffect(() => {
+    seenNotifIdsRef.current = new Set();
+    initialNotifLoadRef.current = true;
+    if (!user?.emailVerified) {
+      setNotifications([]);
+      return;
+    }
+    const unsub = subscribeUserNotifications(user.uid, (list) => {
+      setNotifications(list);
+      if (initialNotifLoadRef.current) {
+        list.forEach((n) => seenNotifIdsRef.current.add(n.id));
+        initialNotifLoadRef.current = false;
+        return;
+      }
+      const newestUnread = list.find((n) => !n.read && !seenNotifIdsRef.current.has(n.id));
+      list.forEach((n) => seenNotifIdsRef.current.add(n.id));
+      if (newestUnread) {
+        const spokenLang = newestUnread.language || notifPrefs?.preferredLanguage || lang;
+        setForegroundPush({
+          title: newestUnread.title,
+          body: newestUnread.body,
+          route: isValidRoute(newestUnread.targetRoute) ? newestUnread.targetRoute : 'worker-dashboard',
+          jobId: newestUnread.targetJobId,
+          demoJobId: newestUnread.targetDemoJobId,
+          voiceScript: newestUnread.voiceScript,
+          lang: spokenLang,
+          approxLocationLabel: newestUnread.approxLocationLabel,
+          distanceKm: newestUnread.distanceKm,
+          playSound: newestUnread.playSound,
+          speakVoice: newestUnread.speakVoice,
+        });
+        if (
+          newestUnread.category === 'matchingJobs' ||
+          newestUnread.eventType === 'hiring_request_created' ||
+          Boolean(newestUnread.voiceScript)
+        ) {
+          void triggerSmartVoicePlayback({
+            voiceScript: newestUnread.voiceScript,
+            lang: spokenLang,
+            playSound: newestUnread.playSound,
+            speakVoice: newestUnread.speakVoice,
+          });
+        } else if (!voiceMuted && (!notifPrefs || notifPrefs.soundEnabled !== false)) {
+          void playNotificationChime();
+        }
+      }
+    });
+    return () => unsub();
+  }, [user?.uid, user?.emailVerified, notifPrefs, lang, voiceMuted, triggerSmartVoicePlayback]);
+
+  const unreadNotificationsCount = useMemo(
+    () => notifications.filter((n) => !n.read).length,
+    [notifications]
+  );
+
+  const handleOpenNotificationItem = useCallback(
+    (item: AppNotificationRecord) => {
+      if (!item.read) {
+        void markNotificationRead(item.id).catch(() => undefined);
+      }
+      const nextRoute: PageRoute = isValidRoute(item.targetRoute)
+        ? item.targetRoute
+        : item.targetDemoJobId
+        ? 'worker-dashboard'
+        : item.recipientRole === 'worker'
+        ? 'worker-dashboard'
+        : 'employer-dashboard';
+      navigateToTarget(nextRoute, item.targetJobId, item.targetDemoJobId);
+    },
+    [navigateToTarget]
+  );
+
   return (
     <div id="top" className="min-h-screen flex flex-col bg-[#F4F6F9] text-slate-900">
-      {/* Live Foreground Push Notification Toast */}
+      {/* Live Foreground Push & Smart Voice Alert Toast */}
       {foregroundPush && (
         <div
           role="status"
@@ -250,7 +464,10 @@ const AppShell: React.FC = () => {
             </div>
             <button
               type="button"
-              onClick={() => setForegroundPush(null)}
+              onClick={() => {
+                stopVoiceAlert();
+                setForegroundPush(null);
+              }}
               aria-label="Close notification"
               className="p-0.5 rounded hover:bg-slate-100 text-slate-500 cursor-pointer"
             >
@@ -260,12 +477,53 @@ const AppShell: React.FC = () => {
           <div>
             <div className="font-display text-sm font-bold text-[#0B3B75]">{foregroundPush.title}</div>
             <p className="text-xs text-slate-600 mt-0.5">{foregroundPush.body}</p>
+            {foregroundPush.speechBlockedHint && (
+              <p className="text-[11px] font-semibold text-[#C25E00] mt-1">
+                Tap Replay Voice below to hear the spoken job announcement.
+              </p>
+            )}
           </div>
-          <div className="flex justify-end gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            {foregroundPush.voiceScript && (
+              <button
+                type="button"
+                onClick={() => {
+                  unlockAudioOnUserGesture();
+                  setForegroundPush((prev) => (prev ? { ...prev, speechBlockedHint: false } : prev));
+                  void speakJobAlert({
+                    text: foregroundPush.voiceScript!,
+                    lang: foregroundPush.lang || notifPrefs?.preferredLanguage || lang,
+                    soundEnabled: false,
+                    voiceEnabled: true,
+                  });
+                }}
+                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded border border-[#0B3B75] text-xs font-bold text-[#0B3B75] hover:bg-slate-50 cursor-pointer"
+              >
+                <Volume2 className="w-3.5 h-3.5 text-[#E06D1B]" />
+                <span>Replay Voice</span>
+              </button>
+            )}
             <button
               type="button"
-              onClick={() => setForegroundPush(null)}
-              className="px-3 py-1.5 rounded border border-slate-300 text-xs font-semibold text-slate-700 cursor-pointer"
+              onClick={() => {
+                setVoiceMuted((prev) => {
+                  const next = !prev;
+                  if (next) stopVoiceAlert();
+                  return next;
+                });
+              }}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+            >
+              {voiceMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+              <span>{voiceMuted ? 'Unmute' : 'Mute'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                stopVoiceAlert();
+                setForegroundPush(null);
+              }}
+              className="px-2.5 py-1.5 rounded border border-slate-300 text-xs font-semibold text-slate-700 cursor-pointer"
             >
               Dismiss
             </button>
@@ -273,16 +531,17 @@ const AppShell: React.FC = () => {
               type="button"
               onClick={() => {
                 const target = foregroundPush;
+                stopVoiceAlert();
                 setForegroundPush(null);
                 navigateToTarget(
-                  target.route || 'home',
+                  target.route || 'worker-dashboard',
                   target.jobId,
                   target.demoJobId
                 );
               }}
-              className="px-3.5 py-1.5 rounded bg-[#0B3B75] text-white text-xs font-bold hover:bg-slate-800 cursor-pointer"
+              className="px-3 py-1.5 rounded bg-[#0B3B75] text-white text-xs font-bold hover:bg-slate-800 cursor-pointer"
             >
-              Open
+              {foregroundPush.jobId ? 'Open & Send Offer' : 'Open'}
             </button>
           </div>
         </div>
@@ -323,7 +582,10 @@ const AppShell: React.FC = () => {
       <Header
         currentRoute={route}
         onNavigate={(r) => navigate(r)}
-        demoModeActive={demoModeActive}
+        notifications={notifications}
+        unreadCount={unreadNotificationsCount}
+        onOpenNotification={handleOpenNotificationItem}
+        onMarkAllRead={() => void markAllNotificationsRead(notifications)}
         onOpenAiAssistant={() => {
           setAiLocationHint('');
           setAiOpen(true);
@@ -331,7 +593,7 @@ const AppShell: React.FC = () => {
       />
 
       <main id="main-content" className="flex-1">
-        {route === 'home' && (
+        {(route === 'home' || route === 'demo-testing') && (
           <HomeView
             onNavigate={navigate}
             onOpenAiAssistant={() => {
@@ -343,7 +605,6 @@ const AppShell: React.FC = () => {
             jobs={jobs}
             announcements={announcements}
             totalApplicationsCount={adminAppsCount}
-            demoModeActive={demoModeActive}
           />
         )}
         {route === 'hire' && (
@@ -394,12 +655,16 @@ const AppShell: React.FC = () => {
         {route === 'register-vehicle' && (
           <VehicleRegistrationForm onNavigate={(r) => navigate(r)} />
         )}
-        {route === 'post-job' && <PostJobView onNavigate={(r) => navigate(r)} />}
+        {route === 'post-job' && <PostJobView workers={workers} onNavigate={(r) => navigate(r)} />}
         {route === 'worker-dashboard' && (
           <WorkerDashboardView
             jobs={jobs}
+            notifications={notifications}
+            unreadNotificationsCount={unreadNotificationsCount}
             onNavigate={navigate}
             onNavigateToTarget={navigateToTarget}
+            highlightedJobId={highlightedJobId}
+            onClearHighlightedJob={() => setHighlightedJobId('')}
             highlightedDemoJobId={highlightedDemoJobId}
             onClearHighlightedDemoJob={() => setHighlightedDemoJobId('')}
           />
@@ -407,6 +672,9 @@ const AppShell: React.FC = () => {
         {route === 'employer-dashboard' && (
           <EmployerDashboardView
             jobs={jobs}
+            workers={workers}
+            notifications={notifications}
+            unreadNotificationsCount={unreadNotificationsCount}
             onNavigate={navigate}
             onNavigateToTarget={navigateToTarget}
           />
@@ -419,9 +687,6 @@ const AppShell: React.FC = () => {
             announcements={announcements}
             onNavigate={(r) => navigate(r)}
           />
-        )}
-        {route === 'demo-testing' && (
-          <DemoTestingCenter onNavigate={(r) => navigate(r)} />
         )}
         {route === 'about' && <AboutUsView />}
         {route === 'partnerships' && <PartnershipsView />}

@@ -766,20 +766,6 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
               'थेट SMS OTP साठी सर्व्हरवर सक्रिय SMS गेटवे / DLT (TWOFACTOR_API_KEY + TWOFACTOR_TEMPLATE_NAME, MSG91, Fast2SMS किंवा Firebase Phone Auth) आवश्यक आहे. सार्वजनिक नोंदणीमध्ये OTP बायपास आणि व्हॉइस कॉल OTP बंद आहे.'
             )}
           </p>
-          {onOpenDemoMode && isDemoModeEnvEnabled() && (
-            <button
-              type="button"
-              onClick={onOpenDemoMode}
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded bg-[#0B3B75] text-white font-semibold text-[11px] hover:bg-slate-800 cursor-pointer"
-            >
-              {tr(
-                lang,
-                'Open Authorized Demo Test Mode →',
-                'अधिकृत डेमो टेस्ट मोड खोलें →',
-                'अधिकृत डेमो टेस्ट मोड उघडा →'
-              )}
-            </button>
-          )}
         </div>
       )}
     </div>

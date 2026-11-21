@@ -10,7 +10,6 @@ import {
   Crosshair,
   Download,
   FileText,
-  FlaskConical,
   History,
   LocateFixed,
   Lock,
@@ -18,16 +17,19 @@ import {
   Megaphone,
   PlusCircle,
   Printer,
+  Radar,
   Shield,
   Star,
   Users,
+  Volume2,
+  VolumeX,
   Zap,
 } from 'lucide-react';
 import { RojgarSetuLogo } from './RojgarSetuLogo';
 import { SecureAvatar } from './SecureAvatar';
 import { UserNotificationCenter } from './UserNotificationCenter';
 import { AdminNotificationDemoPanel } from './AdminNotificationDemoPanel';
-import { AdminDemoOversightPanel } from './AdminDemoOversightPanel';
+import { DealCoordinationPanel, getDealStatusBadgeStyle } from './DealCoordinationPanel';
 import { doc, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { getVehicleTypeLabel } from '../data/vehicleTypes';
@@ -48,7 +50,19 @@ import {
   adminUpdateJobStatus,
   adminUpdateVerification,
   callNotificationApi,
+  cancelDeal,
+  completeDeal,
+  confirmDealByParticipant,
+  doesWorkerMatchJob,
+  expandJobSearchRadius,
+  getEffectiveDealStatus,
+  markAllNotificationsRead,
+  markNotificationRead,
+  respondToHiringInvite,
+  respondToWorkerOffer,
   saveCustomerDefaultLocation,
+  startWorkByWorker,
+  submitWorkerOffer,
   subscribeAdminAuditLogs,
   subscribeAdminEnquiries,
   subscribeAdminGrievances,
@@ -58,12 +72,19 @@ import {
   subscribeOwnerVehicleBookings,
   subscribeOwnerVehicles,
   subscribeWorkerApplications,
-  updateApplicationByEmployer,
-  updateApplicationByWorker,
   updateVehicleAvailability,
   updateVehicleBookingStatus,
 } from '../lib/firestoreService';
+import {
+  buildSmartJobVoiceScript,
+  calculateValidDistanceKm,
+  getNextRadiusStage,
+  getPublicJobLocationText,
+  normalizeRadiusKm,
+} from '../lib/smartVoiceJobAlert';
+import { speakJobAlert, stopVoiceAlert, unlockAudioOnUserGesture } from '../lib/voiceAlertEngine';
 import type {
+  AppNotificationRecord,
   AuditLog,
   GrievanceReport,
   JobApplication,
@@ -74,6 +95,7 @@ import type {
   PlatformAnnouncement,
   PublicEmployerProfile,
   PublicWorkerProfile,
+  ServiceRadiusKm,
   VehicleBooking,
   VehicleListing,
   VehicleType,
@@ -118,16 +140,24 @@ function formatFirestoreTimestamp(ts: unknown): string {
 
 interface WorkerDashboardProps {
   jobs: JobPosting[];
+  notifications?: AppNotificationRecord[];
+  unreadNotificationsCount?: number;
   onNavigate: (route: PageRoute, categoryFilter?: string) => void;
   onNavigateToTarget?: (route: PageRoute, jobId?: string, demoJobId?: string) => void;
+  highlightedJobId?: string;
+  onClearHighlightedJob?: () => void;
   highlightedDemoJobId?: string;
   onClearHighlightedDemoJob?: () => void;
 }
 
 export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
   jobs,
+  notifications = [],
+  unreadNotificationsCount = 0,
   onNavigate,
   onNavigateToTarget,
+  highlightedJobId,
+  onClearHighlightedJob,
   highlightedDemoJobId,
   onClearHighlightedDemoJob,
 }) => {
@@ -139,6 +169,12 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
   const [busyActionId, setBusyActionId] = useState<string | null>(null);
   const [availUpdating, setAvailUpdating] = useState(false);
   const [feedbackBanner, setFeedbackBanner] = useState('');
+  const [dismissedJobIds, setDismissedJobIds] = useState<string[]>([]);
+  const [speakingJobId, setSpeakingJobId] = useState<string | null>(null);
+  const [offerDraftTargetId, setOfferDraftTargetId] = useState<string | null>(null);
+  const [offerPriceInput, setOfferPriceInput] = useState<number>(500);
+  const [offerEtaInput, setOfferEtaInput] = useState<string>('Within 1 hour');
+  const [offerMsgInput, setOfferMsgInput] = useState<string>('');
 
   useEffect(() => {
     if (!user?.emailVerified) {
@@ -157,21 +193,69 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
     };
   }, [user?.uid, user?.emailVerified]);
 
+  const jobsById = useMemo(() => {
+    const record: Record<string, JobPosting> = {};
+    jobs.forEach((j) => {
+      record[j.id] = j;
+    });
+    return record;
+  }, [jobs]);
+
   const matchingJobs = useMemo(() => {
     if (!workerProfile) return [];
-    const skillLower = workerProfile.primarySkill.toLowerCase();
+    const appliedJobIdSet = new Set(applications.map((a) => a.jobId));
     return jobs
       .filter((j) => j.status === 'open')
-      .filter(
-        (j) =>
-          j.category.toLowerCase().includes(skillLower) ||
-          j.district === workerProfile.district ||
-          workerProfile.skills.some((s) =>
-            j.requiredSkills.some((req) => req.toLowerCase().includes(s.toLowerCase()))
-          )
-      )
-      .slice(0, 6);
-  }, [jobs, workerProfile]);
+      .filter((j) => !appliedJobIdSet.has(j.id) && !dismissedJobIds.includes(j.id))
+      .filter((j) => doesWorkerMatchJob(j, workerProfile).matches)
+      .slice(0, 12);
+  }, [jobs, workerProfile, applications, dismissedJobIds]);
+
+  const incomingInvites = useMemo(
+    () => applications.filter((a) => a.status === 'invited'),
+    [applications]
+  );
+
+  const spotlightJob = useMemo(() => {
+    if (!highlightedJobId) return undefined;
+    const candidate = jobsById[highlightedJobId];
+    return candidate && candidate.status === 'open' ? candidate : undefined;
+  }, [highlightedJobId, jobsById]);
+
+  const handleListenJobVoice = (job: JobPosting) => {
+    unlockAudioOnUserGesture();
+    if (speakingJobId === job.id) {
+      stopVoiceAlert();
+      setSpeakingJobId(null);
+      return;
+    }
+    const approxLoc = getPublicJobLocationText(job, false);
+    const distKm = calculateValidDistanceKm(
+      job.lat,
+      job.lng,
+      workerProfile?.approxLat,
+      workerProfile?.approxLng
+    );
+    const voiceLang = workerProfile?.preferredLanguage || lang;
+    const script = buildSmartJobVoiceScript({
+      lang: voiceLang,
+      customerName: job.employerName,
+      category: job.category,
+      jobTitle: job.title,
+      jobDescription: job.title || job.description,
+      approxLocationLabel: approxLoc,
+      distanceKm: distKm,
+    });
+    setSpeakingJobId(job.id);
+    void speakJobAlert({
+      text: script,
+      lang: voiceLang,
+      soundEnabled: false,
+      voiceEnabled: true,
+    }).finally(() => {
+      setSpeakingJobId((prev) => (prev === job.id ? null : prev));
+    });
+  };
 
   const handleAvailabilityChange = async (nextStatus: PublicWorkerProfile['availabilityStatus']) => {
     if (!user || !workerProfile || workerProfile.verificationStatus === 'suspended') return;
@@ -191,33 +275,130 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
     }
   };
 
-  const handleToggleTracking = async (app: JobApplication) => {
-    if (app.status !== 'accepted') return;
+  const handleInviteDecision = async (app: JobApplication, decision: 'accepted' | 'declined') => {
+    if (!workerProfile) return;
     setBusyActionId(app.id);
+    setFeedbackBanner('');
     try {
-      await updateApplicationByWorker(app.id, {
-        liveTrackingAuthorized: !app.liveTrackingAuthorized,
+      await respondToHiringInvite({
+        app,
+        decision,
+        workerName: workerProfile.displayName,
+        jobLocationLabel: app.jobLocationLabel || jobsById[app.jobId]?.workLocationLabel,
       });
+      setFeedbackBanner(
+        decision === 'accepted'
+          ? tr(
+              lang,
+              'Request accepted! Customer notified and two-way live map is ready below.',
+              'अनुरोध स्वीकार हो गया! ग्राहक को सूचना भेजी गई है।',
+              'विनंती स्वीकारली! ग्राहकाला सूचना पाठवली आहे.'
+            )
+          : tr(lang, 'Request declined.', 'अनुरोध अस्वीकार किया गया।', 'विनंती नाकारली.')
+      );
     } finally {
       setBusyActionId(null);
     }
   };
 
-  const handleInviteDecision = async (app: JobApplication, decision: 'accepted' | 'declined') => {
+  const handleOpenOfferEditor = (targetId: string, defaultWage: number) => {
+    setOfferDraftTargetId(targetId);
+    setOfferPriceInput(defaultWage > 0 ? defaultWage : workerProfile?.expectedWage || 500);
+    setOfferEtaInput('Within 1 hour');
+    setOfferMsgInput('');
+  };
+
+  const handleSubmitOfferForJob = async (
+    e: React.FormEvent,
+    job: JobPosting,
+    existingApp?: JobApplication
+  ) => {
+    e.preventDefault();
+    if (!user || !workerProfile) return;
+    setBusyActionId(existingApp?.id || job.id);
+    setFeedbackBanner('');
+    try {
+      await submitWorkerOffer({
+        job,
+        worker: workerProfile,
+        workerUid: user.uid,
+        offeredPrice: Number(offerPriceInput) || job.offeredWage || workerProfile.expectedWage,
+        estimatedArrivalTime: offerEtaInput.trim() || 'Within 1 hour',
+        offerMessage: offerMsgInput.trim(),
+        existingApplicationId: existingApp?.id,
+      });
+      setOfferDraftTargetId(null);
+      setOfferMsgInput('');
+      setFeedbackBanner(
+        tr(
+          lang,
+          'Offer sent! Customer has been notified with your price and ETA.',
+          'ऑफर भेज दिया गया! ग्राहक को आपके दर और समय की सूचना मिल गई है।',
+          'ऑफर पाठवली! ग्राहकाला तुमचा दर व येण्याची वेळ कळवली आहे.'
+        )
+      );
+    } finally {
+      setBusyActionId(null);
+    }
+  };
+
+  const handleWorkerConfirmDeal = async (app: JobApplication) => {
+    if (!user || !workerProfile) return;
     setBusyActionId(app.id);
     try {
-      await updateApplicationByWorker(app.id, {
-        status: decision,
-        liveTrackingAuthorized: false,
+      await confirmDealByParticipant({
+        app,
+        actorUid: user.uid,
+        actorRole: 'worker',
+        actorName: workerProfile.displayName,
       });
-      void callNotificationApi('/api/notifications/send-customer-event', {
-        recipientUid: app.employerUid,
-        eventType: decision === 'accepted' ? 'booking_accepted' : 'booking_cancelled',
-        workerName: workerProfile?.displayName || 'Worker',
-        jobTitle: app.jobTitle,
-        jobId: app.jobId,
-        targetRoute: 'employer-dashboard',
-      }).catch(() => undefined);
+      setFeedbackBanner(tr(lang, 'Deal confirmed! Two-way live location is active.', 'डील कन्फर्म हो गई!', 'डील निश्चित झाली!'));
+    } finally {
+      setBusyActionId(null);
+    }
+  };
+
+  const handleWorkerStartWork = async (app: JobApplication) => {
+    if (!workerProfile) return;
+    setBusyActionId(app.id);
+    try {
+      await startWorkByWorker({
+        app,
+        workerName: workerProfile.displayName,
+      });
+      setFeedbackBanner(tr(lang, 'Work marked In Progress! Customer notified.', 'कार्य शुरू चिह्नित किया गया!', 'काम सुरू झाले म्हणून नोंदवले!'));
+    } finally {
+      setBusyActionId(null);
+    }
+  };
+
+  const handleWorkerCompleteDeal = async (app: JobApplication) => {
+    if (!user || !workerProfile) return;
+    setBusyActionId(app.id);
+    try {
+      await completeDeal({
+        app,
+        actorUid: user.uid,
+        actorRole: 'worker',
+        actorName: workerProfile.displayName,
+      });
+      setFeedbackBanner(tr(lang, 'Work marked completed and live location stopped.', 'कार्य पूर्ण! लाइव लोकेशन बंद कर दी गई।', 'काम पूर्ण झाले आणि लाइव्ह लोकेशन बंद केले.'));
+    } finally {
+      setBusyActionId(null);
+    }
+  };
+
+  const handleWorkerCancelDeal = async (app: JobApplication) => {
+    if (!user || !workerProfile) return;
+    setBusyActionId(app.id);
+    try {
+      await cancelDeal({
+        app,
+        actorUid: user.uid,
+        actorRole: 'worker',
+        actorName: workerProfile.displayName,
+      });
+      setFeedbackBanner(tr(lang, 'Deal cancelled and live location stopped.', 'डील रद्द की गई और लाइव लोकेशन बंद हुई।', 'डील रद्द केली आणि लाइव्ह लोकेशन बंद केले.'));
     } finally {
       setBusyActionId(null);
     }
@@ -633,7 +814,519 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
         </div>
       </section>
 
-      {/* Applications & Booking-Based Live Tracking Consent */}
+      {/* Real-Time Unread Notification Alert Banner */}
+      {unreadNotificationsCount > 0 && (
+        <section className="bg-amber-50 border-2 border-[#E06D1B] rounded-lg p-4 space-y-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <BellRing className="w-5 h-5 text-[#E06D1B] shrink-0" />
+              <h2 className="font-display text-sm sm:text-base font-bold text-[#0B3B75]">
+                {tr(lang, 'Unread Notifications', 'अपठित सूचनाएं', 'न वाचलेल्या सूचना')} ({unreadNotificationsCount})
+              </h2>
+            </div>
+            <button
+              type="button"
+              onClick={() => void markAllNotificationsRead(notifications)}
+              className="text-xs font-bold text-[#C25E00] hover:underline cursor-pointer"
+            >
+              {tr(lang, 'Mark all read', 'सभी पढ़े चिह्नित करें', 'सर्व वाचल्या म्हणून नोंदवा')}
+            </button>
+          </div>
+          <div className="space-y-1.5">
+            {notifications
+              .filter((n) => !n.read)
+              .slice(0, 4)
+              .map((n) => (
+                <div
+                  key={n.id}
+                  onClick={() => void markNotificationRead(n.id)}
+                  className="bg-white border border-amber-200 rounded px-3 py-2 flex items-start justify-between gap-2 cursor-pointer hover:bg-amber-50/50"
+                >
+                  <div>
+                    <div className="text-xs font-bold text-[#0B3B75]">{n.title}</div>
+                    <p className="text-[11px] text-slate-600">{n.body}</p>
+                  </div>
+                  <span className="text-[10px] font-mono-tabular font-bold uppercase text-[#C25E00] shrink-0">
+                    {n.dealStatus || 'NEW'}
+                  </span>
+                </div>
+              ))}
+          </div>
+        </section>
+      )}
+
+      {/* Smart Voice Job Alert Spotlight (Deep-Linked from Push / In-App Notification) */}
+      {spotlightJob && (
+        <section className="bg-amber-50 border-2 border-[#E06D1B] rounded-lg p-5 space-y-3 shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-2">
+            <div>
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-[#E06D1B] text-white text-[10px] font-mono-tabular font-bold uppercase">
+                <BellRing className="w-3 h-3" />
+                {tr(lang, 'SMART VOICE JOB ALERT', 'स्मार्ट वॉइस जॉब अलर्ट', 'स्मार्ट व्हॉइस जॉब अलर्ट')} · {spotlightJob.category}
+              </span>
+              <h2 className="font-display text-lg font-bold text-[#0B3B75] mt-1">{spotlightJob.title}</h2>
+              <p className="text-xs font-semibold text-slate-700">
+                {tr(lang, 'Customer:', 'ग्राहक:', 'ग्राहक:')} {spotlightJob.employerName}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => handleListenJobVoice(spotlightJob)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#0B3B75] text-white text-xs font-bold hover:bg-slate-800 cursor-pointer"
+              >
+                {speakingJobId === spotlightJob.id ? (
+                  <VolumeX className="w-3.5 h-3.5" />
+                ) : (
+                  <Volume2 className="w-3.5 h-3.5 text-amber-300" />
+                )}
+                <span>
+                  {speakingJobId === spotlightJob.id
+                    ? tr(lang, 'Stop Voice', 'रोकें', 'थांबवा')
+                    : tr(lang, 'Listen Voice Alert', 'वॉइस अलर्ट सुनें', 'व्हॉइस अलर्ट ऐका')}
+                </span>
+              </button>
+              {onClearHighlightedJob && (
+                <button
+                  type="button"
+                  onClick={onClearHighlightedJob}
+                  className="px-2.5 py-1.5 rounded border border-slate-300 bg-white text-xs font-semibold text-slate-600 hover:bg-slate-50 cursor-pointer"
+                >
+                  {tr(lang, 'Dismiss', 'बंद करें', 'बंद करा')}
+                </button>
+              )}
+            </div>
+          </div>
+
+          <p className="text-xs text-slate-700 bg-white border border-amber-200 rounded p-2.5">
+            {spotlightJob.description}
+          </p>
+
+          <div className="flex flex-wrap items-center gap-4 text-xs text-slate-700">
+            <span className="inline-flex items-center gap-1">
+              <MapPin className="w-3.5 h-3.5 text-[#E06D1B]" />
+              <strong>{tr(lang, 'Approximate Area:', 'अनुमानित क्षेत्र:', 'अंदाजे परिसर:')}</strong>{' '}
+              {getPublicJobLocationText(spotlightJob, false)}
+            </span>
+            {(() => {
+              const distKm = calculateValidDistanceKm(
+                spotlightJob.lat,
+                spotlightJob.lng,
+                workerProfile.approxLat,
+                workerProfile.approxLng
+              );
+              return distKm !== null ? (
+                <span className="font-mono-tabular font-bold text-[#0B3B75]">~{distKm} km away</span>
+              ) : null;
+            })()}
+            {(spotlightJob.jobDate || spotlightJob.startTime) && (
+              <span className="font-mono-tabular">
+                {spotlightJob.jobDate} {spotlightJob.startTime}
+              </span>
+            )}
+            {spotlightJob.offeredWage > 0 && (
+              <span className="font-mono-tabular font-bold text-[#15803D]">
+                ₹{spotlightJob.offeredWage.toLocaleString('en-IN')} / {spotlightJob.wageUnit}
+              </span>
+            )}
+          </div>
+
+          <p className="text-[11px] text-slate-500">
+            {tr(
+              lang,
+              'Exact house/street address is shared securely once your offer is accepted.',
+              'सटीक पता ऑफर स्वीकार होने के बाद साझा किया जाता है।',
+              'अचूक पत्ता ऑफर स्वीकारल्यानंतर सुरक्षितपणे शेअर केला जातो.'
+            )}
+          </p>
+
+          {!applications.some((a) => a.jobId === spotlightJob.id) && (
+            <div className="flex flex-wrap gap-2 pt-1">
+              <button
+                type="button"
+                disabled={busyActionId === spotlightJob.id}
+                onClick={() => {
+                  setBusyActionId(spotlightJob.id);
+                  void submitWorkerOffer({
+                    job: spotlightJob,
+                    worker: workerProfile,
+                    workerUid: user.uid,
+                    offeredPrice: spotlightJob.offeredWage > 0 ? spotlightJob.offeredWage : workerProfile.expectedWage,
+                    estimatedArrivalTime: 'Ready today',
+                    offerMessage: 'Accepted your budget & job details. Ready to work.',
+                  })
+                    .then(() => {
+                      if (onClearHighlightedJob) onClearHighlightedJob();
+                    })
+                    .finally(() => setBusyActionId(null));
+                }}
+                className="px-3.5 py-1.5 rounded bg-[#15803D] text-white text-xs font-bold hover:bg-emerald-800 cursor-pointer"
+              >
+                {tr(lang, 'Accept', 'स्वीकार करें', 'स्वीकारा')}
+              </button>
+              <button
+                type="button"
+                onClick={() => handleOpenOfferEditor(`spotlight_${spotlightJob.id}`, spotlightJob.offeredWage)}
+                className="px-3.5 py-1.5 rounded bg-[#0B3B75] text-white text-xs font-bold hover:bg-slate-800 cursor-pointer"
+              >
+                {tr(lang, 'Send Offer', 'ऑफर भेजें', 'ऑफर पाठवा')}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setDismissedJobIds((prev) => [...prev, spotlightJob.id]);
+                  if (onClearHighlightedJob) onClearHighlightedJob();
+                }}
+                className="px-3.5 py-1.5 rounded border border-slate-300 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+              >
+                {tr(lang, 'Reject', 'अस्वीकार', 'नको')}
+              </button>
+            </div>
+          )}
+
+          {offerDraftTargetId === `spotlight_${spotlightJob.id}` && (
+            <form
+              onSubmit={(e) => handleSubmitOfferForJob(e, spotlightJob)}
+              className="bg-white border border-slate-300 rounded p-3 space-y-2"
+            >
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  type="number"
+                  min={0}
+                  value={offerPriceInput}
+                  onChange={(e) => setOfferPriceInput(Number(e.target.value))}
+                  placeholder="Price ₹"
+                  className="px-2.5 py-1.5 border border-slate-300 rounded text-xs font-mono-tabular"
+                />
+                <input
+                  type="text"
+                  value={offerEtaInput}
+                  onChange={(e) => setOfferEtaInput(e.target.value)}
+                  placeholder="ETA (e.g. 30 mins)"
+                  className="px-2.5 py-1.5 border border-slate-300 rounded text-xs"
+                />
+              </div>
+              <input
+                type="text"
+                value={offerMsgInput}
+                onChange={(e) => setOfferMsgInput(e.target.value)}
+                placeholder="Message to customer"
+                className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-xs"
+              />
+              <div className="flex gap-2">
+                <button
+                  type="submit"
+                  disabled={busyActionId === spotlightJob.id}
+                  className="px-3 py-1.5 rounded bg-[#0B3B75] text-white text-xs font-bold cursor-pointer"
+                >
+                  Send Offer
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setOfferDraftTargetId(null)}
+                  className="px-3 py-1.5 rounded border border-slate-300 text-xs font-semibold text-slate-700 cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            </form>
+          )}
+        </section>
+      )}
+
+      {/* Incoming Customer Hiring Requests & Matching Category Broadcasts (Accept / Reject / Send Offer) */}
+      {(incomingInvites.length > 0 || matchingJobs.length > 0) && (
+        <section className="bg-white border-2 border-[#0B3B75] rounded-lg p-6 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="font-display text-lg font-bold text-[#0B3B75] flex items-center gap-2">
+                <Zap className="w-5 h-5 text-[#E06D1B]" />
+                <span>
+                  {tr(
+                    lang,
+                    'Incoming Hiring Requests & Service Leads',
+                    'नए कार्य अनुरोध एवं अवसर',
+                    'नवीन कामाच्या विनंत्या व संधी'
+                  )}{' '}
+                  ({incomingInvites.length + matchingJobs.length})
+                </span>
+              </h2>
+              <p className="text-xs text-slate-600">
+                {tr(
+                  lang,
+                  'Accept immediately, reject, or send your price + estimated arrival time offer directly to the customer.',
+                  'तुरंत स्वीकार करें, अस्वीकार करें, या अपना दर और पहुंचने का समय भेजें।',
+                  'तात्काळ स्वीकारा, नाकारा किंवा तुमचा दर आणि पोहोचण्याची वेळ पाठवा.'
+                )}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => onNavigate('find-work', workerProfile.primarySkill)}
+              className="text-xs font-semibold text-[#C25E00] hover:underline cursor-pointer"
+            >
+              {t.nav.findWork} →
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Direct Invites First */}
+            {incomingInvites.map((app) => {
+              const job = jobsById[app.jobId];
+              const isEditingOffer = offerDraftTargetId === `invite_${app.id}`;
+              const inviteApproxLoc = job
+                ? getPublicJobLocationText(job, false)
+                : app.jobLocationLabel || app.jobDistrict || 'Local area';
+              const inviteDistKm = job
+                ? calculateValidDistanceKm(job.lat, job.lng, workerProfile.approxLat, workerProfile.approxLng)
+                : null;
+              return (
+                <div key={app.id} className="border-2 border-[#E06D1B] bg-amber-50/40 rounded-lg p-4 space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <span className="inline-block px-2 py-0.5 rounded bg-[#E06D1B] text-white text-[10px] font-mono-tabular font-bold uppercase">
+                        DIRECT HIRING REQUEST · {getEffectiveDealStatus(app)}
+                      </span>
+                      <h3 className="font-display text-base font-bold text-[#0B3B75] mt-1">{app.jobTitle}</h3>
+                      <p className="text-xs font-semibold text-slate-700">
+                        Customer: {app.customerName || job?.employerName || 'Customer'}
+                      </p>
+                    </div>
+                    <div className="text-right font-mono-tabular text-sm font-bold text-[#15803D]">
+                      ₹{app.proposedWage.toLocaleString('en-IN')}
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-600">
+                    <span>
+                      {inviteApproxLoc}
+                      {inviteDistKm !== null ? ` (~${inviteDistKm} km)` : ''}
+                      {(app.jobDate || job?.jobDate) ? ` · ${app.jobDate || job?.jobDate}` : ''}
+                      {(app.startTime || job?.startTime) ? ` ${app.startTime || job?.startTime}` : ''}
+                    </span>
+                    {job && (
+                      <button
+                        type="button"
+                        onClick={() => handleListenJobVoice(job)}
+                        className="inline-flex items-center gap-1 px-2 py-1 rounded border border-amber-300 bg-white text-[11px] font-semibold text-[#0B3B75] hover:bg-amber-50 cursor-pointer"
+                      >
+                        {speakingJobId === job.id ? <VolumeX className="w-3 h-3" /> : <Volume2 className="w-3 h-3 text-[#E06D1B]" />}
+                        <span>{speakingJobId === job.id ? 'Stop' : 'Listen'}</span>
+                      </button>
+                    )}
+                  </div>
+                  {app.note && <p className="text-xs text-slate-700 bg-white rounded p-2 border border-amber-200">{app.note}</p>}
+
+                  {!isEditingOffer ? (
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <button
+                        type="button"
+                        disabled={busyActionId === app.id}
+                        onClick={() => handleInviteDecision(app, 'accepted')}
+                        className="px-3 py-1.5 rounded bg-[#15803D] text-white text-xs font-bold hover:bg-emerald-800 cursor-pointer"
+                      >
+                        {t.dashboards.acceptBtn}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busyActionId === app.id}
+                        onClick={() => handleOpenOfferEditor(`invite_${app.id}`, app.proposedWage)}
+                        className="px-3 py-1.5 rounded bg-[#0B3B75] text-white text-xs font-bold hover:bg-slate-800 cursor-pointer"
+                      >
+                        {tr(lang, 'Send Offer', 'ऑफर भेजें', 'ऑफर पाठवा')}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busyActionId === app.id}
+                        onClick={() => handleInviteDecision(app, 'declined')}
+                        className="px-3 py-1.5 rounded border border-slate-300 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                      >
+                        {tr(lang, 'Reject', 'अस्वीकार', 'नाकारा')}
+                      </button>
+                    </div>
+                  ) : (
+                    job && (
+                      <form
+                        onSubmit={(e) => handleSubmitOfferForJob(e, job, app)}
+                        className="bg-white border border-slate-300 rounded p-3 space-y-2"
+                      >
+                        <div className="grid grid-cols-2 gap-2">
+                          <input
+                            type="number"
+                            min={0}
+                            value={offerPriceInput}
+                            onChange={(e) => setOfferPriceInput(Number(e.target.value))}
+                            placeholder="Price ₹"
+                            className="px-2.5 py-1.5 border border-slate-300 rounded text-xs font-mono-tabular"
+                          />
+                          <input
+                            type="text"
+                            value={offerEtaInput}
+                            onChange={(e) => setOfferEtaInput(e.target.value)}
+                            placeholder="ETA (e.g. 30 mins)"
+                            className="px-2.5 py-1.5 border border-slate-300 rounded text-xs"
+                          />
+                        </div>
+                        <input
+                          type="text"
+                          value={offerMsgInput}
+                          onChange={(e) => setOfferMsgInput(e.target.value)}
+                          placeholder="Message to customer (optional)"
+                          className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-xs"
+                        />
+                        <div className="flex gap-2">
+                          <button
+                            type="submit"
+                            disabled={busyActionId === app.id}
+                            className="px-3 py-1.5 rounded bg-[#0B3B75] text-white text-xs font-bold cursor-pointer"
+                          >
+                            Submit Offer
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setOfferDraftTargetId(null)}
+                            className="px-3 py-1.5 rounded border border-slate-300 text-xs font-semibold text-slate-700 cursor-pointer"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </form>
+                    )
+                  )}
+                </div>
+              );
+            })}
+
+            {/* Category-Matched Broadcast Hiring Requests */}
+            {matchingJobs.map((job) => {
+              const isEditingOffer = offerDraftTargetId === `job_${job.id}`;
+              const approxLoc = getPublicJobLocationText(job, false);
+              const distKm = calculateValidDistanceKm(
+                job.lat,
+                job.lng,
+                workerProfile.approxLat,
+                workerProfile.approxLng
+              );
+              const isSpeaking = speakingJobId === job.id;
+              return (
+                <div key={job.id} className="border border-slate-300 rounded-lg p-4 space-y-2.5 bg-white">
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <span className="inline-block px-2 py-0.5 rounded bg-blue-100 text-[#0B3B75] text-[10px] font-mono-tabular font-bold uppercase">
+                        {job.category} · {job.dealStatus || 'OPEN'}
+                      </span>
+                      <h3 className="font-display text-sm font-bold text-[#0B3B75] mt-1">{job.title}</h3>
+                      <p className="text-xs font-semibold text-slate-700">Customer: {job.employerName}</p>
+                    </div>
+                    <span className="font-mono-tabular text-xs font-bold text-[#15803D] shrink-0">
+                      ₹{job.offeredWage.toLocaleString('en-IN')} / {job.wageUnit}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-600 line-clamp-2">{job.description}</p>
+                  <p className="text-[11px] text-slate-500">
+                    {approxLoc}
+                    {distKm !== null ? ` (~${distKm} km)` : ''}
+                    {job.jobDate ? ` · ${job.jobDate}` : ''}
+                    {job.startTime ? ` ${job.startTime}` : ''}
+                  </p>
+
+                  {!isEditingOffer ? (
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => handleListenJobVoice(job)}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded border border-slate-300 bg-slate-50 text-xs font-semibold text-[#0B3B75] hover:bg-slate-100 cursor-pointer"
+                      >
+                        {isSpeaking ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5 text-[#E06D1B]" />}
+                        <span>{isSpeaking ? 'Stop' : 'Voice'}</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busyActionId === job.id}
+                        onClick={() => {
+                          setBusyActionId(job.id);
+                          void submitWorkerOffer({
+                            job,
+                            worker: workerProfile,
+                            workerUid: user.uid,
+                            offeredPrice: job.offeredWage > 0 ? job.offeredWage : workerProfile.expectedWage,
+                            estimatedArrivalTime: 'Ready today',
+                            offerMessage: 'Accepted your budget & job details. Ready to work.',
+                          }).finally(() => setBusyActionId(null));
+                        }}
+                        className="px-3 py-1.5 rounded bg-[#15803D] text-white text-xs font-bold hover:bg-emerald-800 cursor-pointer"
+                      >
+                        {tr(lang, 'Accept', 'स्वीकार करें', 'स्वीकारा')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleOpenOfferEditor(`job_${job.id}`, job.offeredWage)}
+                        className="px-3 py-1.5 rounded bg-[#0B3B75] text-white text-xs font-bold hover:bg-slate-800 cursor-pointer"
+                      >
+                        {tr(lang, 'Send Offer', 'ऑफर भेजें', 'ऑफर पाठवा')}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setDismissedJobIds((prev) => [...prev, job.id])}
+                        className="px-3 py-1.5 rounded border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                      >
+                        {tr(lang, 'Reject', 'छोड़ें', 'नको')}
+                      </button>
+                    </div>
+                  ) : (
+                    <form
+                      onSubmit={(e) => handleSubmitOfferForJob(e, job)}
+                      className="bg-slate-50 border border-slate-300 rounded p-3 space-y-2"
+                    >
+                      <div className="grid grid-cols-2 gap-2">
+                        <input
+                          type="number"
+                          min={0}
+                          value={offerPriceInput}
+                          onChange={(e) => setOfferPriceInput(Number(e.target.value))}
+                          placeholder="Price ₹"
+                          className="px-2.5 py-1.5 border border-slate-300 rounded text-xs font-mono-tabular bg-white"
+                        />
+                        <input
+                          type="text"
+                          value={offerEtaInput}
+                          onChange={(e) => setOfferEtaInput(e.target.value)}
+                          placeholder="ETA (e.g. 30 mins)"
+                          className="px-2.5 py-1.5 border border-slate-300 rounded text-xs bg-white"
+                        />
+                      </div>
+                      <input
+                        type="text"
+                        value={offerMsgInput}
+                        onChange={(e) => setOfferMsgInput(e.target.value)}
+                        placeholder="Message to customer"
+                        className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-xs bg-white"
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          type="submit"
+                          disabled={busyActionId === job.id}
+                          className="px-3 py-1.5 rounded bg-[#0B3B75] text-white text-xs font-bold cursor-pointer"
+                        >
+                          Send Offer
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setOfferDraftTargetId(null)}
+                          className="px-3 py-1.5 rounded border border-slate-300 text-xs font-semibold text-slate-700 bg-white cursor-pointer"
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    </form>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {/* Applications, Active Deals, Two-Way Chat & Live Location */}
       <section className="bg-white border border-slate-200 rounded-lg p-6 space-y-4">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <h2 className="font-display text-lg font-bold text-[#0B3B75]">{t.dashboards.myApplications}</h2>
@@ -651,136 +1344,148 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
           <p className="text-sm text-slate-500 py-4">{t.common.noRecords}</p>
         ) : (
           <div className="divide-y divide-slate-200">
-            {applications.map((app) => (
-              <div key={app.id} className="py-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                <div className="space-y-1">
-                  <p className="text-xs font-mono-tabular text-slate-500">
-                    Status: <strong className="text-[#0B3B75] uppercase">{app.status}</strong> ·{' '}
-                    ₹{app.proposedWage.toLocaleString('en-IN')}
-                  </p>
-                  <h3 className="font-display text-base font-bold text-[#0B3B75]">{app.jobTitle}</h3>
-                  {app.note && <p className="text-xs text-slate-600">{app.note}</p>}
-                  {isCustomerPhotoVisibleForJobStatus(app.status) ? (
-                    <div className="mt-1.5 inline-flex items-center gap-2 px-2.5 py-1 rounded bg-blue-50 border border-blue-200 text-[11px]">
-                      <SecureAvatar
-                        name="Customer"
-                        acceptedGrantId={buildAcceptedApplicationGrantId(app.id)}
-                        sizeClass="w-7 h-7"
-                        textSizeClass="text-[10px]"
-                      />
-                      <span className="font-semibold text-[#0B3B75]">
-                        {tr(lang, 'Customer Photo (Accepted Job)', 'ग्राहक फोटो (स्वीकृत कार्य)', 'ग्राहक फोटो (मंजूर काम)')}
-                      </span>
-                    </div>
-                  ) : (
-                    <p className="text-[11px] text-slate-500 flex items-center gap-1 pt-0.5">
-                      <Lock className="w-3 h-3" />
-                      <span>
-                        {tr(
-                          lang,
-                          'Customer photo stays hidden unless job is accepted',
-                          'काम स्वीकार होने तक ग्राहक फोटो गोपनीय रहती है',
-                          'काम मंजूर होईपर्यंत ग्राहकाचा फोटो गोपनीय राहतो'
-                        )}
-                      </span>
-                    </p>
-                  )}
-                  {app.status === 'work_completed' && (
-                    <p className="text-xs text-[#15803D] font-medium inline-flex items-center gap-1">
-                      <Star className="w-3.5 h-3.5" />
-                      {tr(lang, 'Rating', 'रेटिंग', 'रेटिंग')}: {app.workerRating || '—'}/5
-                      {app.employerFeedback ? ` — “${app.employerFeedback}”` : ''}
-                    </p>
-                  )}
-                </div>
-
-                <div className="flex flex-wrap items-center gap-3">
-                  {app.status === 'invited' && (
-                    <>
-                      <button
-                        type="button"
-                        disabled={busyActionId === app.id}
-                        onClick={() => handleInviteDecision(app, 'accepted')}
-                        className="px-3 py-1.5 rounded-md bg-[#15803D] text-white text-xs font-semibold hover:bg-emerald-800 cursor-pointer"
-                      >
-                        {t.dashboards.acceptBtn}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busyActionId === app.id}
-                        onClick={() => handleInviteDecision(app, 'declined')}
-                        className="px-3 py-1.5 rounded-md border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
-                      >
-                        {t.dashboards.declineBtn}
-                      </button>
-                    </>
-                  )}
-
-                  {app.status === 'accepted' && (
-                    <div className="border border-slate-200 rounded-md p-3 bg-slate-50 max-w-md">
-                      <label className="flex items-start gap-2.5 text-xs text-slate-800 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          disabled={busyActionId === app.id}
-                          checked={app.liveTrackingAuthorized}
-                          onChange={() => handleToggleTracking(app)}
-                          className="mt-0.5 rounded border-slate-300"
-                        />
-                        <span>
-                          <strong className="inline-flex items-center gap-1 text-[#0B3B75]">
-                            <LocateFixed className="w-3.5 h-3.5 text-[#C25E00]" />
-                            {t.dashboards.liveTrackingToggle}
-                          </strong>
-                          <span className="block text-slate-600 mt-0.5">{t.dashboards.liveTrackingNotice}</span>
+            {applications.map((app) => {
+              const dealStatus = getEffectiveDealStatus(app);
+              const job = jobsById[app.jobId];
+              return (
+                <div key={app.id} className="py-4 space-y-3">
+                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                    <div className="space-y-1">
+                      <div className="flex flex-wrap items-center gap-2 text-xs font-mono-tabular text-slate-500">
+                        <span
+                          className={`px-2 py-0.5 rounded border font-bold uppercase ${getDealStatusBadgeStyle(
+                            dealStatus
+                          )}`}
+                        >
+                          {dealStatus}
                         </span>
-                      </label>
+                        <span>· ₹{(app.agreedPrice ?? app.offerAmount ?? app.proposedWage).toLocaleString('en-IN')}</span>
+                        {app.estimatedArrivalTime && <span>· ETA: {app.estimatedArrivalTime}</span>}
+                      </div>
+                      <h3 className="font-display text-base font-bold text-[#0B3B75]">{app.jobTitle}</h3>
+                      {(app.customerName || job?.employerName) && (
+                        <p className="text-xs font-semibold text-slate-700">
+                          Customer: {app.customerName || job?.employerName}
+                        </p>
+                      )}
+                      {(app.offerMessage || app.note) && (
+                        <p className="text-xs text-slate-600">{app.offerMessage || app.note}</p>
+                      )}
+                      {isCustomerPhotoVisibleForJobStatus(app.status) ? (
+                        <div className="mt-1.5 inline-flex items-center gap-2 px-2.5 py-1 rounded bg-blue-50 border border-blue-200 text-[11px]">
+                          <SecureAvatar
+                            name={app.customerName || 'Customer'}
+                            acceptedGrantId={buildAcceptedApplicationGrantId(app.id)}
+                            sizeClass="w-7 h-7"
+                            textSizeClass="text-[10px]"
+                          />
+                          <span className="font-semibold text-[#0B3B75]">
+                            {tr(lang, 'Customer Photo (Accepted Job)', 'ग्राहक फोटो (स्वीकृत कार्य)', 'ग्राहक फोटो (मंजूर काम)')}
+                          </span>
+                        </div>
+                      ) : (
+                        <p className="text-[11px] text-slate-500 flex items-center gap-1 pt-0.5">
+                          <Lock className="w-3 h-3" />
+                          <span>
+                            {tr(
+                              lang,
+                              'Customer photo & exact location stay hidden until accepted',
+                              'काम स्वीकार होने तक ग्राहक फोटो व सटीक लोकेशन गोपनीय रहते हैं',
+                              'काम मंजूर होईपर्यंत ग्राहकाचा फोटो व अचूक लोकेशन गोपनीय राहतात'
+                            )}
+                          </span>
+                        </p>
+                      )}
+                      {app.status === 'work_completed' && (
+                        <p className="text-xs text-[#15803D] font-medium inline-flex items-center gap-1">
+                          <Star className="w-3.5 h-3.5" />
+                          {tr(lang, 'Rating', 'रेटिंग', 'रेटिंग')}: {app.workerRating || '—'}/5
+                          {app.employerFeedback ? ` — “${app.employerFeedback}”` : ''}
+                        </p>
+                      )}
                     </div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
 
-      {/* Matching Open Opportunities */}
-      <section className="bg-white border border-slate-200 rounded-lg p-6 space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="font-display text-lg font-bold text-[#0B3B75]">{t.dashboards.openOpportunities}</h2>
-          <button
-            type="button"
-            onClick={() => onNavigate('find-work', workerProfile.primarySkill)}
-            className="text-xs font-semibold text-[#C25E00] hover:underline cursor-pointer"
-          >
-            {t.nav.findWork} →
-          </button>
-        </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {app.status === 'invited' && (
+                        <>
+                          <button
+                            type="button"
+                            disabled={busyActionId === app.id}
+                            onClick={() => handleInviteDecision(app, 'accepted')}
+                            className="px-3 py-1.5 rounded-md bg-[#15803D] text-white text-xs font-semibold hover:bg-emerald-800 cursor-pointer"
+                          >
+                            {t.dashboards.acceptBtn}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busyActionId === app.id}
+                            onClick={() => handleInviteDecision(app, 'declined')}
+                            className="px-3 py-1.5 rounded-md border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                          >
+                            {t.dashboards.declineBtn}
+                          </button>
+                        </>
+                      )}
 
-        {matchingJobs.length === 0 ? (
-          <p className="text-sm text-slate-500 py-3">{t.jobs.noJobs}</p>
-        ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {matchingJobs.map((job) => (
-              <div key={job.id} className="border border-slate-200 rounded-lg p-4 space-y-2">
-                <p className="text-xs text-slate-500">
-                  {job.category} · {job.district}, {job.state}
-                </p>
-                <h3 className="font-display text-sm font-bold text-[#0B3B75]">{job.title}</h3>
-                <p className="text-xs text-slate-600 line-clamp-2">{job.description}</p>
-                <div className="flex items-center justify-between pt-1">
-                  <span className="font-mono-tabular text-xs font-bold text-[#15803D]">
-                    ₹{job.offeredWage.toLocaleString('en-IN')} / {job.wageUnit}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => onNavigate('find-work', job.category)}
-                    className="text-xs font-semibold text-[#0B3B75] hover:underline cursor-pointer"
-                  >
-                    {t.jobs.applyBtn}
-                  </button>
+                      {dealStatus === 'OFFER_ACCEPTED' && (
+                        <button
+                          type="button"
+                          disabled={busyActionId === app.id}
+                          onClick={() => handleWorkerConfirmDeal(app)}
+                          className="px-3 py-1.5 rounded-md bg-[#15803D] text-white text-xs font-bold hover:bg-emerald-800 cursor-pointer"
+                        >
+                          {tr(lang, 'Confirm Deal', 'डील कन्फर्म करें', 'डील पक्की करा')}
+                        </button>
+                      )}
+
+                      {dealStatus === 'DEAL_CONFIRMED' && (
+                        <button
+                          type="button"
+                          disabled={busyActionId === app.id}
+                          onClick={() => handleWorkerStartWork(app)}
+                          className="px-3 py-1.5 rounded-md bg-[#0B3B75] text-white text-xs font-bold hover:bg-slate-800 cursor-pointer"
+                        >
+                          {tr(lang, 'Start Work', 'काम शुरू करें', 'काम सुरू करा')}
+                        </button>
+                      )}
+
+                      {dealStatus === 'WORK_IN_PROGRESS' && (
+                        <button
+                          type="button"
+                          disabled={busyActionId === app.id}
+                          onClick={() => handleWorkerCompleteDeal(app)}
+                          className="px-3 py-1.5 rounded-md bg-[#15803D] text-white text-xs font-bold hover:bg-emerald-800 cursor-pointer"
+                        >
+                          {tr(lang, 'Mark Work Completed', 'काम पूर्ण चिह्नित करें', 'काम पूर्ण नोंदवा')}
+                        </button>
+                      )}
+
+                      {(dealStatus === 'OFFER_ACCEPTED' ||
+                        dealStatus === 'DEAL_CONFIRMED' ||
+                        dealStatus === 'WORK_IN_PROGRESS') && (
+                        <button
+                          type="button"
+                          disabled={busyActionId === app.id}
+                          onClick={() => handleWorkerCancelDeal(app)}
+                          className="px-3 py-1.5 rounded-md border border-red-300 text-xs font-semibold text-red-700 hover:bg-red-50 cursor-pointer"
+                        >
+                          {tr(lang, 'Cancel Deal', 'रद्द करें', 'रद्द करा')}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Shared Deal Status Timeline, Two-Way Chat & Two-Way Live Map */}
+                  <DealCoordinationPanel
+                    application={app}
+                    job={job}
+                    viewerUid={user.uid}
+                    viewerRole="worker"
+                    viewerName={workerProfile.displayName}
+                  />
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </section>
@@ -885,12 +1590,18 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
 
 interface EmployerDashboardProps {
   jobs: JobPosting[];
+  workers?: PublicWorkerProfile[];
+  notifications?: AppNotificationRecord[];
+  unreadNotificationsCount?: number;
   onNavigate: (route: PageRoute, categoryFilter?: string) => void;
   onNavigateToTarget?: (route: PageRoute, jobId?: string, demoJobId?: string) => void;
 }
 
 export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
   jobs,
+  workers = [],
+  notifications = [],
+  unreadNotificationsCount = 0,
   onNavigate,
   onNavigateToTarget,
 }) => {
@@ -899,11 +1610,13 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
   const [applications, setApplications] = useState<JobApplication[]>([]);
   const [customerVehicleBookings, setCustomerVehicleBookings] = useState<VehicleBooking[]>([]);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [expandingJobId, setExpandingJobId] = useState<string | null>(null);
   const [completingAppId, setCompletingAppId] = useState<string | null>(null);
   const [ratingVal, setRatingVal] = useState<number>(5);
   const [feedbackVal, setFeedbackVal] = useState('');
   const [gpsUpdating, setGpsUpdating] = useState(false);
   const [locNotice, setLocNotice] = useState('');
+  const [actionNotice, setActionNotice] = useState('');
   const syncedPhotoGrantsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
@@ -919,6 +1632,14 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
       u2();
     };
   }, [user?.uid, user?.emailVerified]);
+
+  const jobsById = useMemo(() => {
+    const mapObj: Record<string, JobPosting> = {};
+    jobs.forEach((j) => {
+      mapObj[j.id] = j;
+    });
+    return mapObj;
+  }, [jobs]);
 
   // Idempotently grant accepted workers access to customer's private photo (including worker-accepted invites)
   useEffect(() => {
@@ -982,6 +1703,9 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
     };
   }, [customerPreference, myJobs, customerVehicleBookings]);
 
+  const customerDisplayName =
+    employerProfile?.businessName || user?.displayName || user?.email?.split('@')[0] || 'Customer';
+
   const handleUpdateSavedGps = async () => {
     if (!user?.emailVerified) return;
     setGpsUpdating(true);
@@ -1026,28 +1750,72 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
     }
   };
 
-  const handleStatusDecision = async (app: JobApplication, status: 'accepted' | 'declined') => {
+  const handleStatusDecision = async (app: JobApplication, decision: 'accepted' | 'declined') => {
+    if (!user) return;
     setBusyId(app.id);
+    setActionNotice('');
     try {
-      await updateApplicationByEmployer(
-        app.id,
-        { status },
-        user && employerPrivate?.photoDocId
+      const jobLoc = app.jobLocationLabel || jobsById[app.jobId]?.workLocationLabel || jobsById[app.jobId]?.district || '';
+      await respondToWorkerOffer({
+        app,
+        decision,
+        customerName: customerDisplayName,
+        jobLocationLabel: jobLoc,
+        photoGrantContext: employerPrivate?.photoDocId
           ? {
               customerUid: user.uid,
               workerUid: app.workerUid,
               customerPhotoDocId: employerPrivate.photoDocId,
             }
-          : undefined
+          : undefined,
+      });
+      setActionNotice(
+        decision === 'accepted'
+          ? tr(
+              lang,
+              `Offer accepted! ${app.workerName} has been notified ("Congratulations! Offer Accepted") and live location sharing is now unlocked.`,
+              `ऑफर स्वीकार हो गया! ${app.workerName} को तुरंत सूचना भेज दी गई है।`,
+              `ऑफर स्वीकारली! ${app.workerName} ला तात्काळ सूचना पाठवली आहे.`
+            )
+          : tr(
+              lang,
+              `Offer declined and ${app.workerName} notified.`,
+              `ऑफर अस्वीकृत और ${app.workerName} को सूचित किया गया।`,
+              `ऑफर नाकारली आणि ${app.workerName} ला कळवले.`
+            )
       );
-      void callNotificationApi('/api/notifications/send-customer-event', {
-        recipientUid: app.workerUid,
-        eventType: status === 'accepted' ? 'booking_accepted' : 'booking_cancelled',
-        workerName: employerProfile?.businessName || user?.displayName || 'Customer',
-        jobTitle: app.jobTitle,
-        jobId: app.jobId,
-        targetRoute: 'worker-dashboard',
-      }).catch(() => undefined);
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleCustomerConfirmDeal = async (app: JobApplication) => {
+    if (!user) return;
+    setBusyId(app.id);
+    try {
+      await confirmDealByParticipant({
+        app,
+        actorUid: user.uid,
+        actorRole: 'customer',
+        actorName: customerDisplayName,
+      });
+      setActionNotice(tr(lang, 'Deal confirmed! Worker notified and live location is active.', 'डील कन्फर्म हो गई!', 'डील निश्चित झाली!'));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleCustomerCancelDeal = async (app: JobApplication) => {
+    if (!user) return;
+    setBusyId(app.id);
+    try {
+      await cancelDeal({
+        app,
+        actorUid: user.uid,
+        actorRole: 'customer',
+        actorName: customerDisplayName,
+      });
+      setActionNotice(tr(lang, 'Deal cancelled and live location stopped.', 'डील रद्द और लाइव लोकेशन बंद।', 'डील रद्द केली आणि लाइव्ह लोकेशन बंद केले.'));
     } finally {
       setBusyId(null);
     }
@@ -1055,34 +1823,35 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
 
   const handleMarkCompleted = async (e: React.FormEvent, app: JobApplication) => {
     e.preventDefault();
+    if (!user) return;
     setBusyId(app.id);
     try {
-      await updateApplicationByEmployer(
-        app.id,
-        {
-          status: 'work_completed',
-          workerRating: ratingVal,
-          ...(feedbackVal.trim() ? { employerFeedback: feedbackVal.trim() } : {}),
-        },
-        user && employerPrivate?.photoDocId
+      await completeDeal({
+        app,
+        actorUid: user.uid,
+        actorRole: 'customer',
+        actorName: customerDisplayName,
+        rating: ratingVal,
+        feedback: feedbackVal.trim() || undefined,
+        photoGrantContext: employerPrivate?.photoDocId
           ? {
               customerUid: user.uid,
               workerUid: app.workerUid,
               customerPhotoDocId: employerPrivate.photoDocId,
             }
-          : undefined
-      );
-      void callNotificationApi('/api/notifications/send-customer-event', {
-        recipientUid: app.workerUid,
-        eventType: 'job_completed',
-        workerName: employerProfile?.businessName || user?.displayName || 'Customer',
-        jobTitle: app.jobTitle,
-        jobId: app.jobId,
-        targetRoute: 'worker-dashboard',
-      }).catch(() => undefined);
+          : undefined,
+      });
       setCompletingAppId(null);
       setFeedbackVal('');
       setRatingVal(5);
+      setActionNotice(
+        tr(
+          lang,
+          'Work marked completed! Both dashboards synced and live location sharing automatically stopped.',
+          'कार्य पूर्ण! लाइव लोकेशन साझाकरण बंद कर दिया गया है।',
+          'काम पूर्ण झाले! दोन्ही डॅशबोर्ड अपडेट झाले व लाइव्ह लोकेशन बंद केले.'
+        )
+      );
     } finally {
       setBusyId(null);
     }
@@ -1100,6 +1869,33 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
       handleFirestoreError(err, OperationType.UPDATE, `jobs/${job.id}`);
     } finally {
       setBusyId(null);
+    }
+  };
+
+  const handleExpandJobRadius = async (job: JobPosting) => {
+    setExpandingJobId(job.id);
+    setActionNotice('');
+    try {
+      const currentKm = normalizeRadiusKm(job.currentRadiusKm ?? job.initialRadiusKm ?? 5, 5);
+      const nextKm = getNextRadiusStage(currentKm);
+      if (!nextKm) return;
+
+      const result = await expandJobSearchRadius({
+        job,
+        workers,
+        targetRadiusKm: nextKm as ServiceRadiusKm,
+      });
+
+      setActionNotice(
+        tr(
+          lang,
+          `Expanded search radius for "${job.title}" to ${result.currentRadiusKm} km (${result.newlyNotifiedCount} additional worker(s) alerted, ${result.totalNotifiedCount} total notified).`,
+          `"${job.title}" का दायरा ${result.currentRadiusKm} किमी किया गया (${result.newlyNotifiedCount} नए कामगारों को सूचना मिली)।`,
+          `"${job.title}" साठी शोध परिसर ${result.currentRadiusKm} किमी केला (${result.newlyNotifiedCount} नवीन कामगारांना सूचना पाठवली).`
+        )
+      );
+    } finally {
+      setExpandingJobId(null);
     }
   };
 
@@ -1523,182 +2319,302 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
           <p className="text-sm text-slate-500 py-3">{t.common.noRecords}</p>
         ) : (
           <div className="divide-y divide-slate-200">
-            {myJobs.map((job) => (
-              <div key={job.id} className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div className="space-y-1">
-                  <p className="text-xs font-mono-tabular text-slate-500">
-                    {job.category} · <strong className="uppercase text-[#0B3B75]">{job.status}</strong> ·{' '}
-                    {job.applicationsCount} {tr(lang, 'applications', 'आवेदन', 'अर्ज')}
-                  </p>
-                  <h3 className="font-display text-base font-bold text-[#0B3B75]">{job.title}</h3>
-                  <p className="text-xs text-slate-600">
-                    {job.workLocationLabel}, {job.district} · ₹{job.offeredWage.toLocaleString('en-IN')} / {job.wageUnit} ·{' '}
-                    {job.workersRequired} {t.jobs.workersUnit}
-                  </p>
-                </div>
-                {job.status === 'open' && (
-                  <div className="flex flex-wrap gap-2 self-start sm:self-center">
-                    <button
-                      type="button"
-                      disabled={busyId === job.id}
-                      onClick={() => handleUpdateJobStatus(job, 'completed')}
-                      className="px-3 py-1.5 rounded-md bg-[#15803D] text-white text-xs font-semibold hover:bg-emerald-800 cursor-pointer"
-                    >
-                      {tr(lang, 'Mark Completed', 'पूर्ण चिह्नित करें', 'पूर्ण नोंदवा')}
-                    </button>
-                    <button
-                      type="button"
-                      disabled={busyId === job.id}
-                      onClick={() => handleUpdateJobStatus(job, 'cancelled')}
-                      className="px-3 py-1.5 rounded-md border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
-                    >
-                      {t.common.cancel}
-                    </button>
+            {myJobs.map((job) => {
+              const currentRadiusKm = normalizeRadiusKm(job.currentRadiusKm ?? job.initialRadiusKm ?? 5, 5);
+              const nextRadiusKm = getNextRadiusStage(currentRadiusKm);
+              const notifiedCount = Array.isArray(job.notifiedWorkerUids) ? job.notifiedWorkerUids.length : 0;
+              return (
+                <div key={job.id} className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="space-y-1">
+                    <p className="text-xs font-mono-tabular text-slate-500 flex flex-wrap items-center gap-2">
+                      <span>
+                        {job.category} · <strong className="uppercase text-[#0B3B75]">{job.status}</strong> ·{' '}
+                        {job.applicationsCount} {tr(lang, 'applications', 'आवेदन', 'अर्ज')}
+                      </span>
+                      <span className="px-2 py-0.5 rounded bg-blue-50 text-[#0B3B75] font-bold">
+                        Radius: {currentRadiusKm} km · {notifiedCount} alerted
+                      </span>
+                    </p>
+                    <h3 className="font-display text-base font-bold text-[#0B3B75]">{job.title}</h3>
+                    <p className="text-xs text-slate-600">
+                      {job.workLocationLabel}, {job.district} · ₹{job.offeredWage.toLocaleString('en-IN')} / {job.wageUnit} ·{' '}
+                      {job.workersRequired} {t.jobs.workersUnit}
+                    </p>
                   </div>
-                )}
-              </div>
-            ))}
+                  {job.status === 'open' && (
+                    <div className="flex flex-wrap gap-2 self-start sm:self-center">
+                      {nextRadiusKm && (
+                        <button
+                          type="button"
+                          disabled={expandingJobId === job.id}
+                          onClick={() => void handleExpandJobRadius(job)}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-[#E06D1B] text-white text-xs font-bold hover:bg-[#c55b10] disabled:opacity-60 cursor-pointer"
+                        >
+                          <Radar className="w-3.5 h-3.5" />
+                          <span>
+                            {expandingJobId === job.id
+                              ? tr(lang, 'Expanding...', 'बढ़ा रहे हैं...', 'वाढवत आहे...')
+                              : tr(
+                                  lang,
+                                  `Expand Radius → ${nextRadiusKm} km`,
+                                  `दायरा बढ़ाएं → ${nextRadiusKm} किमी`,
+                                  `परिसर वाढवा → ${nextRadiusKm} किमी`
+                                )}
+                          </span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        disabled={busyId === job.id}
+                        onClick={() => handleUpdateJobStatus(job, 'completed')}
+                        className="px-3 py-1.5 rounded-md bg-[#15803D] text-white text-xs font-semibold hover:bg-emerald-800 cursor-pointer"
+                      >
+                        {tr(lang, 'Mark Completed', 'पूर्ण चिह्नित करें', 'पूर्ण नोंदवा')}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busyId === job.id}
+                        onClick={() => handleUpdateJobStatus(job, 'cancelled')}
+                        className="px-3 py-1.5 rounded-md border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                      >
+                        {t.common.cancel}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </div>
         )}
       </section>
 
-      {/* Received Applications */}
+      {/* Real-Time Unread Notification Alert Banner */}
+      {unreadNotificationsCount > 0 && (
+        <section className="bg-amber-50 border-2 border-[#E06D1B] rounded-lg p-4 space-y-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2">
+              <BellRing className="w-5 h-5 text-[#E06D1B] shrink-0" />
+              <h2 className="font-display text-sm sm:text-base font-bold text-[#0B3B75]">
+                {tr(lang, 'Unread Worker Offers & Alerts', 'अपठित कामगार ऑफर व सूचनाएं', 'न वाचलेले ऑफर व सूचना')} ({unreadNotificationsCount})
+              </h2>
+            </div>
+            <button
+              type="button"
+              onClick={() => void markAllNotificationsRead(notifications)}
+              className="text-xs font-bold text-[#C25E00] hover:underline cursor-pointer"
+            >
+              {tr(lang, 'Mark all read', 'सभी पढ़े चिह्नित करें', 'सर्व वाचल्या म्हणून नोंदवा')}
+            </button>
+          </div>
+          <div className="space-y-1.5">
+            {notifications
+              .filter((n) => !n.read)
+              .slice(0, 4)
+              .map((n) => (
+                <div
+                  key={n.id}
+                  onClick={() => void markNotificationRead(n.id)}
+                  className="bg-white border border-amber-200 rounded px-3 py-2 flex items-start justify-between gap-2 cursor-pointer hover:bg-amber-50/50"
+                >
+                  <div>
+                    <div className="text-xs font-bold text-[#0B3B75]">{n.title}</div>
+                    <p className="text-[11px] text-slate-600">{n.body}</p>
+                  </div>
+                  <span className="text-[10px] font-mono-tabular font-bold uppercase text-[#C25E00] shrink-0">
+                    {n.dealStatus || 'NEW'}
+                  </span>
+                </div>
+              ))}
+          </div>
+        </section>
+      )}
+
+      {actionNotice && (
+        <div className="p-3 rounded-md bg-emerald-50 border border-emerald-200 text-sm text-emerald-900 font-medium">
+          {actionNotice}
+        </div>
+      )}
+
+      {/* Received Offers & Applications */}
       <section className="bg-white border border-slate-200 rounded-lg p-6 space-y-4">
-        <h2 className="font-display text-lg font-bold text-[#0B3B75]">
-          {t.dashboards.receivedApplications} ({applications.length})
-        </h2>
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <h2 className="font-display text-lg font-bold text-[#0B3B75]">
+            {tr(lang, 'Worker Offers, Hiring Requests & Active Deals', 'प्राप्त ऑफर, आवेदन एवं डील', 'आलेल्या ऑफर्स व सक्रिय व्यवहार')} ({applications.length})
+          </h2>
+          {applications.some((a) => a.status === 'applied') && (
+            <span className="px-2.5 py-1 rounded-full bg-amber-100 text-[#C25E00] text-xs font-bold">
+              {applications.filter((a) => a.status === 'applied').length} awaiting decision
+            </span>
+          )}
+        </div>
 
         {applications.length === 0 ? (
           <p className="text-sm text-slate-500 py-3">{t.common.noRecords}</p>
         ) : (
           <div className="divide-y divide-slate-200">
-            {applications.map((app) => (
-              <div key={app.id} className="py-4 space-y-3">
-                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                  <div className="flex items-start gap-3">
-                    <SecureAvatar
-                      name={app.workerName}
-                      photoDocId={app.workerPhotoDocId}
-                      sizeClass="w-11 h-11"
-                      textSizeClass="text-sm"
-                    />
-                    <div className="space-y-1">
-                      <p className="text-xs font-mono-tabular text-slate-500">
-                        {app.workerRegistrationId} · {app.workerPrimarySkill} ·{' '}
-                        <strong className="uppercase text-[#0B3B75]">{app.status}</strong>
-                      </p>
-                      <h3 className="font-display text-base font-bold text-[#0B3B75]">
-                        {app.workerName} — {app.jobTitle}
-                      </h3>
-                    <p className="text-xs text-slate-600">
-                      {t.jobs.proposedWageLabel}:{' '}
-                      <strong className="font-mono-tabular text-[#15803D]">
-                        ₹{app.proposedWage.toLocaleString('en-IN')}
-                      </strong>
-                      {app.note ? ` · “${app.note}”` : ''}
-                    </p>
-                    {app.status === 'accepted' && (
-                      <p className="text-xs text-slate-600 inline-flex items-center gap-1.5">
-                        <LocateFixed className="w-3.5 h-3.5 text-[#C25E00]" />
-                        {app.liveTrackingAuthorized
-                          ? tr(lang, 'Worker authorized booking location sharing', 'कामगार ने बुकिंग लोकेशन साझा करने की अनुमति दी है', 'कामगाराने बुकिंग लोकेशन शेअर करण्याची परवानगी दिली आहे')
-                          : tr(lang, 'Worker location sharing is off (privacy default)', 'कामगार लोकेशन साझाकरण बंद है', 'कामगार लोकेशन शेअरिंग बंद आहे')}
-                      </p>
-                    )}
+            {applications.map((app) => {
+              const dealStatus = getEffectiveDealStatus(app);
+              const job = jobsById[app.jobId];
+              return (
+                <div key={app.id} className="py-4 space-y-3">
+                  <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                    <div className="flex items-start gap-3">
+                      <SecureAvatar
+                        name={app.workerName}
+                        photoDocId={app.workerPhotoDocId}
+                        sizeClass="w-11 h-11"
+                        textSizeClass="text-sm"
+                      />
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap items-center gap-2 text-xs font-mono-tabular text-slate-500">
+                          <span>{app.workerRegistrationId} · {app.workerPrimarySkill}</span>
+                          <span
+                            className={`px-2 py-0.5 rounded border font-bold uppercase ${getDealStatusBadgeStyle(
+                              dealStatus
+                            )}`}
+                          >
+                            {dealStatus}
+                          </span>
+                        </div>
+                        <h3 className="font-display text-base font-bold text-[#0B3B75]">
+                          {app.workerName} — {app.jobTitle}
+                        </h3>
+                        <p className="text-xs text-slate-600">
+                          {app.agreedPrice ? 'Agreed Price' : 'Offered Price'}:{' '}
+                          <strong className="font-mono-tabular text-[#15803D]">
+                            ₹{(app.agreedPrice ?? app.offerAmount ?? app.proposedWage).toLocaleString('en-IN')}
+                          </strong>
+                          {app.estimatedArrivalTime ? ` · ETA: ${app.estimatedArrivalTime}` : ''}
+                          {(app.offerMessage || app.note) ? ` · “${app.offerMessage || app.note}”` : ''}
+                        </p>
+                      </div>
                     </div>
-                  </div>
 
-                  <div className="flex flex-wrap items-center gap-2">
-                    {app.status === 'applied' && (
-                      <>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {app.status === 'applied' && (
+                        <>
+                          <button
+                            type="button"
+                            disabled={busyId === app.id}
+                            onClick={() => handleStatusDecision(app, 'accepted')}
+                            className="px-3.5 py-1.5 rounded-md bg-[#15803D] text-white text-xs font-bold hover:bg-emerald-800 cursor-pointer"
+                          >
+                            {tr(lang, 'Accept Offer', 'ऑफर स्वीकार करें', 'ऑफर स्वीकारा')}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busyId === app.id}
+                            onClick={() => handleStatusDecision(app, 'declined')}
+                            className="px-3 py-1.5 rounded-md border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                          >
+                            {tr(lang, 'Reject Offer', 'अस्वीकार करें', 'नाकारा')}
+                          </button>
+                        </>
+                      )}
+
+                      {dealStatus === 'OFFER_ACCEPTED' && (
                         <button
                           type="button"
                           disabled={busyId === app.id}
-                          onClick={() => handleStatusDecision(app, 'accepted')}
+                          onClick={() => handleCustomerConfirmDeal(app)}
+                          className="px-3 py-1.5 rounded-md bg-[#0B3B75] text-white text-xs font-bold hover:bg-slate-800 cursor-pointer"
+                        >
+                          {tr(lang, 'Confirm Deal', 'डील कन्फर्म करें', 'डील पक्की करा')}
+                        </button>
+                      )}
+
+                      {app.status === 'accepted' && completingAppId !== app.id && (
+                        <button
+                          type="button"
+                          onClick={() => setCompletingAppId(app.id)}
                           className="px-3 py-1.5 rounded-md bg-[#15803D] text-white text-xs font-semibold hover:bg-emerald-800 cursor-pointer"
                         >
-                          {t.dashboards.acceptBtn}
+                          {t.dashboards.completeBtn}
                         </button>
+                      )}
+
+                      {(dealStatus === 'OFFER_ACCEPTED' ||
+                        dealStatus === 'DEAL_CONFIRMED' ||
+                        dealStatus === 'WORK_IN_PROGRESS') && (
                         <button
                           type="button"
                           disabled={busyId === app.id}
-                          onClick={() => handleStatusDecision(app, 'declined')}
-                          className="px-3 py-1.5 rounded-md border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                          onClick={() => handleCustomerCancelDeal(app)}
+                          className="px-3 py-1.5 rounded-md border border-red-300 text-xs font-semibold text-red-700 hover:bg-red-50 cursor-pointer"
                         >
-                          {t.dashboards.declineBtn}
+                          {tr(lang, 'Cancel Deal', 'डील रद्द करें', 'रद्द करा')}
                         </button>
-                      </>
-                    )}
+                      )}
 
-                    {app.status === 'accepted' && completingAppId !== app.id && (
-                      <button
-                        type="button"
-                        onClick={() => setCompletingAppId(app.id)}
-                        className="px-3 py-1.5 rounded-md bg-[#0B3B75] text-white text-xs font-semibold hover:bg-slate-800 cursor-pointer"
-                      >
-                        {t.dashboards.completeBtn}
-                      </button>
-                    )}
-
-                    {app.status === 'work_completed' && (
-                      <span className="text-xs font-semibold text-[#15803D] inline-flex items-center gap-1">
-                        <CheckCircle2 className="w-4 h-4" />
-                        {app.workerRating || 5}/5
-                      </span>
-                    )}
+                      {app.status === 'work_completed' && (
+                        <span className="text-xs font-semibold text-[#15803D] inline-flex items-center gap-1">
+                          <CheckCircle2 className="w-4 h-4" />
+                          {app.workerRating || 5}/5
+                        </span>
+                      )}
+                    </div>
                   </div>
-                </div>
 
-                {completingAppId === app.id && (
-                  <form
-                    onSubmit={(e) => handleMarkCompleted(e, app)}
-                    className="bg-slate-50 border border-slate-200 rounded-md p-4 grid grid-cols-1 sm:grid-cols-12 gap-3 items-end"
-                  >
-                    <div className="sm:col-span-3">
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">
-                        {t.dashboards.ratingLabel}
-                      </label>
-                      <select
-                        value={ratingVal}
-                        onChange={(e) => setRatingVal(Number(e.target.value))}
-                        className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
-                      >
-                        {[5, 4, 3, 2, 1].map((n) => (
-                          <option key={n} value={n}>{n} / 5</option>
-                        ))}
-                      </select>
-                    </div>
-                    <div className="sm:col-span-6">
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">
-                        {t.dashboards.feedbackLabel}
-                      </label>
-                      <input
-                        type="text"
-                        value={feedbackVal}
-                        onChange={(e) => setFeedbackVal(e.target.value)}
-                        className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
-                      />
-                    </div>
-                    <div className="sm:col-span-3 flex gap-2">
-                      <button
-                        type="submit"
-                        disabled={busyId === app.id}
-                        className="flex-1 py-2 px-3 rounded-md bg-[#15803D] text-white text-xs font-semibold cursor-pointer"
-                      >
-                        {t.common.save}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setCompletingAppId(null)}
-                        className="py-2 px-3 rounded-md border border-slate-300 text-xs font-semibold text-slate-700 bg-white cursor-pointer"
-                      >
-                        {t.common.cancel}
-                      </button>
-                    </div>
-                  </form>
-                )}
-              </div>
-            ))}
+                  {completingAppId === app.id && (
+                    <form
+                      onSubmit={(e) => handleMarkCompleted(e, app)}
+                      className="bg-slate-50 border border-slate-200 rounded-md p-4 grid grid-cols-1 sm:grid-cols-12 gap-3 items-end"
+                    >
+                      <div className="sm:col-span-3">
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          {t.dashboards.ratingLabel}
+                        </label>
+                        <select
+                          value={ratingVal}
+                          onChange={(e) => setRatingVal(Number(e.target.value))}
+                          className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
+                        >
+                          {[5, 4, 3, 2, 1].map((n) => (
+                            <option key={n} value={n}>{n} / 5</option>
+                          ))}
+                        </select>
+                      </div>
+                      <div className="sm:col-span-6">
+                        <label className="block text-xs font-semibold text-slate-700 mb-1">
+                          {t.dashboards.feedbackLabel}
+                        </label>
+                        <input
+                          type="text"
+                          value={feedbackVal}
+                          onChange={(e) => setFeedbackVal(e.target.value)}
+                          className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
+                        />
+                      </div>
+                      <div className="sm:col-span-3 flex gap-2">
+                        <button
+                          type="submit"
+                          disabled={busyId === app.id}
+                          className="flex-1 py-2 px-3 rounded-md bg-[#15803D] text-white text-xs font-semibold cursor-pointer"
+                        >
+                          {t.common.save}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setCompletingAppId(null)}
+                          className="py-2 px-3 rounded-md border border-slate-300 text-xs font-semibold text-slate-700 bg-white cursor-pointer"
+                        >
+                          {t.common.cancel}
+                        </button>
+                      </div>
+                    </form>
+                  )}
+
+                  {/* Shared Deal Status Timeline, Two-Way Chat & Two-Way Live Map */}
+                  <DealCoordinationPanel
+                    application={app}
+                    job={job}
+                    viewerUid={user.uid}
+                    viewerRole="customer"
+                    viewerName={customerDisplayName}
+                  />
+                </div>
+              );
+            })}
           </div>
         )}
       </section>
@@ -1786,7 +2702,6 @@ type AdminTab =
   | 'workers'
   | 'employers'
   | 'jobs'
-  | 'demo-oversight'
   | 'notifications'
   | 'grievances'
   | 'enquiries'
@@ -1951,7 +2866,6 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
             { id: 'workers', label: `Workers (${workers.length})`, icon: Users },
             { id: 'employers', label: `Employers (${employers.length})`, icon: Briefcase },
             { id: 'jobs', label: `Jobs (${jobs.length})`, icon: FileText },
-            { id: 'demo-oversight', label: '🧪 5-User Demo Oversight', icon: FlaskConical },
             { id: 'notifications', label: '📲 Live Notification Demo', icon: BellRing },
             { id: 'grievances', label: `${t.dashboards.grievances} (${grievances.length})`, icon: AlertTriangle },
             { id: 'enquiries', label: `${t.dashboards.enquiries} (${enquiries.length})`, icon: Shield },
@@ -1960,7 +2874,7 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
           ] as { id: AdminTab; label: string; icon: React.ComponentType<{ className?: string }> }[]
         ).map((item) => {
           const Icon = item.icon;
-          const isNotif = item.id === 'notifications' || item.id === 'demo-oversight';
+          const isNotif = item.id === 'notifications';
           return (
             <button
               key={item.id}
@@ -1982,10 +2896,6 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
           );
         })}
       </div>
-
-      {tab === 'demo-oversight' && (
-        <AdminDemoOversightPanel onNavigate={onNavigate} />
-      )}
 
       {tab === 'notifications' && (
         <AdminNotificationDemoPanel workers={workers} employers={employers} />

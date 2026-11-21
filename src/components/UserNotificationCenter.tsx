@@ -2,16 +2,23 @@ import React, { useEffect, useState } from 'react';
 import {
   Bell,
   Briefcase,
+  CheckCheck,
   CheckCircle2,
   ExternalLink,
   FlaskConical,
   Send,
   Settings2,
   Smartphone,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
+import { doc, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
+import { EMPLOYMENT_CATEGORIES } from '../data/categories';
 import { useLanguage } from '../i18n/LanguageContext';
+import { db } from '../lib/firebase';
 import {
+  markAllNotificationsRead,
   markNotificationRead,
   saveNotificationPreferences,
   submitDemoJobApplication,
@@ -22,6 +29,8 @@ import {
   subscribeUserDeviceTokens,
   subscribeUserNotifications,
 } from '../lib/firestoreService';
+import { SERVICE_RADIUS_STAGES, buildSmartJobVoiceScript } from '../lib/smartVoiceJobAlert';
+import { speakJobAlert, stopVoiceAlert, unlockAudioOnUserGesture } from '../lib/voiceAlertEngine';
 import type {
   AppNotificationRecord,
   DemoJobApplication,
@@ -32,6 +41,8 @@ import type {
   NotificationCategoryKey,
   NotificationPreferences,
   PageRoute,
+  PublicWorkerProfile,
+  ServiceRadiusKm,
 } from '../types/domain';
 import { NotificationOptInButton } from './NotificationOptInButton';
 import { PWAInstallButton } from './PWAControls';
@@ -62,12 +73,14 @@ export const UserNotificationCenter: React.FC<UserNotificationCenterProps> = ({
   onClearHighlightedDemoJob,
 }) => {
   const { lang } = useLanguage();
-  const { user, workerProfile } = useAuth();
+  const { user, workerProfile, refreshUserProfiles } = useAuth();
 
   const [prefs, setPrefs] = useState<NotificationPreferences | null>(null);
   const [tokens, setTokens] = useState<DeviceTokenRecord[]>([]);
   const [notifications, setNotifications] = useState<AppNotificationRecord[]>([]);
   const [savingKey, setSavingKey] = useState<string | null>(null);
+  const [voiceTestStatus, setVoiceTestStatus] = useState('');
+  const [isTestingVoice, setIsTestingVoice] = useState(false);
 
   // Isolated Demo Worker Sandbox State
   const [showDemoMode, setShowDemoMode] = useState(Boolean(highlightedDemoJobId));
@@ -137,6 +150,11 @@ export const UserNotificationCenter: React.FC<UserNotificationCenterProps> = ({
     applicationUpdates: prefs?.applicationUpdates ?? true,
     bookingNotifications: prefs?.bookingNotifications ?? true,
     announcements: prefs?.announcements ?? true,
+    voiceAlertsEnabled: prefs?.voiceAlertsEnabled ?? workerProfile?.voiceAlertsEnabled ?? true,
+    soundEnabled: prefs?.soundEnabled ?? true,
+    preferredLanguage: (prefs?.preferredLanguage || workerProfile?.preferredLanguage || lang) as Language,
+    preferredRadiusKm: (prefs?.preferredRadiusKm || workerProfile?.preferredRadiusKm || 10) as ServiceRadiusKm,
+    preferredCategories: prefs?.preferredCategories ?? [],
   };
 
   const togglePref = async (key: NotificationCategoryKey) => {
@@ -144,10 +162,103 @@ export const UserNotificationCenter: React.FC<UserNotificationCenterProps> = ({
     try {
       await saveNotificationPreferences(user.uid, {
         [key]: !effectivePrefs[key],
-        preferredLanguage: lang,
+        preferredLanguage: effectivePrefs.preferredLanguage,
       });
     } finally {
       setSavingKey(null);
+    }
+  };
+
+  const handleSaveWorkerVoicePref = async (
+    key: string,
+    updates: Parameters<typeof saveNotificationPreferences>[1]
+  ) => {
+    setSavingKey(key);
+    try {
+      await saveNotificationPreferences(user.uid, updates);
+      if (workerProfile) {
+        await refreshUserProfiles().catch(() => undefined);
+      }
+    } finally {
+      setSavingKey(null);
+    }
+  };
+
+  const handleAvailabilityChange = async (nextStatus: PublicWorkerProfile['availabilityStatus']) => {
+    if (!workerProfile || workerProfile.verificationStatus === 'suspended') return;
+    setSavingKey('availability');
+    try {
+      await updateDoc(doc(db, 'publicWorkers', user.uid), {
+        availabilityStatus: nextStatus,
+        updatedAt: serverTimestamp(),
+      });
+      await refreshUserProfiles().catch(() => undefined);
+    } finally {
+      setSavingKey(null);
+    }
+  };
+
+  const handleTogglePreferredCategory = async (categoryEn: string) => {
+    const current = effectivePrefs.preferredCategories;
+    const next = current.includes(categoryEn)
+      ? current.filter((c) => c !== categoryEn)
+      : [...current, categoryEn].slice(0, 35);
+    await handleSaveWorkerVoicePref('preferredCategories', { preferredCategories: next });
+  };
+
+  const handleTestVoicePreview = async () => {
+    unlockAudioOnUserGesture();
+    if (isTestingVoice) {
+      stopVoiceAlert();
+      setIsTestingVoice(false);
+      return;
+    }
+    const targetLang = effectivePrefs.preferredLanguage;
+    const sampleScript = buildSmartJobVoiceScript({
+      lang: targetLang,
+      customerName: 'Mayur Raikwar',
+      category: workerProfile?.primarySkill || 'Carpenters',
+      jobTitle: 'Door fitting & repair',
+      jobDescription:
+        targetLang === 'mr'
+          ? 'दरवाजा फिटिंग'
+          : targetLang === 'hi'
+          ? 'दरवाज़ा फिटिंग'
+          : 'door installation',
+      approxLocationLabel: workerProfile
+        ? `${workerProfile.cityOrVillage || workerProfile.district}, ${workerProfile.district}`
+        : 'Chandrapur, Maharashtra',
+      distanceKm: 3.2,
+    });
+    setIsTestingVoice(true);
+    setVoiceTestStatus('');
+    const result = await speakJobAlert({
+      text: sampleScript,
+      lang: targetLang,
+      soundEnabled: effectivePrefs.soundEnabled,
+      voiceEnabled: effectivePrefs.voiceAlertsEnabled,
+    });
+    setIsTestingVoice(false);
+    if (result.speechStatus === 'spoken') {
+      setVoiceTestStatus(
+        tr(
+          lang,
+          `Voice preview played (${targetLang.toUpperCase()}).`,
+          `आवाज़ पूर्वावलोकन चलाया गया (${targetLang.toUpperCase()})।`,
+          `आवाज चाचणी यशस्वी (${targetLang.toUpperCase()}).`
+        )
+      );
+    } else if (result.speechStatus === 'disabled') {
+      setVoiceTestStatus(
+        tr(
+          lang,
+          'Voice announcements are currently turned off. Chime only.',
+          'वॉइस घोषणा बंद है। केवल अलर्ट ध्वनि चली।',
+          'व्हॉईस अलर्ट बंद आहे. फक्त बीप वाजली.'
+        )
+      );
+    } else {
+      setVoiceTestStatus(result.reason || 'Voice playback unavailable on this browser.');
     }
   };
 
@@ -336,6 +447,197 @@ export const UserNotificationCenter: React.FC<UserNotificationCenterProps> = ({
           </div>
         </div>
 
+        {/* Worker Smart Voice Job Alert Controls */}
+        {mode === 'worker' && (
+          <div className="pt-4 border-t border-slate-200 space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[#0B3B75]">
+                  <Volume2 className="w-4 h-4 text-[#E06D1B]" />
+                  <span>
+                    {tr(
+                      lang,
+                      'Smart Voice Job Alert Preferences',
+                      'स्मार्ट वॉइस जॉब अलर्ट सेटिंग्स',
+                      'स्मार्ट व्हॉईस जॉब अलर्ट सेटिंग्ज'
+                    )}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-600 mt-0.5">
+                  {tr(
+                    lang,
+                    'Hear spoken customer job alerts in Marathi, Hindi, or English with chime & radius controls.',
+                    'मराठी, हिंदी या अंग्रेजी में बोलकर काम के अलर्ट सुनें।',
+                    'मराठी, हिंदी किंवा इंग्रजीतून बोलणारा कामाचा अलर्ट ऐका.'
+                  )}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleTestVoicePreview}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#0B3B75] text-white text-xs font-bold hover:bg-slate-800 cursor-pointer self-start sm:self-center"
+              >
+                {isTestingVoice ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+                {isTestingVoice
+                  ? tr(lang, 'Stop Preview', 'बंद करें', 'थांबवा')
+                  : tr(lang, 'Test Voice Alert', 'वॉइस टेस्ट सुनें', 'आवाज चाचणी ऐका')}
+              </button>
+            </div>
+
+            {voiceTestStatus && (
+              <p className="text-[11px] font-medium text-[#0B3B75] bg-blue-50 border border-blue-200 rounded px-3 py-1.5">
+                {voiceTestStatus}
+              </p>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+              <label className="flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-50/70 px-3 py-2 text-xs font-medium text-slate-800 cursor-pointer">
+                <span>{tr(lang, 'Voice Announcements (TTS)', 'वॉइस अलर्ट (बोलकर)', 'व्हॉईस अलर्ट (बोलून)')}</span>
+                <input
+                  type="checkbox"
+                  disabled={savingKey === 'voiceAlertsEnabled'}
+                  checked={effectivePrefs.voiceAlertsEnabled}
+                  onChange={() =>
+                    void handleSaveWorkerVoicePref('voiceAlertsEnabled', {
+                      voiceAlertsEnabled: !effectivePrefs.voiceAlertsEnabled,
+                    })
+                  }
+                  className="h-4 w-4 rounded border-slate-300 accent-[#0B3B75]"
+                />
+              </label>
+
+              <label className="flex items-center justify-between gap-2 rounded-md border border-slate-200 bg-slate-50/70 px-3 py-2 text-xs font-medium text-slate-800 cursor-pointer">
+                <span>{tr(lang, 'Alert Sound Chime', 'अलर्ट घंटी ध्वनि', 'अलर्ट आवाज (घंटी)')}</span>
+                <input
+                  type="checkbox"
+                  disabled={savingKey === 'soundEnabled'}
+                  checked={effectivePrefs.soundEnabled}
+                  onChange={() =>
+                    void handleSaveWorkerVoicePref('soundEnabled', {
+                      soundEnabled: !effectivePrefs.soundEnabled,
+                    })
+                  }
+                  className="h-4 w-4 rounded border-slate-300 accent-[#0B3B75]"
+                />
+              </label>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                  {tr(lang, 'Voice Alert Language', 'अलर्ट भाषा', 'अलर्ट भाषा')}
+                </label>
+                <select
+                  value={effectivePrefs.preferredLanguage}
+                  disabled={savingKey === 'preferredLanguage'}
+                  onChange={(e) =>
+                    void handleSaveWorkerVoicePref('preferredLanguage', {
+                      preferredLanguage: e.target.value as Language,
+                    })
+                  }
+                  className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-xs font-semibold bg-white"
+                >
+                  <option value="mr">मराठी (Marathi)</option>
+                  <option value="hi">हिंदी (Hindi)</option>
+                  <option value="en">English</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                  {tr(lang, 'Alert Radius Limit', 'कार्य दायरा', 'अंतर मर्यादा')}
+                </label>
+                <select
+                  value={effectivePrefs.preferredRadiusKm}
+                  disabled={savingKey === 'preferredRadiusKm'}
+                  onChange={(e) =>
+                    void handleSaveWorkerVoicePref('preferredRadiusKm', {
+                      preferredRadiusKm: Number(e.target.value) as ServiceRadiusKm,
+                    })
+                  }
+                  className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-xs font-mono-tabular font-semibold bg-white"
+                >
+                  {SERVICE_RADIUS_STAGES.map((km) => (
+                    <option key={km} value={km}>
+                      {tr(lang, `Within ${km} km`, `${km} किमी तक`, `${km} किमी पर्यंत`)}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {workerProfile && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-start">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    {tr(lang, 'Worker Availability (Broadcast Eligibility)', 'उपलब्धता स्थिति', 'उपलब्धता स्थिती')}
+                  </label>
+                  <select
+                    value={workerProfile.availabilityStatus}
+                    disabled={savingKey === 'availability' || workerProfile.verificationStatus === 'suspended'}
+                    onChange={(e) =>
+                      void handleAvailabilityChange(e.target.value as PublicWorkerProfile['availabilityStatus'])
+                    }
+                    className="w-full px-2.5 py-1.5 border border-slate-300 rounded text-xs font-semibold bg-white"
+                  >
+                    <option value="available">{tr(lang, 'Available (Receive Job Alerts)', 'उपलब्ध (अलर्ट चालू)', 'उपलब्ध (सूचना सुरू)')}</option>
+                    <option value="busy">{tr(lang, 'Busy (Pause New Broadcasts)', 'व्यस्त (नए अलर्ट बंद)', 'व्यस्त (नवीन सूचना बंद)')}</option>
+                    <option value="offline">{tr(lang, 'Offline (Pause New Broadcasts)', 'ऑफलाइन (अलर्ट बंद)', 'ऑफलाइन (सूचना बंद)')}</option>
+                  </select>
+                </div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[11px] font-semibold text-slate-600">
+                      {tr(
+                        lang,
+                        'Preferred Trade Filter (empty = primary skill)',
+                        'पसंदीदा कार्य श्रेणी',
+                        'पसंतीची काम श्रेणी'
+                      )}
+                    </label>
+                    {effectivePrefs.preferredCategories.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => void handleSaveWorkerVoicePref('preferredCategories', { preferredCategories: [] })}
+                        className="text-[10px] font-bold text-[#C25E00] hover:underline cursor-pointer"
+                      >
+                        Reset
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto p-2 border border-slate-200 rounded bg-slate-50">
+                    {EMPLOYMENT_CATEGORIES.slice(0, 12).map((cat) => {
+                      const active = effectivePrefs.preferredCategories.includes(cat.en);
+                      return (
+                        <button
+                          key={cat.id}
+                          type="button"
+                          onClick={() => void handleTogglePreferredCategory(cat.en)}
+                          className={`px-2 py-0.5 rounded text-[11px] font-semibold border cursor-pointer ${
+                            active
+                              ? 'bg-[#0B3B75] border-[#0B3B75] text-white'
+                              : 'bg-white border-slate-300 text-slate-700 hover:bg-slate-100'
+                          }`}
+                        >
+                          {lang === 'mr' ? cat.mr.split('/')[0].trim() : lang === 'hi' ? cat.hi.split('/')[0].trim() : cat.en}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            <p className="text-[11px] text-slate-500">
+              {tr(
+                lang,
+                'Note: Live voice announcements speak automatically while Rojgar Setu is open. When the app is closed in background, your phone receives the OS push notification with sound/vibration; tapping "Open & Listen" speaks the full job alert immediately.',
+                'नोट: ऐप खुले रहने पर वॉइस अलर्ट स्वतः बोलता है। बैकग्राउंड में आने वाली सूचना पर टैप करने पर पूरा वॉइस संदेश तुरंत सुनाई देता है।',
+                'टीप: अ‍ॅप सुरू असताना व्हॉईस अलर्ट आपोआप बोलतो. अ‍ॅप बंद असल्यास मोबाईलवर पुश सूचना येते आणि "उघडा व ऐका" वर टॅप करताच आवाज सुरू होतो.'
+              )}
+            </p>
+          </div>
+        )}
+
         {/* Registered Devices List */}
         {tokens.length > 0 && (
           <div className="pt-2 border-t border-slate-100">
@@ -368,22 +670,41 @@ export const UserNotificationCenter: React.FC<UserNotificationCenterProps> = ({
 
       {/* Notification History */}
       <section className="bg-white border border-slate-200 rounded-lg p-6 space-y-4">
-        <div className="flex items-center justify-between gap-2">
-          <h2 className="font-display text-lg font-bold text-[#0B3B75]">
-            {tr(lang, 'Notification History', 'सूचना इतिहास', 'सूचनांचा इतिहास')} ({notifications.length})
-          </h2>
-          {mode === 'worker' && (
-            <button
-              type="button"
-              onClick={() => setShowDemoMode((v) => !v)}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-amber-300 bg-amber-50 text-xs font-bold text-[#C25E00] hover:bg-amber-100 cursor-pointer"
-            >
-              <FlaskConical className="w-3.5 h-3.5" />
-              {showDemoMode
-                ? tr(lang, 'Hide Demo Test Mode', 'डेमो टेस्ट बंद करें', 'डेमो टेस्ट लपवा')
-                : tr(lang, 'Demo Worker Push Test', 'डेमो टेस्ट मोड', 'डेमो वर्कर टेस्ट मोड')}
-            </button>
-          )}
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <h2 className="font-display text-lg font-bold text-[#0B3B75]">
+              {tr(lang, 'Notification History', 'सूचना इतिहास', 'सूचनांचा इतिहास')} ({notifications.length})
+            </h2>
+            {notifications.some((n) => !n.read) && (
+              <span className="px-2 py-0.5 rounded-full bg-[#E06D1B] text-white text-[11px] font-mono-tabular font-bold">
+                {notifications.filter((n) => !n.read).length} unread
+              </span>
+            )}
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {notifications.some((n) => !n.read) && (
+              <button
+                type="button"
+                onClick={() => void markAllNotificationsRead(notifications)}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded border border-slate-300 bg-white text-xs font-semibold text-[#0B3B75] hover:bg-slate-50 cursor-pointer"
+              >
+                <CheckCheck className="w-3.5 h-3.5 text-[#15803D]" />
+                {tr(lang, 'Mark All Read', 'सभी पढ़े हुए चिह्नित करें', 'सर्व वाचल्या म्हणून नोंदवा')}
+              </button>
+            )}
+            {mode === 'worker' && (
+              <button
+                type="button"
+                onClick={() => setShowDemoMode((v) => !v)}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-amber-300 bg-amber-50 text-xs font-bold text-[#C25E00] hover:bg-amber-100 cursor-pointer"
+              >
+                <FlaskConical className="w-3.5 h-3.5" />
+                {showDemoMode
+                  ? tr(lang, 'Hide Demo Test Mode', 'डेमो टेस्ट बंद करें', 'डेमो टेस्ट लपवा')
+                  : tr(lang, 'Demo Worker Push Test', 'डेमो टेस्ट मोड', 'डेमो वर्कर टेस्ट मोड')}
+              </button>
+            )}
+          </div>
         </div>
 
         {notifications.length === 0 ? (
