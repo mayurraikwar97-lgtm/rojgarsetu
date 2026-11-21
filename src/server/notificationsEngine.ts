@@ -18,6 +18,11 @@ import {
   getNextRadiusStage,
   normalizeRadiusKm,
 } from '../lib/smartVoiceJobAlert.ts';
+import {
+  getToneChannelConfig,
+  getToneTypeForEvent,
+  type NotificationToneType,
+} from '../lib/dealWorkflow.ts';
 
 const BOOTSTRAPPED_ADMIN_EMAIL = 'mayurraikwar97@gmail.com';
 
@@ -212,20 +217,21 @@ function buildLocalizedCustomerEventMessage(params: {
           body: `${safeName} यांनी ${priceText || 'नवीन दर'} ऑफर पाठवली आहे${etaText}${msgText}.`,
         };
       case 'offer_accepted':
+      case 'deal_confirmed':
         return {
-          title: `अभिनंदन! ग्राहकाने तुमची ऑफर स्वीकारली आहे: ${safeJob}`,
-          body: `${safeName} यांनी तुमची ऑफर स्वीकारली (${priceText || 'मान्य दर'})${locText}. आता काम पक्के करून लाइव्ह लोकेशन पाहता येईल.`,
+          title: `अभिनंदन! तुमचे काम निश्चित झाले आहे: ${safeJob}`,
+          body: `अभिनंदन! ${safeName} यांनी ${safeJob} काम निश्चित केले आहे${priceText ? ` (${priceText})` : ''}${locText}. आता लाइव्ह लोकेशन आणि चॅट सुरू झाले आहे.`,
         };
       case 'offer_rejected':
         return {
-          title: `ऑफर नाकारली गेली: ${safeJob}`,
+          title: `ऑफर स्वीकारला नाही: ${safeJob}`,
           body: `${safeName} यांनी या कामासाठीचा प्रस्ताव नाकारला आहे.`,
         };
       case 'job_request_accepted':
       case 'booking_accepted':
         return {
-          title: `कामाची विनंती स्वीकारली: ${safeJob}`,
-          body: `${safeName} यांनी तुमची कामाची विनंती स्वीकारली आहे${priceText ? ` (${priceText})` : ''}.`,
+          title: `अभिनंदन! काम निश्चित झाले: ${safeJob}`,
+          body: `${safeName} यांनी काम निश्चित केले आहे${priceText ? ` (${priceText})` : ''}${locText}.`,
         };
       case 'job_request_rejected':
         return {
@@ -237,11 +243,6 @@ function buildLocalizedCustomerEventMessage(params: {
         return {
           title: `नवीन संदेश — ${safeJob}`,
           body: `${safeName}: ${messageSnippet || 'नवीन संदेश प्राप्त झाला आहे.'}`,
-        };
-      case 'deal_confirmed':
-        return {
-          title: `व्यवहार निश्चित झाला (Deal Confirmed): ${safeJob}`,
-          body: `${safeJob} साठी व्यवहार पक्का झाला आहे${priceText ? ` (${priceText})` : ''}${locText}. दोन-मार्ग लाइव्ह लोकेशन आता उपलब्ध आहे.`,
         };
       case 'work_started':
       case 'worker_arrived':
@@ -283,9 +284,10 @@ function buildLocalizedCustomerEventMessage(params: {
           body: `${safeName} ने ${priceText || 'दर'} का ऑफर भेजा है${etaText}${msgText}।`,
         };
       case 'offer_accepted':
+      case 'deal_confirmed':
         return {
-          title: `बधाई हो! ग्राहक ने आपका ऑफर स्वीकार कर लिया है: ${safeJob}`,
-          body: `${safeName} ने आपका ऑफर स्वीकार किया (${priceText || 'तय राशि'})${locText}। कृपया डैशबोर्ड पर डील कन्फर्म करें।`,
+          title: `बधाई हो! आपका काम पक्का हो गया है: ${safeJob}`,
+          body: `बधाई हो! ${safeName} ने ${safeJob} के लिए काम पक्का कर दिया है${priceText ? ` (${priceText})` : ''}${locText}। अब लाइव लोकेशन और चैट चालू है।`,
         };
       case 'offer_rejected':
         return {
@@ -295,8 +297,8 @@ function buildLocalizedCustomerEventMessage(params: {
       case 'job_request_accepted':
       case 'booking_accepted':
         return {
-          title: `कार्य अनुरोध स्वीकृत: ${safeJob}`,
-          body: `${safeName} ने आपका कार्य अनुरोध स्वीकार कर लिया है${priceText ? ` (${priceText})` : ''}।`,
+          title: `बधाई हो! काम पक्का हुआ: ${safeJob}`,
+          body: `${safeName} ने आपका कार्य अनुरोध पक्का कर दिया है${priceText ? ` (${priceText})` : ''}${locText}।`,
         };
       case 'job_request_rejected':
         return {
@@ -308,11 +310,6 @@ function buildLocalizedCustomerEventMessage(params: {
         return {
           title: `नया संदेश — ${safeJob}`,
           body: `${safeName}: ${messageSnippet || 'नया संदेश प्राप्त हुआ है।'}`,
-        };
-      case 'deal_confirmed':
-        return {
-          title: `डील कन्फर्म हो गई: ${safeJob}`,
-          body: `${safeJob} की डील पक्की हो गई है${priceText ? ` (${priceText})` : ''}${locText}। अब लाइव लोकेशन साझा की जा सकती है।`,
         };
       case 'work_started':
       case 'worker_arrived':
@@ -353,9 +350,10 @@ function buildLocalizedCustomerEventMessage(params: {
         body: `${safeName} sent an offer of ${priceText || 'proposed rate'}${etaText}${msgText}.`,
       };
     case 'offer_accepted':
+    case 'deal_confirmed':
       return {
-        title: `Congratulations! Offer Accepted: ${safeJob}`,
-        body: `Congratulations! The customer (${safeName}) has accepted your offer${priceText ? ` of ${priceText}` : ''}${locText}.`,
+        title: `Congratulations! Your work has been confirmed.`,
+        body: `Work confirmed for "${safeJob}" with ${safeName}${priceText ? ` at ${priceText}` : ''}${locText}. Live location & chat are now active.`,
       };
     case 'offer_rejected':
       return {
@@ -365,8 +363,8 @@ function buildLocalizedCustomerEventMessage(params: {
     case 'job_request_accepted':
     case 'booking_accepted':
       return {
-        title: `Request Accepted: ${safeJob}`,
-        body: `${safeName} accepted your hiring/booking request${priceText ? ` (${priceText})` : ''}.`,
+        title: `Work Confirmed: ${safeJob}`,
+        body: `${safeName} confirmed work for ${safeJob}${priceText ? ` (${priceText})` : ''}${locText}.`,
       };
     case 'job_request_rejected':
       return {
@@ -378,11 +376,6 @@ function buildLocalizedCustomerEventMessage(params: {
       return {
         title: `New Message — ${safeJob}`,
         body: `${safeName}: ${messageSnippet || 'Sent you a message in deal coordination.'}`,
-      };
-    case 'deal_confirmed':
-      return {
-        title: `Deal Confirmed: ${safeJob}`,
-        body: `Deal confirmed with ${safeName}${priceText ? ` at ${priceText}` : ''}${locText}. Two-way live location sharing is now unlocked.`,
       };
     case 'work_started':
     case 'worker_arrived':
@@ -426,6 +419,8 @@ interface DeliveryTarget {
   jobCategory?: string;
   playSound?: boolean;
   speakVoice?: boolean;
+  eventType?: string;
+  toneType?: NotificationToneType;
   category: 'matchingJobs' | 'nearbyJobs' | 'applicationUpdates' | 'bookingNotifications' | 'announcements';
   targetRoute: string;
   targetJobId?: string;
@@ -434,8 +429,30 @@ interface DeliveryTarget {
   dedupeKey: string;
 }
 
+function isToneEnabledForPref(
+  pref: FirebaseFirestore.DocumentData | undefined,
+  toneType: NotificationToneType
+): boolean {
+  if (!pref) return true;
+  if (pref.soundEnabled === false) return false;
+  if (toneType === 'new_job' && pref.toneNewJobEnabled === false) return false;
+  if (toneType === 'new_offer' && pref.toneNewOfferEnabled === false) return false;
+  if (toneType === 'deal_accepted' && pref.toneDealConfirmedEnabled === false) return false;
+  if ((toneType === 'deal_completed' || toneType === 'deal_cancelled') && pref.toneDealClosedEnabled === false) {
+    return false;
+  }
+  return true;
+}
+
 function buildOptionalVoicePayloadFields(target: DeliveryTarget): Record<string, unknown> {
+  const toneType = getToneTypeForEvent({
+    toneType: target.toneType,
+    eventType: target.eventType,
+    category: target.category,
+  });
   return {
+    ...(target.eventType ? { eventType: target.eventType.slice(0, 60) } : {}),
+    toneType,
     ...(target.voiceScript ? { voiceScript: target.voiceScript.slice(0, 680) } : {}),
     ...(target.approxLocationLabel ? { approxLocationLabel: target.approxLocationLabel.slice(0, 155) } : {}),
     ...(typeof target.distanceKm === 'number' &&
@@ -530,7 +547,7 @@ function collectStageTargets(params: {
     const lang = getLanguageOrDefault(
       pref?.preferredLanguage || w.preferredLanguage || userTokens[0]?.preferredLanguage
     );
-    const playSound = pref?.soundEnabled !== false;
+    const playSound = isToneEnabledForPref(pref, 'new_job');
     const speakVoice = pref?.voiceAlertsEnabled !== false && w.voiceAlertsEnabled !== false;
 
     const msg = buildSmartJobNotificationContent({
@@ -563,6 +580,8 @@ function collectStageTargets(params: {
       jobCategory: jobCategoryStr,
       playSound,
       speakVoice,
+      eventType: 'hiring_request_created',
+      toneType: 'new_job',
       category: 'matchingJobs',
       targetRoute: 'worker-dashboard',
       targetJobId: jobId,
@@ -685,6 +704,13 @@ async function dispatchAndRecordTargets(params: {
 
     const tokenStrings = target.tokens.map((t) => t.token);
     attemptedTokens += tokenStrings.length;
+    const toneType = getToneTypeForEvent({
+      toneType: target.toneType,
+      eventType: target.eventType,
+      category: target.category,
+    });
+    const toneCfg = getToneChannelConfig(toneType);
+    const soundActive = target.playSound !== false;
 
     try {
       const multicastRes = await runtime.messaging.sendEachForMulticast({
@@ -702,6 +728,8 @@ async function dispatchAndRecordTargets(params: {
           demoJobId: target.targetDemoJobId || '',
           dedupeKey: target.dedupeKey,
           lang: target.language,
+          toneType,
+          eventType: target.eventType || '',
           voiceScript: (target.voiceScript || '').slice(0, 680),
           approxLocationLabel: (target.approxLocationLabel || '').slice(0, 155),
           distanceKm:
@@ -710,18 +738,34 @@ async function dispatchAndRecordTargets(params: {
               : '',
           customerName: (target.customerName || '').slice(0, 155),
           jobCategory: (target.jobCategory || '').slice(0, 75),
-          playSound: target.playSound === false ? 'false' : 'true',
+          playSound: soundActive ? 'true' : 'false',
           speakVoice: target.speakVoice === false ? 'false' : 'true',
           speak: target.speakVoice === false ? '0' : '1',
         },
+        android: {
+          priority: 'high',
+          notification: {
+            channelId: toneCfg.channelId,
+            ...(soundActive ? { sound: 'default', defaultSound: true } : { defaultSound: false }),
+            defaultVibrateTimings: false,
+            vibrateTimingsMillis: soundActive ? toneCfg.vibrateMillis : [0],
+            priority: 'max',
+            visibility: 'public',
+          },
+        },
         webpush: {
+          headers: {
+            Urgency: 'high',
+            TTL: '86400',
+          },
           notification: {
             icon: '/pwa-192x192.png',
             badge: '/pwa-192x192.png',
-            tag: safeDocId || target.dedupeKey || 'rojgar-setu-alert',
+            tag: `${toneCfg.channelId}_${safeDocId || target.dedupeKey || 'alert'}`,
             renotify: true,
             requireInteraction: true,
-            silent: target.playSound === false,
+            silent: !soundActive,
+            ...(soundActive ? { vibrate: toneCfg.vibratePattern } : {}),
           },
           fcmOptions: {
             link: target.clickUrl,
@@ -1287,6 +1331,20 @@ export function registerNotificationRoutes(
           ? 'worker'
           : 'employer';
 
+      const resolvedCategory: DeliveryTarget['category'] = eventType.includes('booking')
+        ? 'bookingNotifications'
+        : eventType === 'hiring_request_created'
+        ? 'matchingJobs'
+        : 'applicationUpdates';
+
+      const resolvedTone = getToneTypeForEvent({
+        toneType: typeof req.body?.toneType === 'string' ? req.body.toneType : undefined,
+        eventType,
+        category: resolvedCategory,
+      });
+
+      const playSound = isToneEnabledForPref(pref, resolvedTone);
+
       const target: DeliveryTarget = {
         uid: recipientUid,
         label: resolvedRole === 'worker' ? 'Worker' : 'Customer / Employer',
@@ -1296,11 +1354,10 @@ export function registerNotificationRoutes(
         tokens: tokenSnap.docs.map((d) => ({ docId: d.id, token: String(d.data().token) })),
         title: msg.title,
         body: msg.body,
-        category: eventType.includes('booking')
-          ? 'bookingNotifications'
-          : eventType === 'hiring_request_created'
-          ? 'matchingJobs'
-          : 'applicationUpdates',
+        eventType,
+        toneType: resolvedTone,
+        playSound,
+        category: resolvedCategory,
         targetRoute,
         ...(jobId ? { targetJobId: jobId } : {}),
         clickUrl: `/?route=${encodeURIComponent(targetRoute)}${jobId ? `&jobId=${encodeURIComponent(jobId)}` : ''}`,

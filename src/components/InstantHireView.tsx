@@ -212,6 +212,17 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
     title: string;
   } | null>(null);
 
+  // Quick 1-Step Service Request state
+  const [quickTitle, setQuickTitle] = useState('');
+  const [quickBudget, setQuickBudget] = useState<number>(600);
+  const [quickSubmitting, setQuickSubmitting] = useState(false);
+  const [quickError, setQuickError] = useState('');
+  const [quickSuccess, setQuickSuccess] = useState<{
+    title: string;
+    category: string;
+    notifiedCount: number;
+  } | null>(null);
+
   useEffect(() => {
     if (initialCategory) {
       setSelectedCategory(initialCategory);
@@ -742,6 +753,115 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
     }
   };
 
+  const handleQuickFindWorkersSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setQuickError('');
+    setQuickSuccess(null);
+
+    if (!user?.emailVerified) {
+      await signInWithGoogle();
+      return;
+    }
+
+    const cleanCategory = (selectedCategory || EMPLOYMENT_CATEGORIES[0].en).trim();
+    const effState = locationPin?.state || selectedState || employerProfile?.state || 'Maharashtra';
+    const effDistrict =
+      locationPin?.district ||
+      selectedDistrict ||
+      employerProfile?.district ||
+      INDIA_STATES_DISTRICTS.find((s) => s.name === effState)?.districts[0]?.name ||
+      'Chandrapur';
+    const coords = locationPin
+      ? { lat: locationPin.lat, lng: locationPin.lng }
+      : getDistrictCoordinates(effState, effDistrict);
+    const safeLocality =
+      (locationPin?.cityOrVillage || locationSearchInput.trim() || effDistrict).slice(0, 100);
+    const cleanTitle =
+      quickTitle.trim().slice(0, 140) || `${cleanCategory} needed in ${safeLocality}`;
+    const safeTitle = cleanTitle.length >= 3 ? cleanTitle : `${cleanCategory} Work Needed`;
+    const customerName = (
+      employerProfile?.businessName ||
+      user.displayName ||
+      user.email?.split('@')[0] ||
+      'ROJGAR SETU Customer'
+    )
+      .trim()
+      .slice(0, 160);
+    const approxLocationLabel = buildApproxLocationLabel({
+      cityOrVillage: safeLocality,
+      district: effDistrict,
+      state: effState,
+    });
+
+    setQuickSubmitting(true);
+    try {
+      const result = await createInstantHireRequest(
+        {
+          employerUid: user.uid,
+          employerName: customerName.length >= 2 ? customerName : 'Customer',
+          title: safeTitle,
+          category: cleanCategory,
+          description: `${safeTitle} in ${safeLocality}, ${effDistrict}, ${effState}.`,
+          workersRequired: 1,
+          requiredSkills: [cleanCategory],
+          state: effState,
+          district: effDistrict,
+          cityOrVillage: safeLocality,
+          workLocationLabel: `${safeLocality}, ${effDistrict}`.slice(0, 160),
+          approxLocationLabel: approxLocationLabel.slice(0, 160),
+          initialRadiusKm: 10,
+          currentRadiusKm: 10,
+          lat: coords.lat,
+          lng: coords.lng,
+          jobDate: new Date().toISOString().split('T')[0],
+          startTime: '09:30',
+          duration: 'Same Day',
+          workType: 'urgent',
+          offeredWage: Math.max(0, Number(quickBudget) || 0),
+          wageUnit: 'daily',
+          paymentTerms: 'Direct UPI / Cash upon completion',
+          contactPreference: 'phone_after_confirm',
+          isWomenFriendly: false,
+          isAccessible: false,
+          biddingEnabled: true,
+        },
+        [],
+        `${safeTitle} · ${safeLocality}, ${effDistrict}`,
+        `quick_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        workers
+      );
+
+      await recordCustomerOrderPreference(user.uid, {
+        kind: 'hire',
+        categoryOrVehicleType: cleanCategory,
+        orderTitle: safeTitle,
+        state: effState,
+        district: effDistrict,
+        cityOrVillage: safeLocality,
+        lat: coords.lat,
+        lng: coords.lng,
+      });
+
+      void callNotificationApi('/api/notifications/send-matching-job', {
+        jobId: result.jobId,
+        stageRadiusKm: result.finalRadiusKm ?? 10,
+      }).catch(() => undefined);
+
+      setQuickSuccess({
+        title: safeTitle,
+        category: cleanCategory,
+        notifiedCount: result.notifiedCount,
+      });
+      setQuickTitle('');
+    } catch (err) {
+      setQuickError(
+        err instanceof Error ? err.message : 'Unable to send request right now. Please try again.'
+      );
+    } finally {
+      setQuickSubmitting(false);
+    }
+  };
+
   const totalTrayEstimate = useMemo(
     () => selectedWorkers.reduce((sum, w) => sum + (w.expectedWage || 0), 0),
     [selectedWorkers]
@@ -1083,6 +1203,132 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
             })}
           </div>
         </div>
+      </div>
+
+      {/* 2. Quick 1-Step Service Request Card */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-5">
+        <form
+          onSubmit={handleQuickFindWorkersSubmit}
+          className="bg-white border-2 border-[#0B3B75] rounded-lg p-4 sm:p-5 shadow-xs space-y-3"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <span className="text-[11px] font-bold uppercase tracking-wider text-[#E06D1B]">
+                {tr(lang, 'Step 1 · Simple Request', 'चरण 1 · आसान अनुरोध', 'पायरी १ · सोपी विनंती')}
+              </span>
+              <h2 className="font-display text-base sm:text-lg font-bold text-[#0B3B75]">
+                {tr(
+                  lang,
+                  'Request Nearby Workers in One Click',
+                  'एक क्लिक में नज़दीकी कामगारों को अनुरोध भेजें',
+                  'एका क्लिकमध्ये जवळच्या कामगारांना कामाची विनंती पाठवा'
+                )}
+              </h2>
+            </div>
+            <span className="text-xs font-medium text-slate-600 inline-flex items-center gap-1">
+              <MapPin className="w-3.5 h-3.5 text-[#E06D1B]" />
+              {locationPin?.label ||
+                [selectedDistrict, selectedState].filter(Boolean).join(', ') ||
+                'Chandrapur, Maharashtra'}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
+            <div className="sm:col-span-3">
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                {tr(lang, 'Service Category', 'काम की श्रेणी', 'कामाचा प्रकार')}
+              </label>
+              <select
+                value={selectedCategory || EMPLOYMENT_CATEGORIES[0].en}
+                onChange={(e) => setSelectedCategory(e.target.value)}
+                className="w-full min-h-[44px] px-3 py-2 border border-slate-300 rounded-md text-xs sm:text-sm font-semibold text-[#0B3B75] bg-slate-50"
+              >
+                {EMPLOYMENT_CATEGORIES.map((cat) => (
+                  <option key={cat.id} value={cat.en}>
+                    {lang === 'hi' ? cat.hi : lang === 'mr' ? cat.mr : cat.en}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="sm:col-span-4">
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                {tr(lang, 'Work Needed', 'क्या काम करवाना है?', 'कोणते काम आहे?')}
+              </label>
+              <input
+                type="text"
+                maxLength={140}
+                value={quickTitle}
+                onChange={(e) => setQuickTitle(e.target.value)}
+                placeholder={tr(
+                  lang,
+                  'e.g., Door fitting / Fan wiring / Tap repair',
+                  'जैसे: दरवाजा फिटिंग / पंखा वायरिंग / नल रिपेयर',
+                  'उदा. दरवाजा फिटिंग / फॅन वायरिंग / नळ दुरुस्ती'
+                )}
+                className="w-full min-h-[44px] px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
+              />
+            </div>
+
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                {tr(lang, 'Budget (₹)', 'बजट (₹)', 'अंदाजे दर (₹)')}
+              </label>
+              <input
+                type="number"
+                min={0}
+                max={500000}
+                value={quickBudget}
+                onChange={(e) => setQuickBudget(Number(e.target.value))}
+                className="w-full min-h-[44px] px-3 py-2 border border-slate-300 rounded-md text-sm font-mono-tabular bg-white"
+              />
+            </div>
+
+            <div className="sm:col-span-3">
+              <button
+                type="submit"
+                disabled={quickSubmitting}
+                className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-md bg-[#E06D1B] text-white text-sm font-extrabold hover:bg-[#c55b10] disabled:opacity-60 whitespace-nowrap cursor-pointer"
+              >
+                <Zap className="w-4 h-4 shrink-0" />
+                <span>
+                  {quickSubmitting
+                    ? tr(lang, 'Sending...', 'भेज रहे हैं...', 'पाठवत आहे...')
+                    : tr(lang, 'FIND WORKERS', 'कारीगर खोजें', 'कामगार शोधा')}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          {quickError && (
+            <p className="text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
+              {quickError}
+            </p>
+          )}
+
+          {quickSuccess && (
+            <div className="p-3 rounded-md bg-emerald-50 border border-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-xs sm:text-sm font-semibold text-emerald-900">
+                <CheckCircle2 className="w-4 h-4 text-[#15803D] shrink-0" />
+                <span>
+                  {tr(
+                    lang,
+                    `Request "${quickSuccess.title}" sent! ${quickSuccess.notifiedCount} matching ${quickSuccess.category} worker(s) alerted.`,
+                    `"${quickSuccess.title}" अनुरोध भेजा गया! ${quickSuccess.notifiedCount} कारीगरों को सूचना भेजी गई।`,
+                    `"${quickSuccess.title}" विनंती पाठवली! ${quickSuccess.notifiedCount} कामगारांना अलर्ट पाठवला.`
+                  )}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => onNavigate('employer-dashboard')}
+                className="min-h-[40px] px-3 py-1.5 rounded bg-[#0B3B75] text-white text-xs font-bold hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                {tr(lang, 'Track Offers in Dashboard', 'डैशबोर्ड में ऑफर देखें', 'डॅशबोर्डवर ऑफर पहा')}
+              </button>
+            </div>
+          )}
+        </form>
       </div>
 
       {/* 3. Results Section */}

@@ -7,6 +7,12 @@ import {
   ShieldCheck,
 } from 'lucide-react';
 import {
+  getToneChannelConfig,
+  getVisibleDealStatusLabel,
+  toVisibleDealStage,
+  VISIBLE_DEAL_STAGE_ORDER,
+} from '../lib/dealWorkflow';
+import {
   getEffectiveDealStatus,
   sendDealMessage,
   subscribeDealMessages,
@@ -19,33 +25,25 @@ function tr(lang: Language, en: string, hi: string, mr: string): string {
   return lang === 'hi' ? hi : lang === 'mr' ? mr : en;
 }
 
-export function getDealStatusBadgeStyle(status: DealStatus): string {
-  switch (status) {
-    case 'OFFER_ACCEPTED':
-    case 'DEAL_CONFIRMED':
+export function getDealStatusBadgeStyle(status: DealStatus | JobApplication): string {
+  const stage =
+    typeof status === 'string'
+      ? toVisibleDealStage({ dealStatus: status, status })
+      : toVisibleDealStage(status);
+  switch (stage) {
+    case 'WORK_CONFIRMED':
     case 'WORK_IN_PROGRESS':
       return 'bg-emerald-100 text-emerald-900 border-emerald-300';
     case 'WORK_COMPLETED':
       return 'bg-[#0B3B75] text-white border-[#0B3B75]';
-    case 'OFFER_RECEIVED':
+    case 'OFFER_SENT':
       return 'bg-amber-100 text-[#C25E00] border-amber-300';
     case 'CANCELLED':
-    case 'REJECTED':
       return 'bg-red-100 text-red-900 border-red-300';
     default:
       return 'bg-blue-100 text-[#0B3B75] border-blue-300';
   }
 }
-
-const PROGRESS_STEPS: DealStatus[] = [
-  'REQUESTED',
-  'NOTIFIED',
-  'OFFER_RECEIVED',
-  'OFFER_ACCEPTED',
-  'DEAL_CONFIRMED',
-  'WORK_IN_PROGRESS',
-  'WORK_COMPLETED',
-];
 
 interface DealCoordinationPanelProps {
   application: JobApplication;
@@ -66,6 +64,8 @@ export const DealCoordinationPanel: React.FC<DealCoordinationPanelProps> = ({
 }) => {
   const { lang } = useLanguage();
   const effectiveStatus = getEffectiveDealStatus(application);
+  const visibleStage = toVisibleDealStage(application);
+  const visibleStatusLabel = getVisibleDealStatusLabel(effectiveStatus, lang);
   const isAcceptedOrActive =
     effectiveStatus === 'OFFER_ACCEPTED' ||
     effectiveStatus === 'DEAL_CONFIRMED' ||
@@ -104,8 +104,8 @@ export const DealCoordinationPanel: React.FC<DealCoordinationPanelProps> = ({
     }
   };
 
-  const stepIndex = PROGRESS_STEPS.indexOf(effectiveStatus);
-  const isClosed = effectiveStatus === 'CANCELLED' || effectiveStatus === 'REJECTED';
+  const stepIndex = VISIBLE_DEAL_STAGE_ORDER.indexOf(visibleStage);
+  const isClosed = visibleStage === 'CANCELLED';
 
   return (
     <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50/80 p-3.5 space-y-3">
@@ -113,18 +113,18 @@ export const DealCoordinationPanel: React.FC<DealCoordinationPanelProps> = ({
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <span
-            className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded border text-[11px] font-mono-tabular font-bold uppercase ${getDealStatusBadgeStyle(
+            className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded border text-[11px] font-bold ${getDealStatusBadgeStyle(
               effectiveStatus
             )}`}
           >
             <ShieldCheck className="w-3.5 h-3.5" />
-            {effectiveStatus}
+            {visibleStatusLabel}
           </span>
           {(application.offerAmount || application.proposedWage) > 0 && (
             <span className="text-xs font-mono-tabular font-bold text-[#15803D]">
               {application.agreedPrice
-                ? `Agreed: ₹${application.agreedPrice.toLocaleString('en-IN')}`
-                : `Offer: ₹${(application.offerAmount ?? application.proposedWage).toLocaleString('en-IN')}`}
+                ? `${tr(lang, 'Agreed', 'तय दर', 'निश्चित दर')}: ₹${application.agreedPrice.toLocaleString('en-IN')}`
+                : `${tr(lang, 'Offer', 'ऑफर', 'ऑफर')}: ₹${(application.offerAmount ?? application.proposedWage).toLocaleString('en-IN')}`}
             </span>
           )}
           {application.estimatedArrivalTime && (
@@ -147,25 +147,34 @@ export const DealCoordinationPanel: React.FC<DealCoordinationPanelProps> = ({
         </button>
       </div>
 
-      {/* Common Deal Lifecycle Progress Bar */}
-      {!isClosed && (
-        <div className="grid grid-cols-7 gap-1 pt-0.5">
-          {PROGRESS_STEPS.map((st, idx) => {
+      {/* Simplified 5-Step Deal Lifecycle Progress Bar */}
+      {isClosed ? (
+        <div
+          className={`text-[11px] font-semibold px-2.5 py-1 rounded border inline-flex items-center gap-1.5 ${
+            getToneChannelConfig('deal_cancelled').badgeColorClass
+          }`}
+        >
+          {visibleStatusLabel}
+        </div>
+      ) : (
+        <div className="grid grid-cols-5 gap-1.5 pt-0.5">
+          {VISIBLE_DEAL_STAGE_ORDER.map((stage, idx) => {
             const done = stepIndex >= idx;
+            const stageLabel = getVisibleDealStatusLabel(stage, lang);
             return (
-              <div key={st} className="space-y-1">
+              <div key={stage} className="space-y-1">
                 <div
                   className={`h-1.5 rounded-full transition-colors ${
                     done ? 'bg-[#15803D]' : 'bg-slate-200'
                   }`}
                 />
                 <div
-                  className={`text-[9px] font-mono-tabular truncate text-center ${
+                  className={`text-[10px] leading-tight truncate text-center ${
                     done ? 'font-bold text-[#0B3B75]' : 'text-slate-400'
                   }`}
-                  title={st}
+                  title={stageLabel}
                 >
-                  {st.replace('_', ' ')}
+                  {stageLabel}
                 </div>
               </div>
             );

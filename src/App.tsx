@@ -16,8 +16,9 @@ import {
   subscribeVehicleListings,
 } from './lib/firestoreService';
 import { buildSmartJobVoiceScript } from './lib/smartVoiceJobAlert';
+import { getToneChannelConfig, getToneTypeForEvent } from './lib/dealWorkflow';
 import {
-  playNotificationChime,
+  playNotificationTone,
   speakJobAlert,
   stopVoiceAlert,
   unlockAudioOnUserGesture,
@@ -28,6 +29,7 @@ import type {
   JobPosting,
   Language,
   NotificationPreferences,
+  NotificationToneType,
   PageRoute,
   PlatformAnnouncement,
   PublicEmployerProfile,
@@ -86,6 +88,27 @@ function isValidRoute(value: string | undefined | null): value is PageRoute {
   return Boolean(value && VALID_ROUTES.includes(value as PageRoute));
 }
 
+function isToneEnabledForUser(
+  toneType: NotificationToneType,
+  prefs: NotificationPreferences | null
+): boolean {
+  if (!prefs) return true;
+  if (prefs.masterEnabled === false || prefs.soundEnabled === false) return false;
+  switch (toneType) {
+    case 'new_job':
+      return prefs.toneNewJobEnabled !== false;
+    case 'new_offer':
+      return prefs.toneNewOfferEnabled !== false;
+    case 'deal_accepted':
+      return prefs.toneDealConfirmedEnabled !== false;
+    case 'deal_completed':
+    case 'deal_cancelled':
+      return prefs.toneDealClosedEnabled !== false;
+    default:
+      return true;
+  }
+}
+
 const AppShell: React.FC = () => {
   const { user, isAdmin } = useAuth();
   const { lang } = useLanguage();
@@ -115,6 +138,8 @@ const AppShell: React.FC = () => {
     distanceKm?: number;
     playSound?: boolean;
     speakVoice?: boolean;
+    toneType?: NotificationToneType;
+    eventType?: string;
     speechBlockedHint?: boolean;
   } | null>(null);
 
@@ -153,11 +178,18 @@ const AppShell: React.FC = () => {
       lang?: Language;
       playSound?: boolean;
       speakVoice?: boolean;
+      toneType?: NotificationToneType;
+      eventType?: string;
     }) => {
       if (voiceMuted) return;
       if (notifPrefs && notifPrefs.masterEnabled === false) return;
 
-      const allowSound = opts.playSound !== false && (!notifPrefs || notifPrefs.soundEnabled !== false);
+      const resolvedTone = getToneTypeForEvent({
+        toneType: opts.toneType,
+        eventType: opts.eventType,
+      });
+      const allowSound =
+        opts.playSound !== false && isToneEnabledForUser(resolvedTone, notifPrefs);
       const allowVoice =
         opts.speakVoice !== false && (!notifPrefs || notifPrefs.voiceAlertsEnabled !== false);
 
@@ -167,12 +199,13 @@ const AppShell: React.FC = () => {
           lang: opts.lang || notifPrefs?.preferredLanguage || lang,
           soundEnabled: allowSound,
           voiceEnabled: true,
+          toneType: resolvedTone,
         });
         if (res.speechStatus === 'blocked_or_silent') {
           setForegroundPush((prev) => (prev ? { ...prev, speechBlockedHint: true } : prev));
         }
       } else if (allowSound) {
-        await playNotificationChime();
+        await playNotificationTone(resolvedTone);
       }
     },
     [voiceMuted, notifPrefs, lang]
@@ -258,12 +291,14 @@ const AppShell: React.FC = () => {
       lang: spokenLang,
       playSound: true,
       speakVoice: true,
+      toneType: 'new_job',
     });
     void triggerSmartVoicePlayback({
       voiceScript: script,
       lang: spokenLang,
       playSound: true,
       speakVoice: true,
+      toneType: 'new_job',
     });
   }, [bootSpeakRequest, jobs, notifPrefs?.preferredLanguage, lang, triggerSmartVoicePlayback]);
 
@@ -317,6 +352,10 @@ const AppShell: React.FC = () => {
         ? 'worker-dashboard'
         : 'home';
       const spokenLang = payload.lang || notifPrefs?.preferredLanguage || lang;
+      const resolvedTone = getToneTypeForEvent({
+        toneType: payload.toneType,
+        eventType: payload.eventType,
+      });
       setForegroundPush({
         title: payload.title,
         body: payload.body,
@@ -329,12 +368,16 @@ const AppShell: React.FC = () => {
         distanceKm: payload.distanceKm,
         playSound: payload.playSound,
         speakVoice: payload.speakVoice,
+        toneType: resolvedTone,
+        eventType: payload.eventType,
       });
       void triggerSmartVoicePlayback({
         voiceScript: payload.voiceScript,
         lang: spokenLang,
         playSound: payload.playSound,
         speakVoice: payload.speakVoice,
+        toneType: resolvedTone,
+        eventType: payload.eventType,
       });
     }).then((fn) => {
       if (active) unsub = fn;
@@ -395,6 +438,7 @@ const AppShell: React.FC = () => {
       list.forEach((n) => seenNotifIdsRef.current.add(n.id));
       if (newestUnread) {
         const spokenLang = newestUnread.language || notifPrefs?.preferredLanguage || lang;
+        const resolvedTone = getToneTypeForEvent(newestUnread);
         setForegroundPush({
           title: newestUnread.title,
           body: newestUnread.body,
@@ -407,6 +451,8 @@ const AppShell: React.FC = () => {
           distanceKm: newestUnread.distanceKm,
           playSound: newestUnread.playSound,
           speakVoice: newestUnread.speakVoice,
+          toneType: resolvedTone,
+          eventType: newestUnread.eventType,
         });
         if (
           newestUnread.category === 'matchingJobs' ||
@@ -418,9 +464,15 @@ const AppShell: React.FC = () => {
             lang: spokenLang,
             playSound: newestUnread.playSound,
             speakVoice: newestUnread.speakVoice,
+            toneType: resolvedTone,
+            eventType: newestUnread.eventType,
           });
-        } else if (!voiceMuted && (!notifPrefs || notifPrefs.soundEnabled !== false)) {
-          void playNotificationChime();
+        } else if (
+          !voiceMuted &&
+          newestUnread.playSound !== false &&
+          isToneEnabledForUser(resolvedTone, notifPrefs)
+        ) {
+          void playNotificationTone(resolvedTone);
         }
       }
     });
@@ -452,100 +504,126 @@ const AppShell: React.FC = () => {
   return (
     <div id="top" className="min-h-screen flex flex-col bg-[#F4F6F9] text-slate-900">
       {/* Live Foreground Push & Smart Voice Alert Toast */}
-      {foregroundPush && (
-        <div
-          role="status"
-          className="fixed top-16 right-4 z-50 max-w-sm w-[calc(100%-2rem)] bg-white border-2 border-[#E06D1B] rounded-lg shadow-xl p-4 space-y-2.5"
-        >
-          <div className="flex items-start justify-between gap-2">
-            <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[#C25E00]">
-              <BellRing className="w-4 h-4 text-[#E06D1B] shrink-0" />
-              <span>ROJGAR SETU Notification</span>
+      {foregroundPush && (() => {
+        const activeTone = getToneTypeForEvent({
+          toneType: foregroundPush.toneType,
+          eventType: foregroundPush.eventType,
+        });
+        const toneCfg = getToneChannelConfig(activeTone);
+        return (
+          <div
+            role="status"
+            className={`fixed top-16 right-4 z-50 max-w-sm w-[calc(100%-2rem)] bg-white border-2 ${toneCfg.toastBorderClass} rounded-lg shadow-xl p-4 space-y-2.5`}
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <BellRing className="w-4 h-4 text-[#E06D1B] shrink-0" />
+                <span className="text-xs font-bold uppercase tracking-wider text-[#0B3B75]">
+                  ROJGAR SETU
+                </span>
+                <span
+                  className={`px-2 py-0.5 rounded border text-[10px] font-bold ${toneCfg.badgeColorClass}`}
+                >
+                  {toneCfg.label[lang]}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  stopVoiceAlert();
+                  setForegroundPush(null);
+                }}
+                aria-label="Close notification"
+                className="p-0.5 rounded hover:bg-slate-100 text-slate-500 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => {
-                stopVoiceAlert();
-                setForegroundPush(null);
-              }}
-              aria-label="Close notification"
-              className="p-0.5 rounded hover:bg-slate-100 text-slate-500 cursor-pointer"
-            >
-              <X className="w-4 h-4" />
-            </button>
-          </div>
-          <div>
-            <div className="font-display text-sm font-bold text-[#0B3B75]">{foregroundPush.title}</div>
-            <p className="text-xs text-slate-600 mt-0.5">{foregroundPush.body}</p>
-            {foregroundPush.speechBlockedHint && (
-              <p className="text-[11px] font-semibold text-[#C25E00] mt-1">
-                Tap Replay Voice below to hear the spoken job announcement.
-              </p>
-            )}
-          </div>
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            {foregroundPush.voiceScript && (
+            <div>
+              <div className="font-display text-sm font-bold text-[#0B3B75]">{foregroundPush.title}</div>
+              <p className="text-xs text-slate-600 mt-0.5">{foregroundPush.body}</p>
+              {foregroundPush.speechBlockedHint && (
+                <p className="text-[11px] font-semibold text-[#C25E00] mt-1">
+                  Tap Replay Voice below to hear the spoken job announcement.
+                </p>
+              )}
+            </div>
+            <div className="flex flex-wrap items-center justify-end gap-2">
               <button
                 type="button"
                 onClick={() => {
                   unlockAudioOnUserGesture();
-                  setForegroundPush((prev) => (prev ? { ...prev, speechBlockedHint: false } : prev));
-                  void speakJobAlert({
-                    text: foregroundPush.voiceScript!,
-                    lang: foregroundPush.lang || notifPrefs?.preferredLanguage || lang,
-                    soundEnabled: false,
-                    voiceEnabled: true,
-                  });
+                  void playNotificationTone(activeTone);
                 }}
-                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded border border-[#0B3B75] text-xs font-bold text-[#0B3B75] hover:bg-slate-50 cursor-pointer"
+                className="min-h-[40px] inline-flex items-center gap-1 px-2.5 py-1.5 rounded border border-slate-300 text-xs font-bold text-[#0B3B75] hover:bg-slate-50 cursor-pointer"
               >
                 <Volume2 className="w-3.5 h-3.5 text-[#E06D1B]" />
-                <span>Replay Voice</span>
+                <span>Replay Tone</span>
               </button>
-            )}
-            <button
-              type="button"
-              onClick={() => {
-                setVoiceMuted((prev) => {
-                  const next = !prev;
-                  if (next) stopVoiceAlert();
-                  return next;
-                });
-              }}
-              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
-            >
-              {voiceMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
-              <span>{voiceMuted ? 'Unmute' : 'Mute'}</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                stopVoiceAlert();
-                setForegroundPush(null);
-              }}
-              className="px-2.5 py-1.5 rounded border border-slate-300 text-xs font-semibold text-slate-700 cursor-pointer"
-            >
-              Dismiss
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                const target = foregroundPush;
-                stopVoiceAlert();
-                setForegroundPush(null);
-                navigateToTarget(
-                  target.route || 'worker-dashboard',
-                  target.jobId,
-                  target.demoJobId
-                );
-              }}
-              className="px-3 py-1.5 rounded bg-[#0B3B75] text-white text-xs font-bold hover:bg-slate-800 cursor-pointer"
-            >
-              {foregroundPush.jobId ? 'Open & Send Offer' : 'Open'}
-            </button>
+              {foregroundPush.voiceScript && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    unlockAudioOnUserGesture();
+                    setForegroundPush((prev) => (prev ? { ...prev, speechBlockedHint: false } : prev));
+                    void speakJobAlert({
+                      text: foregroundPush.voiceScript!,
+                      lang: foregroundPush.lang || notifPrefs?.preferredLanguage || lang,
+                      soundEnabled: false,
+                      voiceEnabled: true,
+                      toneType: activeTone,
+                    });
+                  }}
+                  className="min-h-[40px] inline-flex items-center gap-1 px-2.5 py-1.5 rounded border border-[#0B3B75] text-xs font-bold text-[#0B3B75] hover:bg-slate-50 cursor-pointer"
+                >
+                  <Volume2 className="w-3.5 h-3.5 text-[#E06D1B]" />
+                  <span>Replay Voice</span>
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setVoiceMuted((prev) => {
+                    const next = !prev;
+                    if (next) stopVoiceAlert();
+                    return next;
+                  });
+                }}
+                className="min-h-[40px] inline-flex items-center gap-1 px-2.5 py-1.5 rounded border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+              >
+                {voiceMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
+                <span>{voiceMuted ? 'Unmute' : 'Mute'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  stopVoiceAlert();
+                  setForegroundPush(null);
+                }}
+                className="min-h-[40px] px-2.5 py-1.5 rounded border border-slate-300 text-xs font-semibold text-slate-700 cursor-pointer"
+              >
+                Dismiss
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const target = foregroundPush;
+                  stopVoiceAlert();
+                  setForegroundPush(null);
+                  navigateToTarget(
+                    target.route || 'worker-dashboard',
+                    target.jobId,
+                    target.demoJobId
+                  );
+                }}
+                className="min-h-[40px] px-3 py-1.5 rounded bg-[#0B3B75] text-white text-xs font-bold hover:bg-slate-800 cursor-pointer"
+              >
+                {foregroundPush.jobId ? 'Open & Send Offer' : 'Open'}
+              </button>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
       {/* Case A Demo Key Quota Exceeded Banner */}
       {gmpQuotaExceeded && (
         <div

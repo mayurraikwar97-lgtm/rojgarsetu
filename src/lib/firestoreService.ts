@@ -51,6 +51,7 @@ import type {
   NotificationCategoryKey,
   NotificationDeliveryLog,
   NotificationPreferences,
+  NotificationToneType,
   PartnershipEnquiry,
   PlatformAnnouncement,
   PublicEmployerProfile,
@@ -63,6 +64,7 @@ import type {
   VerificationStatus,
   WorkerPrivateInfo,
 } from '../types/domain';
+import { getToneTypeForEvent } from './dealWorkflow';
 
 export { normalizeCategoryToken };
 
@@ -556,6 +558,7 @@ export async function dispatchTwoWayDealNotification(params: {
   jobCategory?: string;
   playSound?: boolean;
   speakVoice?: boolean;
+  toneType?: NotificationToneType;
   metadataLabel?: string;
   targetRoute: string;
   targetJobId?: string;
@@ -573,6 +576,12 @@ export async function dispatchTwoWayDealNotification(params: {
   if (!params.recipientUid || params.recipientUid === params.senderUid) return;
   const safeId = sanitizeSafeId(params.dedupeKey, 'ntf');
   const notifRef = doc(db, 'notifications', safeId);
+  const resolvedTone = getToneTypeForEvent({
+    toneType: params.toneType,
+    eventType: params.eventType,
+    dealStatus: params.dealStatus,
+    category: params.category,
+  });
 
   const validDist =
     typeof params.distanceKm === 'number' &&
@@ -593,6 +602,7 @@ export async function dispatchTwoWayDealNotification(params: {
         isDemo: false,
         category: params.category,
         eventType: params.eventType,
+        toneType: resolvedTone,
         ...(params.dealStatus ? { dealStatus: params.dealStatus } : {}),
         title: params.title.slice(0, 160),
         body: params.body.slice(0, 500),
@@ -625,6 +635,7 @@ export async function dispatchTwoWayDealNotification(params: {
       recipientUid: params.recipientUid,
       recipientRole: params.recipientRole,
       eventType: params.eventType,
+      toneType: resolvedTone,
       workerName: params.pushPayload.workerName,
       jobTitle: params.pushPayload.jobTitle,
       ...(params.targetJobId ? { jobId: params.targetJobId } : {}),
@@ -821,6 +832,7 @@ export async function broadcastSmartJobAlerts(params: {
       senderName: job.employerName,
       category: 'matchingJobs',
       eventType: 'hiring_request_created',
+      toneType: 'new_job',
       dealStatus: 'NOTIFIED',
       title: msg.title,
       body: msg.body,
@@ -1042,6 +1054,7 @@ export async function createInstantHireRequest(
         senderName: jobPayload.employerName,
         category: 'matchingJobs',
         eventType: 'hiring_request_created',
+        toneType: 'new_job',
         dealStatus: 'NOTIFIED',
         title: msg.title,
         body: msg.body,
@@ -1166,6 +1179,7 @@ export async function applyToJob(
       senderName: payload.workerName,
       category: 'applicationUpdates',
       eventType: 'worker_offer_sent',
+      toneType: 'new_offer',
       dealStatus: 'OFFER_RECEIVED',
       title: `New Worker Offer: ${payload.jobTitle}`,
       body: `${payload.workerName} (${payload.workerPrimarySkill}) offered ₹${payload.offerAmount ?? payload.proposedWage}${payload.estimatedArrivalTime ? ` · ETA: ${payload.estimatedArrivalTime}` : ''}${payload.offerMessage || payload.note ? ` — "${(payload.offerMessage || payload.note || '').slice(0, 100)}"` : ''}`,
@@ -1228,6 +1242,7 @@ export async function submitWorkerOffer(params: {
         senderName: worker.displayName,
         category: 'applicationUpdates',
         eventType: 'worker_offer_sent',
+        toneType: 'new_offer',
         dealStatus: 'OFFER_RECEIVED',
         title: `New Offer from ${worker.displayName}: ${job.title}`,
         body: `${worker.displayName} (${worker.primarySkill}) sent an offer of ₹${price} · ETA: ${eta}${message ? ` — "${message.slice(0, 100)}"` : ''}`,
@@ -1275,7 +1290,7 @@ export async function respondToHiringInvite(params: {
   jobLocationLabel?: string;
 }): Promise<void> {
   const { app, decision, workerName, jobLocationLabel } = params;
-  const nextDealStatus: DealStatus = decision === 'accepted' ? 'OFFER_ACCEPTED' : 'REJECTED';
+  const nextDealStatus: DealStatus = decision === 'accepted' ? 'DEAL_CONFIRMED' : 'CANCELLED';
   const path = `applications/${app.id}`;
 
   try {
@@ -1283,13 +1298,14 @@ export async function respondToHiringInvite(params: {
       status: decision,
       dealStatus: nextDealStatus,
       liveTrackingAuthorized: decision === 'accepted',
+      ...(decision === 'accepted' ? { dealConfirmedAt: serverTimestamp() } : { cancelledAt: serverTimestamp(), cancelledByUid: app.workerUid }),
       updatedAt: serverTimestamp(),
     });
 
     if (decision === 'accepted') {
       await updateDoc(doc(db, 'jobs', app.jobId), {
         status: 'in_progress',
-        dealStatus: 'OFFER_ACCEPTED',
+        dealStatus: 'DEAL_CONFIRMED',
         acceptedApplicationId: app.id,
         acceptedWorkerUid: app.workerUid,
         updatedAt: serverTimestamp(),
@@ -1302,17 +1318,18 @@ export async function respondToHiringInvite(params: {
       senderUid: app.workerUid,
       senderName: workerName || app.workerName,
       category: 'bookingNotifications',
-      eventType: decision === 'accepted' ? 'job_request_accepted' : 'job_request_rejected',
+      eventType: decision === 'accepted' ? 'deal_confirmed' : 'job_request_rejected',
+      toneType: decision === 'accepted' ? 'deal_accepted' : 'deal_cancelled',
       dealStatus: nextDealStatus,
       title:
         decision === 'accepted'
-          ? `Request Accepted: ${app.jobTitle}`
+          ? `Work Confirmed: ${app.jobTitle}`
           : `Request Declined: ${app.jobTitle}`,
       body:
         decision === 'accepted'
-          ? `${workerName || app.workerName} accepted your hiring request at ₹${app.proposedWage}${jobLocationLabel ? ` (${jobLocationLabel})` : ''}. Confirm deal or share live location on Customer Dashboard.`
-          : `${workerName || app.workerName} declined your hiring request for ${app.jobTitle}.`,
-      metadataLabel: `₹${app.proposedWage} · ${nextDealStatus}`,
+          ? `${workerName || app.workerName} accepted and confirmed "${app.jobTitle}" at ₹${app.proposedWage}${jobLocationLabel ? ` (${jobLocationLabel})` : ''}. Live location & chat are now active.`
+          : `${workerName || app.workerName} declined your request for ${app.jobTitle}.`,
+      metadataLabel: `₹${app.proposedWage} · ${decision === 'accepted' ? 'Work Confirmed' : 'Cancelled'}`,
       targetRoute: 'employer-dashboard',
       targetJobId: app.jobId,
       targetApplicationId: app.id,
@@ -1342,7 +1359,7 @@ export async function respondToWorkerOffer(params: {
 }): Promise<void> {
   const { app, decision, customerName, jobLocationLabel, photoGrantContext } = params;
   const agreedPrice = app.offerAmount ?? app.proposedWage;
-  const nextDealStatus: DealStatus = decision === 'accepted' ? 'OFFER_ACCEPTED' : 'REJECTED';
+  const nextDealStatus: DealStatus = decision === 'accepted' ? 'DEAL_CONFIRMED' : 'CANCELLED';
   const loc = jobLocationLabel || app.jobLocationLabel || app.jobDistrict || '';
   const path = `applications/${app.id}`;
 
@@ -1350,14 +1367,23 @@ export async function respondToWorkerOffer(params: {
     await updateDoc(doc(db, 'applications', app.id), {
       status: decision,
       dealStatus: nextDealStatus,
-      ...(decision === 'accepted' ? { agreedPrice } : {}),
+      ...(decision === 'accepted'
+        ? {
+            agreedPrice,
+            dealConfirmedAt: serverTimestamp(),
+            liveTrackingAuthorized: true,
+          }
+        : {
+            cancelledAt: serverTimestamp(),
+            cancelledByUid: app.employerUid,
+          }),
       updatedAt: serverTimestamp(),
     });
 
     if (decision === 'accepted') {
       await updateDoc(doc(db, 'jobs', app.jobId), {
         status: 'in_progress',
-        dealStatus: 'OFFER_ACCEPTED',
+        dealStatus: 'DEAL_CONFIRMED',
         acceptedApplicationId: app.id,
         acceptedWorkerUid: app.workerUid,
         updatedAt: serverTimestamp(),
@@ -1380,19 +1406,20 @@ export async function respondToWorkerOffer(params: {
       senderUid: app.employerUid,
       senderName: customerName,
       category: 'applicationUpdates',
-      eventType: decision === 'accepted' ? 'offer_accepted' : 'offer_rejected',
+      eventType: decision === 'accepted' ? 'deal_confirmed' : 'offer_rejected',
+      toneType: decision === 'accepted' ? 'deal_accepted' : 'deal_cancelled',
       dealStatus: nextDealStatus,
       title:
         decision === 'accepted'
-          ? `Congratulations! Offer Accepted: ${app.jobTitle}`
+          ? 'Congratulations! Your work has been confirmed.'
           : `Offer Not Accepted: ${app.jobTitle}`,
       body:
         decision === 'accepted'
-          ? `Congratulations! The customer (${customerName}) has accepted your offer for "${app.jobTitle}" at ₹${agreedPrice}${loc ? ` · Location: ${loc}` : ''}. Open Worker Dashboard to confirm & share live location.`
+          ? `Congratulations! ${customerName} confirmed work for "${app.jobTitle}" at ₹${agreedPrice}${loc ? ` · Location: ${loc}` : ''}. Customer location & chat are now unlocked.`
           : `${customerName} declined your offer for "${app.jobTitle}".`,
       metadataLabel:
         decision === 'accepted'
-          ? `Agreed ₹${agreedPrice}${loc ? ` · ${loc}` : ''}`
+          ? `Work Confirmed · ₹${agreedPrice}${loc ? ` · ${loc}` : ''}`
           : app.jobTitle,
       targetRoute: 'worker-dashboard',
       targetJobId: app.jobId,
@@ -1410,6 +1437,19 @@ export async function respondToWorkerOffer(params: {
   }
 }
 
+export async function confirmWorkOffer(params: {
+  app: JobApplication;
+  customerName: string;
+  jobLocationLabel?: string;
+  photoGrantContext?: {
+    customerUid: string;
+    workerUid: string;
+    customerPhotoDocId?: string;
+  };
+}): Promise<void> {
+  return respondToWorkerOffer({ ...params, decision: 'accepted' });
+}
+
 export async function confirmDealByParticipant(params: {
   app: JobApplication;
   actorUid: string;
@@ -1424,7 +1464,7 @@ export async function confirmDealByParticipant(params: {
     await updateDoc(doc(db, 'applications', app.id), {
       dealStatus: 'DEAL_CONFIRMED',
       dealConfirmedAt: serverTimestamp(),
-      ...(actorRole === 'worker' ? { liveTrackingAuthorized: true } : { agreedPrice }),
+      ...(actorRole === 'worker' ? { liveTrackingAuthorized: true } : { agreedPrice, liveTrackingAuthorized: true }),
       updatedAt: serverTimestamp(),
     });
 
@@ -1445,10 +1485,11 @@ export async function confirmDealByParticipant(params: {
       senderName: actorName,
       category: 'bookingNotifications',
       eventType: 'deal_confirmed',
+      toneType: 'deal_accepted',
       dealStatus: 'DEAL_CONFIRMED',
-      title: `Deal Confirmed: ${app.jobTitle}`,
-      body: `${actorName} confirmed the deal for "${app.jobTitle}" (Agreed: ₹${agreedPrice}). Two-way live location sharing is now active.`,
-      metadataLabel: `DEAL_CONFIRMED · ₹${agreedPrice}`,
+      title: 'Congratulations! Your work has been confirmed.',
+      body: `${actorName} confirmed work for "${app.jobTitle}" (Agreed: ₹${agreedPrice}). Two-way live location & chat are now active.`,
+      metadataLabel: `Work Confirmed · ₹${agreedPrice}`,
       targetRoute: counterpartyRoute,
       targetJobId: app.jobId,
       targetApplicationId: app.id,
@@ -1491,10 +1532,11 @@ export async function startWorkByWorker(params: {
       senderName: workerName,
       category: 'bookingNotifications',
       eventType: 'work_started',
+      toneType: 'deal_accepted',
       dealStatus: 'WORK_IN_PROGRESS',
-      title: `Work Started: ${app.jobTitle}`,
-      body: `${workerName} has arrived / started work on "${app.jobTitle}".`,
-      metadataLabel: `WORK_IN_PROGRESS`,
+      title: `Work In Progress: ${app.jobTitle}`,
+      body: `${workerName} has arrived and started work on "${app.jobTitle}".`,
+      metadataLabel: 'Work In Progress',
       targetRoute: 'employer-dashboard',
       targetJobId: app.jobId,
       targetApplicationId: app.id,
@@ -1583,10 +1625,11 @@ export async function completeDeal(params: {
       senderName: actorName,
       category: 'bookingNotifications',
       eventType: 'work_completed',
+      toneType: 'deal_completed',
       dealStatus: 'WORK_COMPLETED',
       title: `Work Completed: ${app.jobTitle}`,
       body: `${actorName} marked "${app.jobTitle}" as completed. Live location sharing has been automatically stopped.`,
-      metadataLabel: 'WORK_COMPLETED · Live location stopped',
+      metadataLabel: 'Work Completed · Live location stopped',
       targetRoute: counterpartyRoute,
       targetJobId: app.jobId,
       targetApplicationId: app.id,
@@ -1643,10 +1686,11 @@ export async function cancelDeal(params: {
       senderName: actorName,
       category: 'bookingNotifications',
       eventType: 'deal_cancelled',
+      toneType: 'deal_cancelled',
       dealStatus: 'CANCELLED',
-      title: `Deal Cancelled: ${app.jobTitle}`,
+      title: `Cancelled: ${app.jobTitle}`,
       body: `${actorName} cancelled the deal for "${app.jobTitle}"${reason ? ` (${reason.slice(0, 100)})` : ''}. Live location sharing has been stopped.`,
-      metadataLabel: 'CANCELLED · Live location stopped',
+      metadataLabel: 'Cancelled · Live location stopped',
       targetRoute: counterpartyRoute,
       targetJobId: app.jobId,
       targetApplicationId: app.id,
@@ -2214,6 +2258,10 @@ export async function saveNotificationPreferences(
       | 'preferredLanguage'
       | 'voiceAlertsEnabled'
       | 'soundEnabled'
+      | 'toneNewJobEnabled'
+      | 'toneNewOfferEnabled'
+      | 'toneDealConfirmedEnabled'
+      | 'toneDealClosedEnabled'
       | 'preferredCategories'
       | 'preferredRadiusKm'
     >
@@ -2240,6 +2288,10 @@ export async function saveNotificationPreferences(
         preferredLanguage: updates.preferredLanguage ?? 'en',
         voiceAlertsEnabled: updates.voiceAlertsEnabled ?? true,
         soundEnabled: updates.soundEnabled ?? true,
+        toneNewJobEnabled: updates.toneNewJobEnabled ?? true,
+        toneNewOfferEnabled: updates.toneNewOfferEnabled ?? true,
+        toneDealConfirmedEnabled: updates.toneDealConfirmedEnabled ?? true,
+        toneDealClosedEnabled: updates.toneDealClosedEnabled ?? true,
         preferredRadiusKm: updates.preferredRadiusKm ?? 10,
         ...(Array.isArray(updates.preferredCategories)
           ? { preferredCategories: updates.preferredCategories.slice(0, 35) }

@@ -13,16 +13,51 @@ firebase.initializeApp({
 
 const messaging = firebase.messaging();
 
+function getSwToneVibration(toneType) {
+  switch (toneType) {
+    case 'new_job':
+      return [260, 90, 260, 90, 360];
+    case 'new_offer':
+      return [180, 80, 180];
+    case 'deal_accepted':
+      return [140, 70, 140, 70, 320];
+    case 'deal_completed':
+      return [200, 100, 240];
+    case 'deal_cancelled':
+      return [300, 120, 200];
+    default:
+      return [200, 100, 200];
+  }
+}
+
+function getSwTagPrefix(toneType) {
+  switch (toneType) {
+    case 'new_job':
+      return 'rojgar-job';
+    case 'new_offer':
+      return 'rojgar-offer';
+    case 'deal_accepted':
+      return 'rojgar-confirmed';
+    case 'deal_completed':
+    case 'deal_cancelled':
+      return 'rojgar-closed';
+    default:
+      return 'rojgar-alert';
+  }
+}
+
 messaging.onBackgroundMessage((payload) => {
   const data = payload && payload.data ? payload.data : {};
   const notif = payload && payload.notification ? payload.notification : {};
   const title = notif.title || data.title || 'ROJGAR SETU';
   const body = notif.body || data.body || 'New update on ROJGAR SETU.';
-  const tag = data.dedupeKey || data.jobId || data.demoJobId || 'rojgar-setu-alert';
+  const toneType = data.toneType || 'general';
+  const baseTag = data.dedupeKey || data.jobId || data.demoJobId || 'alert';
+  const tag = `${getSwTagPrefix(toneType)}-${baseTag}`;
   const clickUrl = data.clickUrl || '/';
   const isSilent = data.playSound === 'false';
   const openActionTitle =
-    data.lang === 'mr' ? 'उघडा व ऐका' : data.lang === 'hi' ? 'खोलें व सुनें' : 'Open & Listen';
+    data.lang === 'mr' ? 'उघडा व पहा' : data.lang === 'hi' ? 'खोलें व देखें' : 'Open Now';
 
   return self.registration.showNotification(title, {
     body,
@@ -32,7 +67,7 @@ messaging.onBackgroundMessage((payload) => {
     renotify: true,
     requireInteraction: true,
     silent: isSilent,
-    ...(isSilent ? {} : { vibrate: [220, 100, 220] }),
+    ...(isSilent ? {} : { vibrate: getSwToneVibration(toneType) }),
     actions: [{ action: 'open_listen', title: openActionTitle }],
     data: {
       clickUrl,
@@ -43,6 +78,8 @@ messaging.onBackgroundMessage((payload) => {
       lang: data.lang || 'en',
       approxLocationLabel: data.approxLocationLabel || '',
       distanceKm: data.distanceKm || '',
+      toneType,
+      eventType: data.eventType || '',
       playSound: data.playSound !== 'false',
       speakVoice: data.speakVoice !== 'false',
       speak: data.speak === '0' ? '0' : '1',
@@ -77,6 +114,8 @@ self.addEventListener('notificationclick', (event) => {
             lang: data.lang || '',
             approxLocationLabel: data.approxLocationLabel || '',
             distanceKm: data.distanceKm || '',
+            toneType: data.toneType || 'general',
+            eventType: data.eventType || '',
             playSound: data.playSound !== false,
             speakVoice: data.speakVoice !== false,
           });

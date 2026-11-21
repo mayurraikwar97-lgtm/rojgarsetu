@@ -11,7 +11,8 @@ import {
 import { deleteToken, getToken, onMessage } from 'firebase/messaging';
 import { getFirebaseVapidKey } from './appConfig';
 import { db, getFirebaseMessaging } from './firebase';
-import type { Language, NotificationPreferences } from '../types/domain';
+import type { Language, NotificationPreferences, NotificationToneType } from '../types/domain';
+import { getToneTypeForEvent } from './dealWorkflow';
 
 export interface PushOptInResult {
   ok: boolean;
@@ -108,6 +109,11 @@ export async function ensureNotificationPreferencesDoc(
       bookingNotifications: true,
       announcements: true,
       preferredLanguage: language,
+      soundEnabled: true,
+      toneNewJobEnabled: true,
+      toneNewOfferEnabled: true,
+      toneDealConfirmedEnabled: true,
+      toneDealClosedEnabled: true,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     };
@@ -335,6 +341,8 @@ export async function subscribeForegroundPush(
     voiceScript?: string;
     approxLocationLabel?: string;
     distanceKm?: number;
+    toneType?: NotificationToneType;
+    eventType?: string;
     playSound?: boolean;
     speakVoice?: boolean;
   }) => void
@@ -347,6 +355,10 @@ export async function subscribeForegroundPush(
     const body = payload.notification?.body || payload.data?.body || 'New notification received.';
     const distNum = payload.data?.distanceKm ? Number(payload.data.distanceKm) : NaN;
     const rawLang = payload.data?.lang;
+    const toneType = getToneTypeForEvent({
+      toneType: payload.data?.toneType,
+      eventType: payload.data?.eventType,
+    });
     onReceive({
       title,
       body,
@@ -357,6 +369,8 @@ export async function subscribeForegroundPush(
       voiceScript: payload.data?.voiceScript,
       approxLocationLabel: payload.data?.approxLocationLabel,
       ...(Number.isFinite(distNum) ? { distanceKm: distNum } : {}),
+      toneType,
+      eventType: payload.data?.eventType,
       playSound: payload.data?.playSound !== 'false',
       speakVoice: payload.data?.speakVoice !== 'false',
     });

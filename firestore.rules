@@ -558,6 +558,7 @@ service cloud.firestore {
           'ownerUid', 'masterEnabled', 'matchingJobs', 'nearbyJobs',
           'applicationUpdates', 'bookingNotifications', 'announcements',
           'preferredLanguage', 'voiceAlertsEnabled', 'soundEnabled',
+          'toneNewJobEnabled', 'toneNewOfferEnabled', 'toneDealConfirmedEnabled', 'toneDealClosedEnabled',
           'preferredCategories', 'preferredRadiusKm', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.ownerUid)
@@ -570,6 +571,10 @@ service cloud.firestore {
         && data.preferredLanguage in ['en', 'hi', 'mr']
         && (!('voiceAlertsEnabled' in data) || data.voiceAlertsEnabled is bool)
         && (!('soundEnabled' in data) || data.soundEnabled is bool)
+        && (!('toneNewJobEnabled' in data) || data.toneNewJobEnabled is bool)
+        && (!('toneNewOfferEnabled' in data) || data.toneNewOfferEnabled is bool)
+        && (!('toneDealConfirmedEnabled' in data) || data.toneDealConfirmedEnabled is bool)
+        && (!('toneDealClosedEnabled' in data) || data.toneDealClosedEnabled is bool)
         && (!('preferredCategories' in data) || (data.preferredCategories is list && data.preferredCategories.size() <= 35 && (data.preferredCategories.size() == 0 || data.preferredCategories[0] is string)))
         && (!('preferredRadiusKm' in data) || data.preferredRadiusKm in [5, 10, 20, 30])
         && data.createdAt is timestamp
@@ -899,7 +904,7 @@ service cloud.firestore {
         ])
         && data.keys().hasOnly([
           'recipientUid', 'recipientRole', 'senderUid', 'senderName', 'isDemo',
-          'category', 'eventType', 'dealStatus', 'title', 'body', 'voiceScript',
+          'category', 'eventType', 'toneType', 'dealStatus', 'title', 'body', 'voiceScript',
           'approxLocationLabel', 'distanceKm', 'customerName', 'jobCategory',
           'playSound', 'speakVoice', 'metadataLabel',
           'language', 'targetRoute', 'targetJobId', 'targetApplicationId',
@@ -913,6 +918,7 @@ service cloud.firestore {
         && data.isDemo is bool
         && data.category in ['matchingJobs', 'nearbyJobs', 'applicationUpdates', 'bookingNotifications', 'announcements']
         && (!('eventType' in data) || (data.eventType is string && data.eventType.size() <= 60))
+        && (!('toneType' in data) || data.toneType in ['new_job', 'new_offer', 'deal_accepted', 'deal_completed', 'deal_cancelled', 'general'])
         && (!('dealStatus' in data) || isValidDealStatus(data.dealStatus))
         && data.title is string && data.title.size() >= 2 && data.title.size() <= 160
         && data.body is string && data.body.size() >= 2 && data.body.size() <= 500
@@ -1227,7 +1233,7 @@ service cloud.firestore {
             && incoming().acceptedWorkerUid == request.auth.uid
             && incoming().diff(existing()).affectedKeys().hasOnly(['acceptedApplicationId', 'acceptedWorkerUid', 'dealStatus', 'status', 'updatedAt'])
             && incoming().status == 'in_progress'
-            && incoming().dealStatus == 'OFFER_ACCEPTED'
+            && incoming().dealStatus in ['OFFER_ACCEPTED', 'DEAL_CONFIRMED']
             && exists(/databases/$(database)/documents/applications/$(incoming().acceptedApplicationId))
             && get(/databases/$(database)/documents/applications/$(incoming().acceptedApplicationId)).data.workerUid == request.auth.uid
             && get(/databases/$(database)/documents/applications/$(incoming().acceptedApplicationId)).data.jobId == jobId
@@ -1281,10 +1287,11 @@ service cloud.firestore {
             && isOwner(existing().employerUid)
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'status', 'dealStatus', 'agreedPrice', 'dealConfirmedAt',
-              'completedAt', 'cancelledAt', 'cancelledByUid',
+              'liveTrackingAuthorized', 'completedAt', 'cancelledAt', 'cancelledByUid',
               'workerRating', 'employerFeedback', 'updatedAt'
             ])
             && incoming().status in ['invited', 'accepted', 'declined', 'work_completed']
+            && (!('liveTrackingAuthorized' in incoming()) || !incoming().liveTrackingAuthorized || incoming().status == 'accepted')
           )
         );
       allow delete: if isValidId(applicationId) && isAdmin();

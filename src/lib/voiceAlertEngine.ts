@@ -1,4 +1,4 @@
-import type { Language } from '../types/domain';
+import type { Language, NotificationToneType } from '../types/domain';
 
 export interface VoicePlaybackResult {
   audioChimePlayed: boolean;
@@ -8,6 +8,53 @@ export interface VoicePlaybackResult {
 
 let sharedAudioCtx: AudioContext | null = null;
 let audioUnlocked = false;
+
+interface ToneNote {
+  freq: number;
+  offset: number;
+  duration: number;
+  peak: number;
+  type: OscillatorType;
+  harmonicFreq?: number;
+}
+
+const TONE_PROFILES: Record<NotificationToneType, ToneNote[]> = {
+  // Loud, urgent attention alert for new category job broadcasts
+  new_job: [
+    { freq: 880, offset: 0, duration: 0.14, peak: 0.28, type: 'triangle', harmonicFreq: 1760 },
+    { freq: 1174.66, offset: 0.15, duration: 0.14, peak: 0.28, type: 'triangle', harmonicFreq: 2349.32 },
+    { freq: 1396.91, offset: 0.3, duration: 0.16, peak: 0.3, type: 'triangle', harmonicFreq: 2793.83 },
+    { freq: 1760, offset: 0.48, duration: 0.28, peak: 0.3, type: 'triangle', harmonicFreq: 880 },
+  ],
+  // Crisp bright double-bell for worker offer arriving to customer
+  new_offer: [
+    { freq: 659.25, offset: 0, duration: 0.15, peak: 0.26, type: 'sine', harmonicFreq: 1318.51 },
+    { freq: 987.77, offset: 0.16, duration: 0.17, peak: 0.27, type: 'sine', harmonicFreq: 1975.53 },
+    { freq: 1318.51, offset: 0.35, duration: 0.26, peak: 0.28, type: 'sine' },
+  ],
+  // Warm triumphant rising fanfare when deal/work is confirmed
+  deal_accepted: [
+    { freq: 523.25, offset: 0, duration: 0.13, peak: 0.27, type: 'triangle', harmonicFreq: 1046.5 },
+    { freq: 659.25, offset: 0.13, duration: 0.13, peak: 0.27, type: 'triangle', harmonicFreq: 1318.51 },
+    { freq: 783.99, offset: 0.26, duration: 0.15, peak: 0.28, type: 'triangle', harmonicFreq: 1567.98 },
+    { freq: 1046.5, offset: 0.42, duration: 0.34, peak: 0.3, type: 'sine', harmonicFreq: 523.25 },
+  ],
+  // Clean positive completion bell
+  deal_completed: [
+    { freq: 783.99, offset: 0, duration: 0.16, peak: 0.25, type: 'sine', harmonicFreq: 1567.98 },
+    { freq: 1046.5, offset: 0.18, duration: 0.32, peak: 0.27, type: 'sine', harmonicFreq: 2093 },
+  ],
+  // Distinct descending two-note notice when cancelled/declined
+  deal_cancelled: [
+    { freq: 587.33, offset: 0, duration: 0.18, peak: 0.24, type: 'triangle' },
+    { freq: 392.0, offset: 0.2, duration: 0.3, peak: 0.24, type: 'triangle' },
+  ],
+  // Standard chime fallback
+  general: [
+    { freq: 880, offset: 0, duration: 0.16, peak: 0.22, type: 'triangle' },
+    { freq: 1174.66, offset: 0.17, duration: 0.24, peak: 0.24, type: 'sine' },
+  ],
+};
 
 function getSpeechLangTag(lang: Language): string {
   if (lang === 'mr') return 'mr-IN';
@@ -38,7 +85,10 @@ export function unlockAudioOnUserGesture(): void {
   }
 }
 
-export async function playNotificationChime(): Promise<boolean> {
+export async function playNotificationTone(
+  toneType: NotificationToneType = 'general',
+  gainScale = 1
+): Promise<boolean> {
   if (typeof window === 'undefined') return false;
   try {
     const ctx = getOrCreateAudioContext();
@@ -50,32 +100,51 @@ export async function playNotificationChime(): Promise<boolean> {
       return false;
     }
 
-    const now = ctx.currentTime;
-    const notes = [
-      { freq: 880, start: now, duration: 0.16, peak: 0.14 },
-      { freq: 1174.66, start: now + 0.17, duration: 0.24, peak: 0.16 },
-    ];
+    const clampedScale = Math.max(0.2, Math.min(1.25, gainScale));
+    const now = ctx.currentTime + 0.01;
+    const profile = TONE_PROFILES[toneType] || TONE_PROFILES.general;
 
-    for (const note of notes) {
+    for (const note of profile) {
+      const start = now + note.offset;
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      osc.type = 'triangle';
-      osc.frequency.setValueAtTime(note.freq, note.start);
+      osc.type = note.type;
+      osc.frequency.setValueAtTime(note.freq, start);
 
-      gain.gain.setValueAtTime(0.0001, note.start);
-      gain.gain.exponentialRampToValueAtTime(note.peak, note.start + 0.02);
-      gain.gain.exponentialRampToValueAtTime(0.0001, note.start + note.duration);
+      const targetPeak = Math.min(0.36, note.peak * clampedScale);
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(targetPeak, start + 0.018);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + note.duration);
 
       osc.connect(gain);
       gain.connect(ctx.destination);
-      osc.start(note.start);
-      osc.stop(note.start + note.duration + 0.02);
+      osc.start(start);
+      osc.stop(start + note.duration + 0.025);
+
+      if (note.harmonicFreq) {
+        const subOsc = ctx.createOscillator();
+        const subGain = ctx.createGain();
+        subOsc.type = 'sine';
+        subOsc.frequency.setValueAtTime(note.harmonicFreq, start);
+        subGain.gain.setValueAtTime(0.0001, start);
+        subGain.gain.exponentialRampToValueAtTime(targetPeak * 0.35, start + 0.018);
+        subGain.gain.exponentialRampToValueAtTime(0.0001, start + note.duration);
+        subOsc.connect(subGain);
+        subGain.connect(ctx.destination);
+        subOsc.start(start);
+        subOsc.stop(start + note.duration + 0.025);
+      }
     }
+
     audioUnlocked = true;
     return true;
   } catch {
     return false;
   }
+}
+
+export async function playNotificationChime(): Promise<boolean> {
+  return playNotificationTone('new_job');
 }
 
 function selectPreferredVoice(voices: SpeechSynthesisVoice[], lang: Language): SpeechSynthesisVoice | null {
@@ -110,12 +179,13 @@ export async function speakJobAlert(params: {
   soundEnabled?: boolean;
   voiceEnabled?: boolean;
   rate?: number;
+  toneType?: NotificationToneType;
 }): Promise<VoicePlaybackResult> {
-  const { text, lang, soundEnabled = true, voiceEnabled = true, rate = 0.96 } = params;
+  const { text, lang, soundEnabled = true, voiceEnabled = true, rate = 0.96, toneType = 'new_job' } = params;
 
   let chimePlayed = false;
   if (soundEnabled) {
-    chimePlayed = await playNotificationChime();
+    chimePlayed = await playNotificationTone(toneType);
   }
 
   if (!voiceEnabled) {

@@ -410,6 +410,14 @@ export type NotificationCategoryKey =
   | 'bookingNotifications'
   | 'announcements';
 
+export type NotificationToneType =
+  | 'new_job'
+  | 'new_offer'
+  | 'deal_accepted'
+  | 'deal_completed'
+  | 'deal_cancelled'
+  | 'general';
+
 export interface DeviceTokenRecord {
   id: string;
   ownerUid: string;
@@ -439,6 +447,10 @@ export interface NotificationPreferences {
   preferredLanguage: Language;
   voiceAlertsEnabled?: boolean;
   soundEnabled?: boolean;
+  toneNewJobEnabled?: boolean;
+  toneNewOfferEnabled?: boolean;
+  toneDealConfirmedEnabled?: boolean;
+  toneDealClosedEnabled?: boolean;
   preferredCategories?: string[];
   preferredRadiusKm?: ServiceRadiusKm;
   createdAt?: unknown;
@@ -454,6 +466,7 @@ export interface AppNotificationRecord {
   isDemo: boolean;
   category: NotificationCategoryKey;
   eventType?: DealNotificationEventType | string;
+  toneType?: NotificationToneType;
   dealStatus?: DealStatus;
   title: string;
   body: string;

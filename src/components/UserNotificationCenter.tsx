@@ -30,7 +30,13 @@ import {
   subscribeUserNotifications,
 } from '../lib/firestoreService';
 import { SERVICE_RADIUS_STAGES, buildSmartJobVoiceScript } from '../lib/smartVoiceJobAlert';
-import { speakJobAlert, stopVoiceAlert, unlockAudioOnUserGesture } from '../lib/voiceAlertEngine';
+import { getToneChannelConfig, getToneTypeForEvent } from '../lib/dealWorkflow';
+import {
+  playNotificationTone,
+  speakJobAlert,
+  stopVoiceAlert,
+  unlockAudioOnUserGesture,
+} from '../lib/voiceAlertEngine';
 import type {
   AppNotificationRecord,
   DemoJobApplication,
@@ -40,6 +46,7 @@ import type {
   Language,
   NotificationCategoryKey,
   NotificationPreferences,
+  NotificationToneType,
   PageRoute,
   PublicWorkerProfile,
   ServiceRadiusKm,
@@ -80,6 +87,7 @@ export const UserNotificationCenter: React.FC<UserNotificationCenterProps> = ({
   const [notifications, setNotifications] = useState<AppNotificationRecord[]>([]);
   const [savingKey, setSavingKey] = useState<string | null>(null);
   const [voiceTestStatus, setVoiceTestStatus] = useState('');
+  const [toneTestStatus, setToneTestStatus] = useState('');
   const [isTestingVoice, setIsTestingVoice] = useState(false);
 
   // Isolated Demo Worker Sandbox State
@@ -152,6 +160,10 @@ export const UserNotificationCenter: React.FC<UserNotificationCenterProps> = ({
     announcements: prefs?.announcements ?? true,
     voiceAlertsEnabled: prefs?.voiceAlertsEnabled ?? workerProfile?.voiceAlertsEnabled ?? true,
     soundEnabled: prefs?.soundEnabled ?? true,
+    toneNewJobEnabled: prefs?.toneNewJobEnabled ?? true,
+    toneNewOfferEnabled: prefs?.toneNewOfferEnabled ?? true,
+    toneDealConfirmedEnabled: prefs?.toneDealConfirmedEnabled ?? true,
+    toneDealClosedEnabled: prefs?.toneDealClosedEnabled ?? true,
     preferredLanguage: (prefs?.preferredLanguage || workerProfile?.preferredLanguage || lang) as Language,
     preferredRadiusKm: (prefs?.preferredRadiusKm || workerProfile?.preferredRadiusKm || 10) as ServiceRadiusKm,
     preferredCategories: prefs?.preferredCategories ?? [],
@@ -204,6 +216,27 @@ export const UserNotificationCenter: React.FC<UserNotificationCenterProps> = ({
       ? current.filter((c) => c !== categoryEn)
       : [...current, categoryEn].slice(0, 35);
     await handleSaveWorkerVoicePref('preferredCategories', { preferredCategories: next });
+  };
+
+  const handleTestTone = async (toneType: NotificationToneType) => {
+    unlockAudioOnUserGesture();
+    const played = await playNotificationTone(toneType);
+    const cfg = getToneChannelConfig(toneType);
+    setToneTestStatus(
+      played
+        ? tr(
+            lang,
+            `Played "${cfg.label.en}" alert tone.`,
+            `"${cfg.label.hi}" अलर्ट टोन बजाई गई।`,
+            `"${cfg.label.mr}" अलर्ट टोन वाजवली.`
+          )
+        : tr(
+            lang,
+            'Browser blocked audio autoplay — tap anywhere on the page and press Test Tone again.',
+            'ब्राउज़र ने ऑडियो रोका है — स्क्रीन पर टैप करके फिर से टेस्ट बटन दबाएं।',
+            'ब्राउझरने ऑडिओ थांबवला आहे — पानावर टॅप करून पुन्हा टेस्ट दाबा.'
+          )
+    );
   };
 
   const handleTestVoicePreview = async () => {
@@ -445,6 +478,167 @@ export const UserNotificationCenter: React.FC<UserNotificationCenterProps> = ({
               );
             })}
           </div>
+        </div>
+
+        {/* Distinct Notification Sound & Tone Preferences (Both Customer & Worker) */}
+        <div className="pt-4 border-t border-slate-200 space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div>
+              <div className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-wider text-[#0B3B75]">
+                <Volume2 className="w-4 h-4 text-[#E06D1B]" />
+                <span>
+                  {tr(
+                    lang,
+                    'Notification Sound & Tone Settings',
+                    'सूचना ध्वनि एवं अलग-अलग टोन सेटिंग्स',
+                    'सूचना आवाज व वेगवेगळ्या टोन सेटिंग्ज'
+                  )}
+                </span>
+              </div>
+              <p className="text-[11px] text-slate-600 mt-0.5">
+                {tr(
+                  lang,
+                  'Distinct loud tones for job requests, worker offers, work confirmation, and completion/cancellation.',
+                  'नए काम, ऑफर, काम पक्का होने और पूर्ण/रद्द होने के लिए अलग-अलग तेज़ अलर्ट टोन।',
+                  'नवीन काम, ऑफर, काम निश्चित झाल्यावर आणि पूर्ण/रद्द झाल्यावर वेगवेगळे मोठे अलर्ट आवाज.'
+                )}
+              </p>
+            </div>
+
+            <label className="inline-flex items-center gap-2 rounded-md border border-slate-300 bg-slate-50 px-3 py-2 text-xs font-bold text-[#0B3B75] cursor-pointer self-start sm:self-center">
+              <input
+                type="checkbox"
+                disabled={savingKey === 'soundEnabled'}
+                checked={effectivePrefs.soundEnabled}
+                onChange={() =>
+                  void handleSaveWorkerVoicePref('soundEnabled', {
+                    soundEnabled: !effectivePrefs.soundEnabled,
+                  })
+                }
+                className="h-4 w-4 rounded border-slate-300 accent-[#0B3B75]"
+              />
+              <span>{tr(lang, 'Master Sound On', 'मास्टर ध्वनि चालू', 'मुख्य आवाज सुरू')}</span>
+            </label>
+          </div>
+
+          {toneTestStatus && (
+            <p className="text-[11px] font-medium text-[#0B3B75] bg-blue-50 border border-blue-200 rounded px-3 py-1.5">
+              {toneTestStatus}
+            </p>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {(
+              [
+                {
+                  prefKey: 'toneNewJobEnabled' as const,
+                  toneType: 'new_job' as const,
+                  title: tr(lang, 'New Job Request Tone', 'नया काम अनुरोध टोन', 'नवीन कामाची विनंती टोन'),
+                  desc: tr(
+                    lang,
+                    'Urgent triple-bell alert for matching category workers',
+                    'संबंधित श्रेणी के कामगारों के लिए तेज़ घंटी अलर्ट',
+                    'संबंधित कामगारांसाठी जलद तीन-घंटी अलर्ट'
+                  ),
+                },
+                {
+                  prefKey: 'toneNewOfferEnabled' as const,
+                  toneType: 'new_offer' as const,
+                  title: tr(lang, 'New Worker Offer Tone', 'नया कारीगर ऑफर टोन', 'नवीन कामगार ऑफर टोन'),
+                  desc: tr(
+                    lang,
+                    'Crisp chime when a worker sends price & ETA to customer',
+                    'कामगार द्वारा दर व समय भेजने पर ग्राहक के लिए टोन',
+                    'कामगाराने दर व वेळ पाठवल्यावर ग्राहकासाठी टोन'
+                  ),
+                },
+                {
+                  prefKey: 'toneDealConfirmedEnabled' as const,
+                  toneType: 'deal_accepted' as const,
+                  title: tr(lang, 'Work Confirmed Tone', 'काम पक्का होने का टोन', 'काम निश्चित टोन'),
+                  desc: tr(
+                    lang,
+                    'Rising fanfare when customer confirms work ("Congratulations!")',
+                    'ग्राहक द्वारा काम पक्का करने पर विशेष ध्वनि',
+                    'ग्राहकाने काम निश्चित केल्यावर अभिनंदन टोन'
+                  ),
+                },
+                {
+                  prefKey: 'toneDealClosedEnabled' as const,
+                  toneType: 'deal_completed' as const,
+                  title: tr(
+                    lang,
+                    'Work Completed / Cancelled Tone',
+                    'काम पूरा / रद्द होने का टोन',
+                    'काम पूर्ण / रद्द टोन'
+                  ),
+                  desc: tr(
+                    lang,
+                    'Distinct chime for completed work & notice for cancellation',
+                    'काम पूरा होने व रद्द होने के लिए अलग-अलग टोन',
+                    'काम पूर्ण व रद्द होण्यासाठी वेगळा आवाज'
+                  ),
+                },
+              ]
+            ).map((item) => {
+              const checked = effectivePrefs[item.prefKey];
+              return (
+                <div
+                  key={item.prefKey}
+                  className="rounded-md border border-slate-200 bg-slate-50/70 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5"
+                >
+                  <label className="flex items-start gap-2.5 cursor-pointer flex-1 min-w-0">
+                    <input
+                      type="checkbox"
+                      disabled={savingKey === item.prefKey || !effectivePrefs.soundEnabled}
+                      checked={checked}
+                      onChange={() =>
+                        void handleSaveWorkerVoicePref(item.prefKey, {
+                          [item.prefKey]: !checked,
+                        })
+                      }
+                      className="h-4 w-4 mt-0.5 rounded border-slate-300 accent-[#0B3B75] shrink-0"
+                    />
+                    <div className="min-w-0">
+                      <div className="text-xs font-bold text-[#0B3B75]">{item.title}</div>
+                      <p className="text-[11px] text-slate-600 leading-snug">{item.desc}</p>
+                    </div>
+                  </label>
+
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => void handleTestTone(item.toneType)}
+                      className="min-h-[40px] inline-flex items-center gap-1 px-3 py-1.5 rounded border border-[#0B3B75] bg-white text-xs font-bold text-[#0B3B75] hover:bg-blue-50 whitespace-nowrap cursor-pointer"
+                    >
+                      <Volume2 className="w-3.5 h-3.5 text-[#E06D1B]" />
+                      {item.prefKey === 'toneDealClosedEnabled'
+                        ? tr(lang, 'Test Done', 'पूर्ण टेस्ट', 'पूर्ण टोन')
+                        : tr(lang, 'Test Tone', 'टोन सुनें', 'टोन ऐका')}
+                    </button>
+                    {item.prefKey === 'toneDealClosedEnabled' && (
+                      <button
+                        type="button"
+                        onClick={() => void handleTestTone('deal_cancelled')}
+                        className="min-h-[40px] inline-flex items-center gap-1 px-2.5 py-1.5 rounded border border-rose-300 bg-white text-xs font-bold text-rose-700 hover:bg-rose-50 whitespace-nowrap cursor-pointer"
+                      >
+                        {tr(lang, 'Test Cancel', 'रद्द टेस्ट', 'रद्द टोन')}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          <p className="text-[11px] text-slate-500">
+            {tr(
+              lang,
+              'Note: Distinct in-app tones play automatically when Rojgar Setu is open. When the browser is closed on Android, notifications use your device OS notification channels and vibration patterns.',
+              'नोट: ऐप खुले रहने पर अलग-अलग इन-ऐप टोन बजती हैं। ब्राउज़र बंद होने पर Android पर सिस्टम नोटिफिकेशन चैनल व वाइब्रेशन काम करता है।',
+              'टीप: अ‍ॅप सुरू असताना वेगवेगळे इन-अ‍ॅप टोन वाजतात. ब्राउझर बंद असताना Android वर सिस्टम नोटिफिकेशन चॅनेल व व्हायब्रेशन वापरले जाते.'
+            )}
+          </p>
         </div>
 
         {/* Worker Smart Voice Job Alert Controls */}
@@ -718,53 +912,58 @@ export const UserNotificationCenter: React.FC<UserNotificationCenterProps> = ({
           </p>
         ) : (
           <div className="divide-y divide-slate-200">
-            {notifications.slice(0, 20).map((n) => (
-              <div
-                key={n.id}
-                className={`py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
-                  !n.read ? 'bg-blue-50/40 -mx-3 px-3 rounded' : ''
-                }`}
-              >
-                <div className="space-y-1">
-                  <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono-tabular text-slate-500">
-                    <span>{formatTs(n.createdAt)}</span>
-                    <span>·</span>
-                    <span className="uppercase font-semibold text-[#0B3B75]">{n.category}</span>
-                    <span>·</span>
-                    <span
-                      className={`font-bold uppercase ${
-                        n.deliveryStatus === 'sent'
-                          ? 'text-[#15803D]'
-                          : n.deliveryStatus === 'failed'
-                          ? 'text-red-700'
-                          : 'text-amber-700'
-                      }`}
-                    >
-                      {n.deliveryStatus}
-                    </span>
-                    {n.isDemo && (
-                      <span className="px-1.5 py-0.5 rounded bg-amber-100 text-[#C25E00] font-bold">
-                        DEMO
+            {notifications.slice(0, 20).map((n) => {
+              const toneCfg = getToneChannelConfig(getToneTypeForEvent(n));
+              return (
+                <div
+                  key={n.id}
+                  className={`py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 ${
+                    !n.read ? 'bg-blue-50/40 -mx-3 px-3 rounded' : ''
+                  }`}
+                >
+                  <div className="space-y-1">
+                    <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono-tabular text-slate-500">
+                      <span>{formatTs(n.createdAt)}</span>
+                      <span
+                        className={`px-2 py-0.5 rounded border font-sans font-bold ${toneCfg.badgeColorClass}`}
+                      >
+                        {toneCfg.label[lang]}
                       </span>
+                      <span
+                        className={`font-bold uppercase ${
+                          n.deliveryStatus === 'sent'
+                            ? 'text-[#15803D]'
+                            : n.deliveryStatus === 'failed'
+                            ? 'text-red-700'
+                            : 'text-amber-700'
+                        }`}
+                      >
+                        {n.deliveryStatus}
+                      </span>
+                      {n.isDemo && (
+                        <span className="px-1.5 py-0.5 rounded bg-amber-100 text-[#C25E00] font-bold">
+                          DEMO
+                        </span>
+                      )}
+                    </div>
+                    <div className="font-display text-sm font-bold text-[#0B3B75]">{n.title}</div>
+                    <p className="text-xs text-slate-600">{n.body}</p>
+                    {n.errorMessage && (
+                      <p className="text-[11px] text-red-700">Error: {n.errorMessage}</p>
                     )}
                   </div>
-                  <div className="font-display text-sm font-bold text-[#0B3B75]">{n.title}</div>
-                  <p className="text-xs text-slate-600">{n.body}</p>
-                  {n.errorMessage && (
-                    <p className="text-[11px] text-red-700">Error: {n.errorMessage}</p>
-                  )}
-                </div>
 
-                <button
-                  type="button"
-                  onClick={() => handleOpenNotification(n)}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-[#0B3B75] text-xs font-semibold text-[#0B3B75] hover:bg-blue-50 cursor-pointer shrink-0 self-start sm:self-center"
-                >
-                  <ExternalLink className="w-3.5 h-3.5" />
-                  {tr(lang, 'Open', 'खोलें', 'उघडा')}
-                </button>
-              </div>
-            ))}
+                  <button
+                    type="button"
+                    onClick={() => handleOpenNotification(n)}
+                    className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-[#0B3B75] text-xs font-semibold text-[#0B3B75] hover:bg-blue-50 cursor-pointer shrink-0 self-start sm:self-center"
+                  >
+                    <ExternalLink className="w-3.5 h-3.5" />
+                    {tr(lang, 'Open', 'खोलें', 'उघडा')}
+                  </button>
+                </div>
+              );
+            })}
           </div>
         )}
       </section>
