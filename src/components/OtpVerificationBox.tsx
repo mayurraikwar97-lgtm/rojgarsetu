@@ -244,6 +244,8 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
             'सर्व्हरवर SMS OTP टेम्प्लेट सेट नाही. व्हॉइस कॉल OTP बंद आहे.'
           )
         );
+      case 'VOICE_OTP_DISABLED':
+      case 'VOICE_FALLBACK_DETECTED':
       case 'SMS_DISPATCH_FAILED':
       case 'SMS_SERVICE_UNAVAILABLE':
         return (
@@ -288,12 +290,18 @@ export const OtpVerificationBox: React.FC<OtpVerificationBoxProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           mobile: cleanedMobile,
+          channel: 'SMS',
           previousChallengeToken: challengeToken || undefined,
         }),
       });
       const data = await safeParseJson(res);
 
-      if (res.ok && data && typeof data.challengeToken === 'string') {
+      if (
+        res.ok &&
+        data &&
+        typeof data.challengeToken === 'string' &&
+        (data.channel === 'SMS' || data.deliveryChannel === 'sms_only')
+      ) {
         setFirebaseSession(null);
         setChallengeToken(data.challengeToken);
         setOtpInput('');

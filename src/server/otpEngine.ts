@@ -303,6 +303,7 @@ export function getOtpPublicConfig(): {
   smsProviderConfigured: boolean;
   providerType: SmsProviderKind | null;
   providerLabel: string;
+  channel: 'SMS';
   deliveryChannel: 'sms_only';
   voiceFallbackDisabled: boolean;
   dltConfigured: boolean;
@@ -317,6 +318,7 @@ export function getOtpPublicConfig(): {
     smsProviderConfigured: cfg.configured,
     providerType: cfg.provider,
     providerLabel: cfg.providerLabel,
+    channel: 'SMS',
     deliveryChannel: 'sms_only',
     voiceFallbackDisabled: true,
     dltConfigured: cfg.dltConfigured,
@@ -433,6 +435,16 @@ async function dispatchSmsViaConfiguredProvider(
           ok: false,
           errorCode: 'SMS_DISPATCH_FAILED',
           message: `SMS delivery failed (${cleanDetail}). Voice Call fallback is disabled.`,
+        };
+      }
+
+      if (typeof parsed.Details === 'string' && /\b(voice|call|obd)\b/i.test(parsed.Details)) {
+        console.error('[OTP 2Factor SMS] Rejected unexpected Voice route detail:', safeSanitize(parsed.Details));
+        return {
+          ok: false,
+          errorCode: 'VOICE_FALLBACK_DETECTED',
+          message:
+            '2Factor attempted a Voice Call route instead of SMS. Verify DLT SMS approval/credits and disable Voice fallback in your 2Factor dashboard.',
         };
       }
 
@@ -689,6 +701,20 @@ export async function handleOtpRequest(
 ): Promise<OtpHttpResult> {
   pruneRuntimeMaps();
 
+  const rawChannel = typeof body?.channel === 'string' ? body.channel.trim().toUpperCase() : 'SMS';
+  if (rawChannel && rawChannel !== 'SMS') {
+    return {
+      status: 400,
+      body: {
+        error: 'VOICE_OTP_DISABLED',
+        channel: 'SMS',
+        deliveryChannel: 'sms_only',
+        voiceFallbackDisabled: true,
+        message: 'Voice Call OTP is disabled. Only channel: "SMS" is supported.',
+      },
+    };
+  }
+
   const normalized = normalizeIndianMobile(body?.mobile);
   if (!normalized.valid) {
     return {
@@ -755,6 +781,7 @@ export async function handleOtpRequest(
       status: 503,
       body: {
         error: missingTemplateOnly ? 'SMS_TEMPLATE_REQUIRED' : 'SMS_PROVIDER_NOT_CONFIGURED',
+        channel: 'SMS',
         deliveryChannel: 'sms_only',
         voiceFallbackDisabled: true,
         message: missingTemplateOnly
@@ -780,6 +807,7 @@ export async function handleOtpRequest(
       status: 503,
       body: {
         error: dispatchResult.errorCode || 'SMS_DISPATCH_FAILED',
+        channel: 'SMS',
         deliveryChannel: 'sms_only',
         voiceFallbackDisabled: true,
         retryAfterSeconds: OTP_FAILURE_COOLDOWN_SECONDS,
@@ -807,7 +835,9 @@ export async function handleOtpRequest(
       ok: true,
       mode: providerConfig.provider,
       providerLabel: providerConfig.providerLabel,
+      channel: 'SMS',
       deliveryChannel: 'sms_only',
+      voiceFallbackDisabled: true,
       deliveryStatus: 'dispatched',
       mobile: normalized.national10,
       e164: normalized.e164,
