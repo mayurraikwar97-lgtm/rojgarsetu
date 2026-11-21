@@ -165,7 +165,7 @@ export const UserNotificationCenter: React.FC<UserNotificationCenterProps> = ({
     toneDealConfirmedEnabled: prefs?.toneDealConfirmedEnabled ?? true,
     toneDealClosedEnabled: prefs?.toneDealClosedEnabled ?? true,
     preferredLanguage: (prefs?.preferredLanguage || workerProfile?.preferredLanguage || lang) as Language,
-    preferredRadiusKm: (prefs?.preferredRadiusKm || workerProfile?.preferredRadiusKm || 10) as ServiceRadiusKm,
+    preferredRadiusKm: (prefs?.preferredRadiusKm || workerProfile?.preferredRadiusKm || 30) as ServiceRadiusKm,
     preferredCategories: prefs?.preferredCategories ?? [],
   };
 
@@ -799,7 +799,7 @@ export const UserNotificationCenter: React.FC<UserNotificationCenterProps> = ({
                     )}
                   </div>
                   <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto p-2 border border-slate-200 rounded bg-slate-50">
-                    {EMPLOYMENT_CATEGORIES.slice(0, 12).map((cat) => {
+                    {EMPLOYMENT_CATEGORIES.map((cat) => {
                       const active = effectivePrefs.preferredCategories.includes(cat.en);
                       return (
                         <button

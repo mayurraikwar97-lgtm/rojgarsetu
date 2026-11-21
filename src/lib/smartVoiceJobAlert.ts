@@ -22,7 +22,7 @@ export function getNextRadiusStage(currentRadiusKm: unknown): ServiceRadiusKm | 
 }
 
 export function normalizeCategoryToken(raw: string): string {
-  const clean = (raw || '').toLowerCase().trim().replace(/[_-]+/g, ' ');
+  const clean = (raw || '').toLowerCase().trim().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ');
   if (!clean) return '';
   if (
     clean.includes('daily labour') ||
@@ -33,20 +33,95 @@ export function normalizeCategoryToken(raw: string): string {
     clean === 'helper' ||
     clean === 'helpers' ||
     clean === 'labour' ||
-    clean === 'labor'
+    clean === 'labor' ||
+    clean.includes('हेल्पर') ||
+    clean.includes('मजदूर') ||
+    clean.includes('कामगार')
   ) {
-    return 'helpers_and_general_labour';
+    if (!clean.includes('बांधकाम') && !clean.includes('कृषी') && !clean.includes('घरगुती') && !clean.includes('औद्योगिक')) {
+      return 'helpers_and_general_labour';
+    }
   }
   if (clean.includes('carpenter') || clean.includes('सुतार') || clean.includes('बढ़ई')) return 'carpenter';
-  if (clean.includes('electrician') || clean.includes('इलेक्ट्रिशियन') || clean.includes('इलेक्ट्रीशियन')) {
+  if (clean.includes('electrician') || clean.includes('इलेक्ट्रिशियन') || clean.includes('इलेक्ट्रीशियन') || clean.includes('वीजतंत्री')) {
     return 'electrician';
   }
-  if (clean.includes('plumber') || clean.includes('प्लंबर')) return 'plumber';
-  if (clean.includes('driver') || clean.includes('ड्रायव्हर') || clean.includes('ड्राइवर')) return 'driver';
-  if (clean.includes('mason') || clean.includes('गवंडी') || clean.includes('राजमिस्त्री')) return 'mason';
-  if (clean.includes('painter') || clean.includes('पेंटर')) return 'painter';
-  if (clean.includes('welder') || clean.includes('fabricator') || clean.includes('वेल्डर')) return 'welder';
+  if (clean.includes('plumber') || clean.includes('प्लंबर') || clean.includes('नलसाज') || clean.includes('नळ कारागीर')) {
+    return 'plumber';
+  }
+  if (clean.includes('auto') && clean.includes('taxi')) return 'auto_taxi_operator';
+  if (clean.includes('tractor') || clean.includes('ट्रॅक्टर') || clean.includes('ट्रैक्टर')) return 'tractor_operator';
+  if (clean.includes('driver') || clean.includes('ड्रायव्हर') || clean.includes('ड्राइवर') || clean.includes('चालक')) {
+    return 'driver';
+  }
+  if (
+    clean.includes('mason') ||
+    clean.includes('masonry') ||
+    clean.includes('गवंडी') ||
+    clean.includes('राजमिस्त्री') ||
+    clean.includes('construction worker') ||
+    clean.includes('बांधकाम कामगार') ||
+    clean.includes('निर्माण श्रमिक')
+  ) {
+    return 'construction_worker';
+  }
+  if (clean.includes('painter') || clean.includes('पेंटर') || clean.includes('रंगारी')) return 'painter';
+  if (clean.includes('welder') || clean.includes('वेल्डर')) return 'welder';
+  if (clean.includes('fitter') || clean.includes('machine operator') || clean.includes('फिटर')) return 'fitter_operator';
+  if (clean.includes('factory') || clean.includes('industrial') || clean.includes('फैक्ट्री') || clean.includes('कारखाना')) {
+    return 'factory_worker';
+  }
+  if (clean.includes('cook') || clean.includes('kitchen') || clean.includes('रसोइया') || clean.includes('स्वयंपाकी')) {
+    return 'cook_kitchen';
+  }
+  if (clean.includes('security guard') || clean.includes('सुरक्षा गार्ड') || clean.includes('सुरक्षा रक्षक')) {
+    return 'security_guard';
+  }
+  if (clean.includes('delivery') || clean.includes('डिलीवरी') || clean.includes('डिलिव्हरी')) return 'delivery_personnel';
+  if (clean.includes('mechanic') || clean.includes('technician') || clean.includes('मेकॅनिक') || clean.includes('मैकेनिक')) {
+    return 'technician_mechanic';
+  }
+  if (clean.includes('housekeeping') || clean.includes('cleaning') || clean.includes('हाउसकीपिंग')) {
+    return 'housekeeping_cleaning';
+  }
+  if (clean.includes('domestic') || clean.includes('घरगुती') || clean.includes('घरेलू')) return 'domestic_worker';
+  if (clean.includes('agricultur') || clean.includes('शेतमजूर') || clean.includes('कृषि श्रमिक')) return 'agricultural_worker';
+  if (clean.includes('healthcare') || clean.includes('caregiver') || clean.includes('आरोग्य') || clean.includes('स्वास्थ्य')) {
+    return 'healthcare_caregiver';
+  }
+  if (clean.includes('teacher') || clean.includes('tutor') || clean.includes('शिक्षक')) return 'teacher_tutor';
+  if (clean.includes('accountant') || clean.includes('अकाउंटंट') || clean.includes('अकाउंटेंट')) return 'accountant';
+  if (clean.includes('data entry') || clean.includes('डेटा एंट्री')) return 'data_entry_operator';
+  if (clean.includes('computer operator') || clean.includes('संगणक चालक')) return 'computer_operator';
+  if (clean.includes('office assistant') || clean.includes('कार्यालय सहाय्यक') || clean.includes('कार्यालय सहायक')) {
+    return 'office_assistant';
+  }
+  if (clean.includes('tailor') || clean.includes('freelancer')) return 'freelancer_self_employed';
+  if (clean.includes('women entrepreneur') || clean.includes('महिला उद्योजक') || clean.includes('महिला उद्यमी')) {
+    return 'women_entrepreneur';
+  }
   return clean.replace(/s$/, '');
+}
+
+function getCategoryCanonicalAndSkills(categoryOrSkill: string): Set<string> {
+  const tokens = new Set<string>();
+  const norm = normalizeCategoryToken(categoryOrSkill);
+  if (norm) tokens.add(norm);
+  const rawLower = (categoryOrSkill || '').toLowerCase().trim();
+  const matchedCat = EMPLOYMENT_CATEGORIES.find(
+    (c) =>
+      c.en.toLowerCase() === rawLower ||
+      normalizeCategoryToken(c.en) === norm ||
+      c.skillsEn.some((sk) => sk.toLowerCase() === rawLower)
+  );
+  if (matchedCat) {
+    tokens.add(normalizeCategoryToken(matchedCat.en));
+    matchedCat.skillsEn.forEach((sk) => {
+      const skNorm = normalizeCategoryToken(sk);
+      if (skNorm) tokens.add(skNorm);
+    });
+  }
+  return tokens;
 }
 
 export function doesCategoryMatch(
@@ -60,20 +135,30 @@ export function doesCategoryMatch(
   if (!jobCatNorm) return false;
 
   const jobSkillNorms = (jobRequiredSkills || []).map(normalizeCategoryToken).filter(Boolean);
-  const jobTokenSet = new Set([jobCatNorm, ...jobSkillNorms]);
+  const jobExpandedSet = new Set<string>([
+    jobCatNorm,
+    ...jobSkillNorms,
+    ...getCategoryCanonicalAndSkills(jobCategory),
+  ]);
 
   const workerPrimaryNorm = normalizeCategoryToken(workerPrimarySkill);
   const workerSkillNorms = (workerSkills || []).map(normalizeCategoryToken).filter(Boolean);
+  const workerExpandedSet = new Set<string>([
+    ...(workerPrimaryNorm ? [workerPrimaryNorm] : []),
+    ...workerSkillNorms,
+    ...(workerPrimarySkill ? Array.from(getCategoryCanonicalAndSkills(workerPrimarySkill)) : []),
+  ]);
 
   const skillMatches =
     Boolean(
       workerPrimaryNorm &&
         (jobCatNorm === workerPrimaryNorm ||
+          jobExpandedSet.has(workerPrimaryNorm) ||
           workerPrimaryNorm.includes(jobCatNorm) ||
           jobCatNorm.includes(workerPrimaryNorm))
     ) ||
-    workerSkillNorms.some((ws) => ws === jobCatNorm || jobTokenSet.has(ws)) ||
-    jobSkillNorms.some((js) => js === workerPrimaryNorm);
+    workerSkillNorms.some((ws) => jobExpandedSet.has(ws)) ||
+    jobSkillNorms.some((js) => workerExpandedSet.has(js));
 
   if (!skillMatches) return false;
 
@@ -88,7 +173,7 @@ export function doesCategoryMatch(
       pref === jobCatNorm ||
       pref.includes(jobCatNorm) ||
       jobCatNorm.includes(pref) ||
-      jobTokenSet.has(pref)
+      jobExpandedSet.has(pref)
   );
 }
 
@@ -379,12 +464,24 @@ export function evaluateWorkerEligibilityForJob(params: {
   }
 
   const workerMaxRadius = normalizeRadiusKm(pref?.preferredRadiusKm ?? worker.preferredRadiusKm ?? 30, 30);
-  const effectiveRadius = Math.min(normalizeRadiusKm(stageRadiusKm, 5), workerMaxRadius);
+  const normalizedStage = normalizeRadiusKm(stageRadiusKm, 5);
+  const effectiveRadius = Math.min(normalizedStage, workerMaxRadius);
+
+  const sameCity =
+    Boolean(job.cityOrVillage && worker.cityOrVillage) &&
+    job.cityOrVillage!.toLowerCase().trim() === worker.cityOrVillage!.toLowerCase().trim();
+  const sameDistrict =
+    Boolean(job.district && worker.district) &&
+    job.district.toLowerCase().trim() === worker.district.toLowerCase().trim();
 
   const distKm = calculateValidDistanceKm(job.lat, job.lng, worker.approxLat, worker.approxLng);
 
   if (distKm !== null) {
-    if (distKm <= effectiveRadius) {
+    if (
+      distKm <= effectiveRadius ||
+      (sameCity && distKm <= 35) ||
+      (sameDistrict && normalizedStage >= 30 && workerMaxRadius >= 30 && distKm <= 120)
+    ) {
       return {
         eligible: true,
         reason: 'matched',
@@ -401,14 +498,7 @@ export function evaluateWorkerEligibilityForJob(params: {
   }
 
   // Fallback when worker lacks valid GPS coordinates: match same city immediately or same district from stage >= 10 km
-  const sameCity =
-    Boolean(job.cityOrVillage && worker.cityOrVillage) &&
-    job.cityOrVillage!.toLowerCase().trim() === worker.cityOrVillage!.toLowerCase().trim();
-  const sameDistrict =
-    Boolean(job.district && worker.district) &&
-    job.district.toLowerCase().trim() === worker.district.toLowerCase().trim();
-
-  if (sameCity || (sameDistrict && stageRadiusKm >= 10)) {
+  if (sameCity || (sameDistrict && normalizedStage >= 10)) {
     return {
       eligible: true,
       reason: 'matched',

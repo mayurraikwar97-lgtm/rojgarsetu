@@ -46,9 +46,19 @@ interface AdminRuntime {
 let cachedRuntime: AdminRuntime | null = null;
 const rateBuckets = new Map<string, number[]>();
 
+const DEFAULT_APPLET_CONFIG: FirebaseAppletConfig = {
+  projectId: 'gen-lang-client-0174765083',
+  firestoreDatabaseId: 'ai-studio-7bd2ffb9-a189-4838-a21e-7da9c4e7b2b7',
+  messagingSenderId: '6490744736',
+};
+
 function loadAppletConfig(rootDir: string): FirebaseAppletConfig {
-  const raw = fs.readFileSync(path.resolve(rootDir, 'firebase-applet-config.json'), 'utf8');
-  return JSON.parse(raw) as FirebaseAppletConfig;
+  try {
+    const raw = fs.readFileSync(path.resolve(rootDir, 'firebase-applet-config.json'), 'utf8');
+    return JSON.parse(raw) as FirebaseAppletConfig;
+  } catch {
+    return DEFAULT_APPLET_CONFIG;
+  }
 }
 
 function checkRateLimit(uid: string, limit = 25, windowMs = 5 * 60 * 1000): boolean {
@@ -125,12 +135,11 @@ function getAdminRuntime(rootDir: string): AdminRuntime {
   return cachedRuntime;
 }
 
-async function verifyRequestUser(
-  req: Request,
+async function verifyAuthHeader(
+  authHeader: string,
   runtime: AdminRuntime
 ): Promise<{ decoded: DecodedIdToken; isAdmin: boolean } | null> {
-  const authHeader = req.headers.authorization || '';
-  const match = authHeader.match(/^Bearer\s+(.+)$/i);
+  const match = (authHeader || '').match(/^Bearer\s+(.+)$/i);
   if (!match) return null;
 
   try {
@@ -149,6 +158,46 @@ async function verifyRequestUser(
     console.warn('ID token verification failed:', err);
     return null;
   }
+}
+
+async function verifyRequestUser(
+  req: Request,
+  runtime: AdminRuntime
+): Promise<{ decoded: DecodedIdToken; isAdmin: boolean } | null> {
+  return verifyAuthHeader(req.headers.authorization || '', runtime);
+}
+
+export function computeAlreadyHandledWorkerUids(params: {
+  existingNotifDocs: Array<{ recipientUid?: unknown; deliveryStatus?: unknown }>;
+  tokensByUid: Map<string, Array<{ docId: string; token: string; preferredLanguage?: string }>>;
+}): {
+  alreadyPushedSet: Set<string>;
+  alreadyInAppSet: Set<string>;
+  alreadyHandledSet: Set<string>;
+} {
+  const alreadyPushedSet = new Set<string>();
+  const alreadyInAppSet = new Set<string>();
+  const alreadyHandledSet = new Set<string>();
+
+  for (const docData of params.existingNotifDocs) {
+    const uid = typeof docData.recipientUid === 'string' ? docData.recipientUid.trim() : '';
+    if (!uid) continue;
+    alreadyInAppSet.add(uid);
+    if (docData.deliveryStatus === 'sent') {
+      alreadyPushedSet.add(uid);
+      alreadyHandledSet.add(uid);
+    }
+  }
+
+  for (const uid of alreadyInAppSet) {
+    if (alreadyPushedSet.has(uid)) continue;
+    const activeTokens = params.tokensByUid.get(uid) || [];
+    if (activeTokens.length === 0) {
+      alreadyHandledSet.add(uid);
+    }
+  }
+
+  return { alreadyPushedSet, alreadyInAppSet, alreadyHandledSet };
 }
 
 function getLanguageOrDefault(val: unknown): 'en' | 'hi' | 'mr' {
@@ -844,7 +893,15 @@ async function dispatchAndRecordTargets(params: {
         }
       }
 
-      if (!alreadyRecordedInFirestore) {
+      let existingDupDocRef: FirebaseFirestore.DocumentReference | null = null;
+      if (safeDocId.length >= 8) {
+        const candidateSnap = await runtime.db.collection('notifications').doc(safeDocId).get().catch(() => null);
+        if (candidateSnap?.exists) {
+          existingDupDocRef = candidateSnap.ref;
+        }
+      }
+
+      if (!alreadyRecordedInFirestore && !existingDupDocRef) {
         const payloadDoc = {
           recipientUid: target.uid,
           recipientRole: target.role,
@@ -869,6 +926,17 @@ async function dispatchAndRecordTargets(params: {
         } else {
           await runtime.db.collection('notifications').add(payloadDoc);
         }
+      } else if (existingDupDocRef) {
+        await existingDupDocRef
+          .set(
+            {
+              deliveryStatus: targetAnySuccess ? 'sent' : 'failed',
+              ...(firstErrorMsg && !targetAnySuccess ? { errorMessage: firstErrorMsg.slice(0, 400) } : {}),
+              updatedAt: FieldValue.serverTimestamp(),
+            },
+            { merge: true }
+          )
+          .catch(() => undefined);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'FCM dispatch error';
@@ -915,31 +983,43 @@ async function dispatchAndRecordTargets(params: {
   };
 }
 
-export function registerNotificationRoutes(
-  app: { get: (p: string, h: (req: Request, res: Response) => void | Promise<void>) => void; post: (p: string, h: (req: Request, res: Response) => void | Promise<void>) => void },
-  rootDir: string
-): void {
-  const runtime = getAdminRuntime(rootDir);
+export interface NotificationHandlerResult {
+  httpStatus: number;
+  payload: Record<string, unknown>;
+}
 
-  // Honest Readiness Checklist Endpoint
-  app.get('/api/notifications/config-status', (req: Request, res: Response) => {
-    const hasVapidKey = Boolean((process.env.VITE_FIREBASE_VAPID_KEY || process.env.FIREBASE_VAPID_KEY || '').trim());
-    const forwardedProto = String(req.headers['x-forwarded-proto'] || '');
-    const httpsActive = req.secure || forwardedProto.includes('https') || req.hostname === 'localhost';
+export function handleNotificationConfigStatus(params: {
+  rootDir: string;
+  headers?: Record<string, unknown>;
+  secure?: boolean;
+  hostname?: string;
+}): NotificationHandlerResult {
+  const runtime = getAdminRuntime(params.rootDir);
+  const hasVapidKey = Boolean((process.env.VITE_FIREBASE_VAPID_KEY || process.env.FIREBASE_VAPID_KEY || '').trim());
+  const forwardedProto = String(params.headers?.['x-forwarded-proto'] || '').toLowerCase();
+  const canonicalUrl = (process.env.VITE_CANONICAL_APP_URL || process.env.APP_URL || '').trim();
+  const httpsActive =
+    Boolean(params.secure) ||
+    forwardedProto.includes('https') ||
+    canonicalUrl.startsWith('https://') ||
+    params.hostname === 'localhost';
+  const demoModeEnvEnabled = (process.env.VITE_DEMO_MODE_ENABLED || 'true').trim().toLowerCase() !== 'false';
 
-    const missingSetupItems: string[] = [];
-    if (!hasVapidKey) {
-      missingSetupItems.push(
-        'VITE_FIREBASE_VAPID_KEY is not set in environment variables (required by browsers to subscribe to Web Push).'
-      );
-    }
-    if (!runtime.hasMessagingCredentials) {
-      missingSetupItems.push(
-        'FIREBASE_SERVICE_ACCOUNT_JSON (or Google Application Default Credentials) is not configured on the server for FCM delivery.'
-      );
-    }
+  const missingSetupItems: string[] = [];
+  if (!hasVapidKey) {
+    missingSetupItems.push(
+      'VITE_FIREBASE_VAPID_KEY is not set in environment variables (required by browsers to subscribe to Web Push).'
+    );
+  }
+  if (!runtime.hasMessagingCredentials) {
+    missingSetupItems.push(
+      'FIREBASE_SERVICE_ACCOUNT_JSON (or Google Application Default Credentials) is not configured on the server for FCM delivery.'
+    );
+  }
 
-    res.json({
+  return {
+    httpStatus: 200,
+    payload: {
       ok: true,
       hasVapidKey,
       hasAdminMessaging: runtime.hasMessagingCredentials,
@@ -947,190 +1027,215 @@ export function registerNotificationRoutes(
       projectId: runtime.config.projectId,
       databaseId: runtime.config.firestoreDatabaseId,
       httpsActive,
+      demoModeEnvEnabled,
       missingSetupItems,
-    });
-  });
+    },
+  };
+}
 
-  // Match & Notify Eligible Workers when a Job is Posted
-  app.post('/api/notifications/send-matching-job', async (req: Request, res: Response) => {
-    const authUser = await verifyRequestUser(req, runtime);
-    if (!authUser) {
-      res.status(401).json({ error: 'UNAUTHORIZED', message: 'Valid sign-in required.' });
-      return;
-    }
-    if (!checkRateLimit(authUser.decoded.uid)) {
-      res.status(429).json({ error: 'RATE_LIMITED', message: 'Too many notification requests. Please wait a few minutes.' });
-      return;
-    }
-    if (!runtime.hasMessagingCredentials) {
-      res.status(503).json({
+export async function handleSendMatchingJob(params: {
+  authHeader: string;
+  body: Record<string, unknown>;
+  rootDir: string;
+}): Promise<NotificationHandlerResult> {
+  const runtime = getAdminRuntime(params.rootDir);
+  const authUser = await verifyAuthHeader(params.authHeader, runtime);
+  if (!authUser) {
+    return { httpStatus: 401, payload: { error: 'UNAUTHORIZED', message: 'Valid sign-in required.' } };
+  }
+  if (!checkRateLimit(authUser.decoded.uid)) {
+    return {
+      httpStatus: 429,
+      payload: { error: 'RATE_LIMITED', message: 'Too many notification requests. Please wait a few minutes.' },
+    };
+  }
+  if (!runtime.hasMessagingCredentials) {
+    return {
+      httpStatus: 503,
+      payload: {
         ok: false,
         errorCode: 'ADMIN_CREDENTIALS_MISSING',
         message: 'Server Firebase Admin credentials are not configured yet to query and dispatch matching notifications.',
-      });
-      return;
+      },
+    };
+  }
+
+  const jobId = typeof params.body?.jobId === 'string' ? params.body.jobId.trim() : '';
+  if (!jobId) {
+    return { httpStatus: 400, payload: { error: 'MISSING_JOB_ID' } };
+  }
+
+  try {
+    const jobSnap = await runtime.db.collection('jobs').doc(jobId).get();
+    if (!jobSnap.exists) {
+      return { httpStatus: 404, payload: { error: 'JOB_NOT_FOUND' } };
+    }
+    const job = jobSnap.data()!;
+    if (job.employerUid !== authUser.decoded.uid && !authUser.isAdmin) {
+      return { httpStatus: 403, payload: { error: 'FORBIDDEN' } };
     }
 
-    const jobId = typeof req.body?.jobId === 'string' ? req.body.jobId.trim() : '';
-    if (!jobId) {
-      res.status(400).json({ error: 'MISSING_JOB_ID' });
-      return;
+    const [workersSnap, tokensSnap, prefsSnap, existingJobNotifsSnap] = await Promise.all([
+      runtime.db.collection('publicWorkers').get(),
+      runtime.db.collection('device_tokens').where('enabled', '==', true).get(),
+      runtime.db.collection('notification_preferences').get(),
+      runtime.db.collection('notifications').where('targetJobId', '==', jobId).get(),
+    ]);
+
+    const prefsByUid = new Map<string, FirebaseFirestore.DocumentData>();
+    prefsSnap.docs.forEach((d) => prefsByUid.set(d.id, d.data()));
+
+    const tokensByUid = new Map<string, Array<{ docId: string; token: string; preferredLanguage?: string }>>();
+    tokensSnap.docs.forEach((d) => {
+      const data = d.data();
+      if (data.isDemo === true) return;
+      const ownerUid = typeof data.ownerUid === 'string' ? data.ownerUid.trim() : '';
+      const tokenStr = typeof data.token === 'string' ? data.token.trim() : '';
+      if (!ownerUid || !tokenStr) return;
+      const list = tokensByUid.get(ownerUid) || [];
+      list.push({ docId: d.id, token: tokenStr, preferredLanguage: data.preferredLanguage });
+      tokensByUid.set(ownerUid, list);
+    });
+
+    const requestedRadius = normalizeRadiusKm(
+      params.body?.stageRadiusKm ?? job.currentRadiusKm ?? job.initialRadiusKm ?? 5,
+      5
+    );
+    const autoExpandIfEmpty = params.body?.autoExpandIfEmpty !== false;
+
+    const existingNotified: string[] = Array.isArray(job.notifiedWorkerUids)
+      ? job.notifiedWorkerUids.map((u: unknown) => String(u))
+      : [];
+
+    // CRITICAL FIX: Do NOT block server FCM push just because client already wrote
+    // in-app notification docs & notifiedWorkerUids. Only skip workers who ALREADY
+    // succeeded FCM delivery (deliveryStatus === 'sent') or already have an in-app doc with 0 active tokens.
+    const { alreadyHandledSet } = computeAlreadyHandledWorkerUids({
+      existingNotifDocs: existingJobNotifsSnap.docs.map((d) => d.data()),
+      tokensByUid,
+    });
+
+    let activeRadiusKm = requestedRadius;
+    let targets = collectStageTargets({
+      jobId,
+      job,
+      workersDocs: workersSnap.docs,
+      tokensByUid,
+      prefsByUid,
+      stageRadiusKm: activeRadiusKm,
+      alreadyNotifiedSet: alreadyHandledSet,
+    });
+
+    if (targets.length === 0 && autoExpandIfEmpty) {
+      for (const candidateStage of SERVICE_RADIUS_STAGES) {
+        if (candidateStage <= activeRadiusKm) continue;
+        activeRadiusKm = candidateStage;
+        targets = collectStageTargets({
+          jobId,
+          job,
+          workersDocs: workersSnap.docs,
+          tokensByUid,
+          prefsByUid,
+          stageRadiusKm: activeRadiusKm,
+          alreadyNotifiedSet: alreadyHandledSet,
+        });
+        if (targets.length > 0) break;
+      }
     }
 
-    try {
-      const jobSnap = await runtime.db.collection('jobs').doc(jobId).get();
-      if (!jobSnap.exists) {
-        res.status(404).json({ error: 'JOB_NOT_FOUND' });
-        return;
-      }
-      const job = jobSnap.data()!;
-      if (job.employerUid !== authUser.decoded.uid && !authUser.isAdmin) {
-        res.status(403).json({ error: 'FORBIDDEN' });
-        return;
-      }
+    const cappedTargets = targets.slice(0, 100);
+    const result = await dispatchAndRecordTargets({
+      runtime,
+      targets: cappedTargets,
+      sentByUid: authUser.decoded.uid,
+    });
 
-      const [workersSnap, tokensSnap, prefsSnap] = await Promise.all([
-        runtime.db.collection('publicWorkers').get(),
-        runtime.db.collection('device_tokens').where('enabled', '==', true).where('isDemo', '==', false).get(),
-        runtime.db.collection('notification_preferences').get(),
-      ]);
+    const updatedNotifiedUids = Array.from(
+      new Set([...existingNotified, ...cappedTargets.map((t) => t.uid)])
+    ).slice(0, 100);
 
-      const prefsByUid = new Map<string, FirebaseFirestore.DocumentData>();
-      prefsSnap.docs.forEach((d) => prefsByUid.set(d.id, d.data()));
+    await runtime.db
+      .collection('jobs')
+      .doc(jobId)
+      .update({
+        currentRadiusKm: activeRadiusKm,
+        radiusStageUpdatedAt: FieldValue.serverTimestamp(),
+        notifiedWorkerUids: updatedNotifiedUids,
+        ...(updatedNotifiedUids.length > 0 ? { dealStatus: 'NOTIFIED' } : {}),
+        updatedAt: FieldValue.serverTimestamp(),
+      })
+      .catch(() => undefined);
 
-      const tokensByUid = new Map<string, Array<{ docId: string; token: string; preferredLanguage?: string }>>();
-      tokensSnap.docs.forEach((d) => {
-        const data = d.data();
-        const list = tokensByUid.get(data.ownerUid) || [];
-        list.push({ docId: d.id, token: data.token, preferredLanguage: data.preferredLanguage });
-        tokensByUid.set(data.ownerUid, list);
-      });
-
-      const requestedRadius = normalizeRadiusKm(
-        req.body?.stageRadiusKm ?? job.currentRadiusKm ?? job.initialRadiusKm ?? 5,
-        5
-      );
-      const autoExpandIfEmpty = req.body?.autoExpandIfEmpty !== false;
-
-      const existingNotified: string[] = Array.isArray(job.notifiedWorkerUids)
-        ? job.notifiedWorkerUids.map((u: unknown) => String(u))
-        : [];
-      const alreadyNotifiedSet = new Set<string>(existingNotified);
-
-      let activeRadiusKm = requestedRadius;
-      let targets = collectStageTargets({
-        jobId,
-        job,
-        workersDocs: workersSnap.docs,
-        tokensByUid,
-        prefsByUid,
-        stageRadiusKm: activeRadiusKm,
-        alreadyNotifiedSet,
-      });
-
-      if (targets.length === 0 && autoExpandIfEmpty) {
-        for (const candidateStage of SERVICE_RADIUS_STAGES) {
-          if (candidateStage <= activeRadiusKm) continue;
-          activeRadiusKm = candidateStage;
-          targets = collectStageTargets({
-            jobId,
-            job,
-            workersDocs: workersSnap.docs,
-            tokensByUid,
-            prefsByUid,
-            stageRadiusKm: activeRadiusKm,
-            alreadyNotifiedSet,
-          });
-          if (targets.length > 0) break;
-        }
-      }
-
-      const cappedTargets = targets.slice(0, 100);
-      const result = await dispatchAndRecordTargets({
-        runtime,
-        targets: cappedTargets,
-        sentByUid: authUser.decoded.uid,
-      });
-
-      const updatedNotifiedUids = Array.from(
-        new Set([...existingNotified, ...cappedTargets.map((t) => t.uid)])
-      ).slice(0, 100);
-
-      await runtime.db
-        .collection('jobs')
-        .doc(jobId)
-        .update({
-          currentRadiusKm: activeRadiusKm,
-          radiusStageUpdatedAt: FieldValue.serverTimestamp(),
-          notifiedWorkerUids: updatedNotifiedUids,
-          ...(cappedTargets.length > 0 ? { dealStatus: 'NOTIFIED' } : {}),
-          updatedAt: FieldValue.serverTimestamp(),
-        })
-        .catch(() => undefined);
-
-      res.json({
+    return {
+      httpStatus: 200,
+      payload: {
         matchedWorkersCount: cappedTargets.length,
+        workersWithTokensCount: cappedTargets.filter((t) => t.tokens.length > 0).length,
         currentRadiusKm: activeRadiusKm,
         hasNextStage: getNextRadiusStage(activeRadiusKm) !== null,
         totalNotifiedCount: updatedNotifiedUids.length,
         ...result,
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Matching notification error';
-      res.status(500).json({ ok: false, errorCode: 'SERVER_ERROR', message });
-    }
-  });
+      },
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Matching notification error';
+    return { httpStatus: 500, payload: { ok: false, errorCode: 'SERVER_ERROR', message } };
+  }
+}
 
-  // Expand Search Radius (5 -> 10 -> 20 -> 30 km) without re-notifying prior workers
-  app.post('/api/notifications/expand-job-radius', async (req: Request, res: Response) => {
-    const authUser = await verifyRequestUser(req, runtime);
-    if (!authUser) {
-      res.status(401).json({ error: 'UNAUTHORIZED', message: 'Valid sign-in required.' });
-      return;
-    }
-    if (!checkRateLimit(authUser.decoded.uid, 30)) {
-      res.status(429).json({ error: 'RATE_LIMITED', message: 'Too many expansion requests.' });
-      return;
-    }
-    if (!runtime.hasMessagingCredentials) {
-      res.status(503).json({
+export async function handleExpandJobRadius(params: {
+  authHeader: string;
+  body: Record<string, unknown>;
+  rootDir: string;
+}): Promise<NotificationHandlerResult> {
+  const runtime = getAdminRuntime(params.rootDir);
+  const authUser = await verifyAuthHeader(params.authHeader, runtime);
+  if (!authUser) {
+    return { httpStatus: 401, payload: { error: 'UNAUTHORIZED', message: 'Valid sign-in required.' } };
+  }
+  if (!checkRateLimit(authUser.decoded.uid, 30)) {
+    return { httpStatus: 429, payload: { error: 'RATE_LIMITED', message: 'Too many expansion requests.' } };
+  }
+  if (!runtime.hasMessagingCredentials) {
+    return {
+      httpStatus: 503,
+      payload: {
         ok: false,
         errorCode: 'ADMIN_CREDENTIALS_MISSING',
         message: 'Server Firebase Admin credentials are not configured yet for push expansion.',
-      });
-      return;
+      },
+    };
+  }
+
+  const jobId = typeof params.body?.jobId === 'string' ? params.body.jobId.trim() : '';
+  if (!jobId) {
+    return { httpStatus: 400, payload: { error: 'MISSING_JOB_ID' } };
+  }
+
+  try {
+    const jobSnap = await runtime.db.collection('jobs').doc(jobId).get();
+    if (!jobSnap.exists) {
+      return { httpStatus: 404, payload: { error: 'JOB_NOT_FOUND' } };
+    }
+    const job = jobSnap.data()!;
+    if (job.employerUid !== authUser.decoded.uid && !authUser.isAdmin) {
+      return { httpStatus: 403, payload: { error: 'FORBIDDEN' } };
     }
 
-    const jobId = typeof req.body?.jobId === 'string' ? req.body.jobId.trim() : '';
-    if (!jobId) {
-      res.status(400).json({ error: 'MISSING_JOB_ID' });
-      return;
-    }
+    const prevRadius = normalizeRadiusKm(job.currentRadiusKm ?? job.initialRadiusKm ?? 5, 5);
+    const hasExplicitTarget = Boolean(params.body?.targetRadiusKm);
+    const nextStage = hasExplicitTarget
+      ? normalizeRadiusKm(params.body.targetRadiusKm, prevRadius)
+      : getNextRadiusStage(prevRadius);
 
-    try {
-      const jobSnap = await runtime.db.collection('jobs').doc(jobId).get();
-      if (!jobSnap.exists) {
-        res.status(404).json({ error: 'JOB_NOT_FOUND' });
-        return;
-      }
-      const job = jobSnap.data()!;
-      if (job.employerUid !== authUser.decoded.uid && !authUser.isAdmin) {
-        res.status(403).json({ error: 'FORBIDDEN' });
-        return;
-      }
+    const existingNotified: string[] = Array.isArray(job.notifiedWorkerUids)
+      ? job.notifiedWorkerUids.map((u: unknown) => String(u))
+      : [];
 
-      const prevRadius = normalizeRadiusKm(job.currentRadiusKm ?? job.initialRadiusKm ?? 5, 5);
-      const nextStage = req.body?.targetRadiusKm
-        ? normalizeRadiusKm(req.body.targetRadiusKm, prevRadius)
-        : getNextRadiusStage(prevRadius);
-
-      const existingNotified: string[] = Array.isArray(job.notifiedWorkerUids)
-        ? job.notifiedWorkerUids.map((u: unknown) => String(u))
-        : [];
-      const alreadyNotifiedSet = new Set<string>(existingNotified);
-
-      if (!nextStage || nextStage <= prevRadius) {
-        res.json({
+    if (!nextStage || (!hasExplicitTarget && nextStage <= prevRadius) || (hasExplicitTarget && nextStage < prevRadius)) {
+      return {
+        httpStatus: 200,
+        payload: {
           ok: true,
           previousRadiusKm: prevRadius,
           currentRadiusKm: prevRadius,
@@ -1138,264 +1243,285 @@ export function registerNotificationRoutes(
           newlyNotifiedCount: 0,
           sentCount: 0,
           inAppOnlyCount: 0,
-          totalNotifiedCount: alreadyNotifiedSet.size,
+          totalNotifiedCount: existingNotified.length,
           message: 'Maximum 30 km radius stage already active.',
-        });
-        return;
-      }
+        },
+      };
+    }
 
-      const [workersSnap, tokensSnap, prefsSnap] = await Promise.all([
-        runtime.db.collection('publicWorkers').get(),
-        runtime.db.collection('device_tokens').where('enabled', '==', true).where('isDemo', '==', false).get(),
-        runtime.db.collection('notification_preferences').get(),
-      ]);
+    const [workersSnap, tokensSnap, prefsSnap, existingJobNotifsSnap] = await Promise.all([
+      runtime.db.collection('publicWorkers').get(),
+      runtime.db.collection('device_tokens').where('enabled', '==', true).get(),
+      runtime.db.collection('notification_preferences').get(),
+      runtime.db.collection('notifications').where('targetJobId', '==', jobId).get(),
+    ]);
 
-      const prefsByUid = new Map<string, FirebaseFirestore.DocumentData>();
-      prefsSnap.docs.forEach((d) => prefsByUid.set(d.id, d.data()));
+    const prefsByUid = new Map<string, FirebaseFirestore.DocumentData>();
+    prefsSnap.docs.forEach((d) => prefsByUid.set(d.id, d.data()));
 
-      const tokensByUid = new Map<string, Array<{ docId: string; token: string; preferredLanguage?: string }>>();
-      tokensSnap.docs.forEach((d) => {
-        const data = d.data();
-        const list = tokensByUid.get(data.ownerUid) || [];
-        list.push({ docId: d.id, token: data.token, preferredLanguage: data.preferredLanguage });
-        tokensByUid.set(data.ownerUid, list);
-      });
+    const tokensByUid = new Map<string, Array<{ docId: string; token: string; preferredLanguage?: string }>>();
+    tokensSnap.docs.forEach((d) => {
+      const data = d.data();
+      if (data.isDemo === true) return;
+      const ownerUid = typeof data.ownerUid === 'string' ? data.ownerUid.trim() : '';
+      const tokenStr = typeof data.token === 'string' ? data.token.trim() : '';
+      if (!ownerUid || !tokenStr) return;
+      const list = tokensByUid.get(ownerUid) || [];
+      list.push({ docId: d.id, token: tokenStr, preferredLanguage: data.preferredLanguage });
+      tokensByUid.set(ownerUid, list);
+    });
 
-      const targets = collectStageTargets({
-        jobId,
-        job,
-        workersDocs: workersSnap.docs,
-        tokensByUid,
-        prefsByUid,
-        stageRadiusKm: nextStage,
-        alreadyNotifiedSet,
-      }).slice(0, 100);
+    const { alreadyHandledSet } = computeAlreadyHandledWorkerUids({
+      existingNotifDocs: existingJobNotifsSnap.docs.map((d) => d.data()),
+      tokensByUid,
+    });
 
-      const result = await dispatchAndRecordTargets({
-        runtime,
-        targets,
-        sentByUid: authUser.decoded.uid,
-      });
+    const targets = collectStageTargets({
+      jobId,
+      job,
+      workersDocs: workersSnap.docs,
+      tokensByUid,
+      prefsByUid,
+      stageRadiusKm: nextStage,
+      alreadyNotifiedSet: alreadyHandledSet,
+    }).slice(0, 100);
 
-      const updatedNotifiedUids = Array.from(
-        new Set([...existingNotified, ...targets.map((t) => t.uid)])
-      ).slice(0, 100);
+    const result = await dispatchAndRecordTargets({
+      runtime,
+      targets,
+      sentByUid: authUser.decoded.uid,
+    });
 
-      await runtime.db
-        .collection('jobs')
-        .doc(jobId)
-        .update({
-          currentRadiusKm: nextStage,
-          radiusStageUpdatedAt: FieldValue.serverTimestamp(),
-          notifiedWorkerUids: updatedNotifiedUids,
-          ...(targets.length > 0 ? { dealStatus: 'NOTIFIED' } : {}),
-          updatedAt: FieldValue.serverTimestamp(),
-        })
-        .catch(() => undefined);
+    const updatedNotifiedUids = Array.from(
+      new Set([...existingNotified, ...targets.map((t) => t.uid)])
+    ).slice(0, 100);
 
-      res.json({
+    await runtime.db
+      .collection('jobs')
+      .doc(jobId)
+      .update({
+        currentRadiusKm: nextStage,
+        radiusStageUpdatedAt: FieldValue.serverTimestamp(),
+        notifiedWorkerUids: updatedNotifiedUids,
+        ...(updatedNotifiedUids.length > 0 ? { dealStatus: 'NOTIFIED' } : {}),
+        updatedAt: FieldValue.serverTimestamp(),
+      })
+      .catch(() => undefined);
+
+    return {
+      httpStatus: 200,
+      payload: {
         previousRadiusKm: prevRadius,
         currentRadiusKm: nextStage,
         hasNextStage: getNextRadiusStage(nextStage) !== null,
         newlyNotifiedCount: targets.length,
         totalNotifiedCount: updatedNotifiedUids.length,
         ...result,
-      });
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Radius expansion failed';
-      res.status(500).json({ ok: false, errorCode: 'SERVER_ERROR', message });
-    }
-  });
+      },
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Radius expansion failed';
+    return { httpStatus: 500, payload: { ok: false, errorCode: 'SERVER_ERROR', message } };
+  }
+}
 
-  // Notify Customer on Worker Application, Quotation, Booking Update, or Arrival
-  app.post('/api/notifications/send-customer-event', async (req: Request, res: Response) => {
-    const authUser = await verifyRequestUser(req, runtime);
-    if (!authUser) {
-      res.status(401).json({ error: 'UNAUTHORIZED' });
-      return;
-    }
-    if (!checkRateLimit(authUser.decoded.uid, 40)) {
-      res.status(429).json({ error: 'RATE_LIMITED' });
-      return;
-    }
-    if (!runtime.hasMessagingCredentials) {
-      res.status(503).json({
+export async function handleSendCustomerEvent(params: {
+  authHeader: string;
+  body: Record<string, unknown>;
+  rootDir: string;
+}): Promise<NotificationHandlerResult> {
+  const runtime = getAdminRuntime(params.rootDir);
+  const authUser = await verifyAuthHeader(params.authHeader, runtime);
+  if (!authUser) {
+    return { httpStatus: 401, payload: { error: 'UNAUTHORIZED' } };
+  }
+  if (!checkRateLimit(authUser.decoded.uid, 40)) {
+    return { httpStatus: 429, payload: { error: 'RATE_LIMITED' } };
+  }
+  if (!runtime.hasMessagingCredentials) {
+    return {
+      httpStatus: 503,
+      payload: {
         ok: false,
         errorCode: 'ADMIN_CREDENTIALS_MISSING',
         message: 'Server Firebase Admin credentials are not configured yet for push delivery.',
-      });
-      return;
-    }
+      },
+    };
+  }
 
-    const recipientUid = typeof req.body?.recipientUid === 'string' ? req.body.recipientUid.trim() : '';
-    const recipientRoleRaw = typeof req.body?.recipientRole === 'string' ? req.body.recipientRole.trim() : '';
-    const eventType = typeof req.body?.eventType === 'string' ? req.body.eventType.trim() : 'new_application';
-    const workerName = typeof req.body?.workerName === 'string' ? req.body.workerName.trim().slice(0, 100) : '';
-    const jobTitle = typeof req.body?.jobTitle === 'string' ? req.body.jobTitle.trim().slice(0, 140) : '';
-    const jobId = typeof req.body?.jobId === 'string' ? req.body.jobId.trim() : '';
-    const bookingId = typeof req.body?.bookingId === 'string' ? req.body.bookingId.trim() : '';
-    const proposedWage = Number(req.body?.proposedWage) || 0;
-    const eta = typeof req.body?.eta === 'string' ? req.body.eta.trim().slice(0, 80) : '';
-    const locationLabel = typeof req.body?.locationLabel === 'string' ? req.body.locationLabel.trim().slice(0, 140) : '';
-    const messageSnippet = typeof req.body?.messageSnippet === 'string' ? req.body.messageSnippet.trim().slice(0, 180) : '';
-    const requestedDedupeKey = typeof req.body?.dedupeKey === 'string' ? req.body.dedupeKey.trim().slice(0, 120) : '';
-    const targetRoute = typeof req.body?.targetRoute === 'string' ? req.body.targetRoute : 'employer-dashboard';
+  const recipientUid = typeof params.body?.recipientUid === 'string' ? params.body.recipientUid.trim() : '';
+  const recipientRoleRaw = typeof params.body?.recipientRole === 'string' ? params.body.recipientRole.trim() : '';
+  const eventType = typeof params.body?.eventType === 'string' ? params.body.eventType.trim() : 'new_application';
+  const workerName = typeof params.body?.workerName === 'string' ? params.body.workerName.trim().slice(0, 100) : '';
+  const jobTitle = typeof params.body?.jobTitle === 'string' ? params.body.jobTitle.trim().slice(0, 140) : '';
+  const jobId = typeof params.body?.jobId === 'string' ? params.body.jobId.trim() : '';
+  const bookingId = typeof params.body?.bookingId === 'string' ? params.body.bookingId.trim() : '';
+  const proposedWage = Number(params.body?.proposedWage) || 0;
+  const eta = typeof params.body?.eta === 'string' ? params.body.eta.trim().slice(0, 80) : '';
+  const locationLabel = typeof params.body?.locationLabel === 'string' ? params.body.locationLabel.trim().slice(0, 140) : '';
+  const messageSnippet = typeof params.body?.messageSnippet === 'string' ? params.body.messageSnippet.trim().slice(0, 180) : '';
+  const requestedDedupeKey = typeof params.body?.dedupeKey === 'string' ? params.body.dedupeKey.trim().slice(0, 120) : '';
+  const targetRoute = typeof params.body?.targetRoute === 'string' ? params.body.targetRoute : 'employer-dashboard';
 
-    if (!recipientUid) {
-      res.status(400).json({ error: 'MISSING_RECIPIENT' });
-      return;
-    }
+  if (!recipientUid) {
+    return { httpStatus: 400, payload: { error: 'MISSING_RECIPIENT' } };
+  }
 
-    try {
-      if (!authUser.isAdmin) {
-        const callerUid = authUser.decoded.uid;
-        let authorized = false;
+  try {
+    if (!authUser.isAdmin) {
+      const callerUid = authUser.decoded.uid;
+      let authorized = false;
 
-        if (jobId) {
-          const jobSnap = await runtime.db.collection('jobs').doc(jobId).get();
-          if (jobSnap.exists) {
-            const jobData = jobSnap.data() as { employerUid?: string };
-            if (jobData.employerUid === callerUid) {
-              // Job owner can notify applicants, invited workers, or registered workers matching the job request
-              const appSnap = await runtime.db
-                .collection('applications')
-                .where('jobId', '==', jobId)
-                .where('workerUid', '==', recipientUid)
-                .limit(1)
-                .get();
-              if (!appSnap.empty) {
-                authorized = true;
-              } else {
-                const workerSnap = await runtime.db.collection('publicWorkers').doc(recipientUid).get();
-                authorized = workerSnap.exists;
-              }
-            } else if (jobData.employerUid === recipientUid) {
-              const appSnap = await runtime.db
-                .collection('applications')
-                .where('jobId', '==', jobId)
-                .where('workerUid', '==', callerUid)
-                .limit(1)
-                .get();
-              authorized = !appSnap.empty;
+      if (jobId) {
+        const jobSnap = await runtime.db.collection('jobs').doc(jobId).get();
+        if (jobSnap.exists) {
+          const jobData = jobSnap.data() as { employerUid?: string };
+          if (jobData.employerUid === callerUid) {
+            const appSnap = await runtime.db
+              .collection('applications')
+              .where('jobId', '==', jobId)
+              .where('workerUid', '==', recipientUid)
+              .limit(1)
+              .get();
+            if (!appSnap.empty) {
+              authorized = true;
+            } else {
+              const workerSnap = await runtime.db.collection('publicWorkers').doc(recipientUid).get();
+              authorized = workerSnap.exists;
             }
-          }
-        } else if (bookingId) {
-          const bookingSnap = await runtime.db.collection('vehicleBookings').doc(bookingId).get();
-          if (bookingSnap.exists) {
-            const bData = bookingSnap.data() as { ownerUid?: string; customerUid?: string };
-            authorized =
-              (bData.ownerUid === callerUid && bData.customerUid === recipientUid) ||
-              (bData.customerUid === callerUid && bData.ownerUid === recipientUid);
+          } else if (jobData.employerUid === recipientUid) {
+            const appSnap = await runtime.db
+              .collection('applications')
+              .where('jobId', '==', jobId)
+              .where('workerUid', '==', callerUid)
+              .limit(1)
+              .get();
+            authorized = !appSnap.empty;
           }
         }
+      } else if (bookingId) {
+        const bookingSnap = await runtime.db.collection('vehicleBookings').doc(bookingId).get();
+        if (bookingSnap.exists) {
+          const bData = bookingSnap.data() as { ownerUid?: string; customerUid?: string };
+          authorized =
+            (bData.ownerUid === callerUid && bData.customerUid === recipientUid) ||
+            (bData.customerUid === callerUid && bData.ownerUid === recipientUid);
+        }
+      }
 
-        if (!authorized) {
-          res.status(403).json({
+      if (!authorized) {
+        return {
+          httpStatus: 403,
+          payload: {
             ok: false,
             errorCode: 'FORBIDDEN',
             message: 'Caller is not authorized to notify this recipient for the specified job or booking.',
-          });
-          return;
-        }
+          },
+        };
       }
-
-      const [prefSnap, tokenSnap] = await Promise.all([
-        runtime.db.collection('notification_preferences').doc(recipientUid).get(),
-        runtime.db
-          .collection('device_tokens')
-          .where('ownerUid', '==', recipientUid)
-          .where('enabled', '==', true)
-          .get(),
-      ]);
-
-      const pref = prefSnap.exists ? prefSnap.data() : undefined;
-      if (pref && pref.masterEnabled === false) {
-        res.json({ ok: true, skipped: true, message: 'Recipient disabled notifications.' });
-        return;
-      }
-
-      const lang = getLanguageOrDefault(pref?.preferredLanguage || tokenSnap.docs[0]?.data()?.preferredLanguage);
-      const msg = buildLocalizedCustomerEventMessage({
-        lang,
-        eventType,
-        workerName,
-        jobTitle,
-        proposedWage,
-        eta,
-        locationLabel,
-        messageSnippet,
-      });
-
-      const resolvedRole: DeliveryTarget['role'] =
-        recipientRoleRaw === 'worker' || targetRoute === 'worker-dashboard' || targetRoute === 'find-work'
-          ? 'worker'
-          : 'employer';
-
-      const resolvedCategory: DeliveryTarget['category'] = eventType.includes('booking')
-        ? 'bookingNotifications'
-        : eventType === 'hiring_request_created'
-        ? 'matchingJobs'
-        : 'applicationUpdates';
-
-      const resolvedTone = getToneTypeForEvent({
-        toneType: typeof req.body?.toneType === 'string' ? req.body.toneType : undefined,
-        eventType,
-        category: resolvedCategory,
-      });
-
-      const playSound = isToneEnabledForPref(pref, resolvedTone);
-
-      const target: DeliveryTarget = {
-        uid: recipientUid,
-        label: resolvedRole === 'worker' ? 'Worker' : 'Customer / Employer',
-        role: resolvedRole,
-        isDemo: false,
-        language: lang,
-        tokens: tokenSnap.docs.map((d) => ({ docId: d.id, token: String(d.data().token) })),
-        title: msg.title,
-        body: msg.body,
-        eventType,
-        toneType: resolvedTone,
-        playSound,
-        category: resolvedCategory,
-        targetRoute,
-        ...(jobId ? { targetJobId: jobId } : {}),
-        clickUrl: `/?route=${encodeURIComponent(targetRoute)}${jobId ? `&jobId=${encodeURIComponent(jobId)}` : ''}`,
-        dedupeKey: requestedDedupeKey || `event_${eventType}_${jobId || 'na'}_${Date.now()}`,
-      };
-
-      const result = await dispatchAndRecordTargets({
-        runtime,
-        targets: [target],
-        sentByUid: authUser.decoded.uid,
-      });
-      res.json(result);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Customer notification failed';
-      res.status(500).json({ ok: false, errorCode: 'SERVER_ERROR', message });
-    }
-  });
-
-  // Admin Live Notification Demo & Audit Endpoint
-  app.post('/api/notifications/admin-demo', async (req: Request, res: Response) => {
-    const authUser = await verifyRequestUser(req, runtime);
-    if (!authUser || !authUser.isAdmin) {
-      res.status(403).json({ error: 'FORBIDDEN', message: 'Admin privileges required.' });
-      return;
-    }
-    if (!checkRateLimit(authUser.decoded.uid, 50)) {
-      res.status(429).json({ error: 'RATE_LIMITED' });
-      return;
     }
 
-    const action = typeof req.body?.action === 'string' ? req.body.action : '';
-    const confirmed = req.body?.confirmed === true;
-    const customTitle = typeof req.body?.title === 'string' ? req.body.title.trim().slice(0, 140) : '';
-    const customBody = typeof req.body?.body === 'string' ? req.body.body.trim().slice(0, 400) : '';
-    const lang = getLanguageOrDefault(req.body?.language);
+    const [prefSnap, tokenSnap] = await Promise.all([
+      runtime.db.collection('notification_preferences').doc(recipientUid).get(),
+      runtime.db.collection('device_tokens').where('ownerUid', '==', recipientUid).get(),
+    ]);
 
-    if (!runtime.hasMessagingCredentials) {
-      res.status(503).json({
+    const activeTokenDocs = tokenSnap.docs.filter((d) => {
+      const data = d.data();
+      return data.enabled === true && Boolean(data.token);
+    });
+
+    const pref = prefSnap.exists ? prefSnap.data() : undefined;
+    if (pref && pref.masterEnabled === false) {
+      return { httpStatus: 200, payload: { ok: true, skipped: true, message: 'Recipient disabled notifications.' } };
+    }
+
+    const lang = getLanguageOrDefault(pref?.preferredLanguage || activeTokenDocs[0]?.data()?.preferredLanguage);
+    const msg = buildLocalizedCustomerEventMessage({
+      lang,
+      eventType,
+      workerName,
+      jobTitle,
+      proposedWage,
+      eta,
+      locationLabel,
+      messageSnippet,
+    });
+
+    const resolvedRole: DeliveryTarget['role'] =
+      recipientRoleRaw === 'worker' || targetRoute === 'worker-dashboard' || targetRoute === 'find-work'
+        ? 'worker'
+        : 'employer';
+
+    const resolvedCategory: DeliveryTarget['category'] = eventType.includes('booking')
+      ? 'bookingNotifications'
+      : eventType === 'hiring_request_created'
+      ? 'matchingJobs'
+      : 'applicationUpdates';
+
+    const resolvedTone = getToneTypeForEvent({
+      toneType: typeof params.body?.toneType === 'string' ? params.body.toneType : undefined,
+      eventType,
+      category: resolvedCategory,
+    });
+
+    const playSound = isToneEnabledForPref(pref, resolvedTone);
+
+    const target: DeliveryTarget = {
+      uid: recipientUid,
+      label: resolvedRole === 'worker' ? 'Worker' : 'Customer / Employer',
+      role: resolvedRole,
+      isDemo: false,
+      language: lang,
+      tokens: activeTokenDocs.map((d) => ({ docId: d.id, token: String(d.data().token) })),
+      title: msg.title,
+      body: msg.body,
+      eventType,
+      toneType: resolvedTone,
+      playSound,
+      category: resolvedCategory,
+      targetRoute,
+      ...(jobId ? { targetJobId: jobId } : {}),
+      clickUrl: `/?route=${encodeURIComponent(targetRoute)}${jobId ? `&jobId=${encodeURIComponent(jobId)}` : ''}`,
+      dedupeKey: requestedDedupeKey || `event_${eventType}_${jobId || 'na'}_${Date.now()}`,
+    };
+
+    const result = await dispatchAndRecordTargets({
+      runtime,
+      targets: [target],
+      sentByUid: authUser.decoded.uid,
+    });
+    return { httpStatus: 200, payload: result };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Customer notification failed';
+    return { httpStatus: 500, payload: { ok: false, errorCode: 'SERVER_ERROR', message } };
+  }
+}
+
+export async function handleAdminDemoNotification(params: {
+  authHeader: string;
+  body: Record<string, unknown>;
+  rootDir: string;
+}): Promise<NotificationHandlerResult> {
+  const runtime = getAdminRuntime(params.rootDir);
+  const authUser = await verifyAuthHeader(params.authHeader, runtime);
+  if (!authUser || !authUser.isAdmin) {
+    return { httpStatus: 403, payload: { error: 'FORBIDDEN', message: 'Admin privileges required.' } };
+  }
+  if (!checkRateLimit(authUser.decoded.uid, 50)) {
+    return { httpStatus: 429, payload: { error: 'RATE_LIMITED' } };
+  }
+
+  const action = typeof params.body?.action === 'string' ? params.body.action : '';
+  const confirmed = params.body?.confirmed === true;
+  const customTitle = typeof params.body?.title === 'string' ? params.body.title.trim().slice(0, 140) : '';
+  const customBody = typeof params.body?.body === 'string' ? params.body.body.trim().slice(0, 400) : '';
+  const lang = getLanguageOrDefault(params.body?.language);
+
+  if (!runtime.hasMessagingCredentials) {
+    return {
+      httpStatus: 503,
+      payload: {
         ok: false,
         errorCode: 'ADMIN_CREDENTIALS_MISSING',
         message:
@@ -1403,215 +1529,221 @@ export function registerNotificationRoutes(
         attemptedTokens: 0,
         sentCount: 0,
         failedCount: 0,
-      });
-      return;
-    }
+      },
+    };
+  }
 
-    try {
-      const targets: DeliveryTarget[] = [];
+  try {
+    const targets: DeliveryTarget[] = [];
 
-      if (action === 'test_self') {
-        const myTokens = await runtime.db
-          .collection('device_tokens')
-          .where('ownerUid', '==', authUser.decoded.uid)
-          .where('enabled', '==', true)
-          .get();
+    if (action === 'test_self') {
+      const myTokensSnap = await runtime.db
+        .collection('device_tokens')
+        .where('ownerUid', '==', authUser.decoded.uid)
+        .get();
+      const myActiveDocs = myTokensSnap.docs.filter((d) => d.data().enabled === true && Boolean(d.data().token));
 
-        if (myTokens.empty) {
-          res.status(400).json({
+      if (myActiveDocs.length === 0) {
+        return {
+          httpStatus: 400,
+          payload: {
             ok: false,
             errorCode: 'NO_ADMIN_DEVICE_TOKEN',
             message: 'No enabled device token found for your admin account. Click "Enable Notifications" on this device first.',
             attemptedTokens: 0,
             sentCount: 0,
             failedCount: 0,
-          });
-          return;
-        }
+          },
+        };
+      }
 
-        targets.push({
-          uid: authUser.decoded.uid,
-          label: authUser.decoded.email || 'Admin Device',
-          role: 'admin',
-          isDemo: true,
-          language: lang,
-          tokens: myTokens.docs.map((d) => ({ docId: d.id, token: String(d.data().token) })),
-          title: customTitle || '[DEMO] ROJGAR SETU Push Test',
-          body:
-            customBody ||
-            'Live FCM test confirmed on your registered ROJGAR SETU mobile/browser device.',
-          category: 'announcements',
-          targetRoute: 'admin',
-          clickUrl: '/?route=admin',
-          dedupeKey: `admin_self_${Date.now()}`,
-        });
-      } else if (action === 'test_worker') {
-        const targetUid = typeof req.body?.targetUid === 'string' ? req.body.targetUid.trim() : '';
-        const targetLabel = typeof req.body?.targetLabel === 'string' ? req.body.targetLabel.trim() : 'Selected Worker';
-        if (!targetUid) {
-          res.status(400).json({ ok: false, errorCode: 'MISSING_TARGET', message: 'Select a worker first.' });
-          return;
-        }
-        const workerTokens = await runtime.db
-          .collection('device_tokens')
-          .where('ownerUid', '==', targetUid)
-          .where('enabled', '==', true)
-          .get();
+      targets.push({
+        uid: authUser.decoded.uid,
+        label: authUser.decoded.email || 'Admin Device',
+        role: 'admin',
+        isDemo: true,
+        language: lang,
+        tokens: myActiveDocs.map((d) => ({ docId: d.id, token: String(d.data().token) })),
+        title: customTitle || '[DEMO] ROJGAR SETU Push Test',
+        body:
+          customBody ||
+          'Live FCM test confirmed on your registered ROJGAR SETU mobile/browser device.',
+        category: 'announcements',
+        targetRoute: 'admin',
+        clickUrl: '/?route=admin',
+        dedupeKey: `admin_self_${Date.now()}`,
+      });
+    } else if (action === 'test_worker') {
+      const targetUid = typeof params.body?.targetUid === 'string' ? params.body.targetUid.trim() : '';
+      const targetLabel = typeof params.body?.targetLabel === 'string' ? params.body.targetLabel.trim() : 'Selected Worker';
+      if (!targetUid) {
+        return { httpStatus: 400, payload: { ok: false, errorCode: 'MISSING_TARGET', message: 'Select a worker first.' } };
+      }
+      const workerTokensSnap = await runtime.db
+        .collection('device_tokens')
+        .where('ownerUid', '==', targetUid)
+        .get();
+      const workerActiveDocs = workerTokensSnap.docs.filter((d) => d.data().enabled === true && Boolean(d.data().token));
 
-        if (workerTokens.empty) {
-          res.status(400).json({
+      if (workerActiveDocs.length === 0) {
+        return {
+          httpStatus: 400,
+          payload: {
             ok: false,
             errorCode: 'NO_ELIGIBLE_DEVICE',
             message: 'Selected worker has not enabled push notifications on a mobile/browser device yet.',
             attemptedTokens: 0,
             sentCount: 0,
             failedCount: 0,
-          });
-          return;
-        }
+          },
+        };
+      }
 
+      targets.push({
+        uid: targetUid,
+        label: targetLabel,
+        role: workerActiveDocs[0].data().isDemo ? 'demo_worker' : 'worker',
+        isDemo: Boolean(workerActiveDocs[0].data().isDemo),
+        language: lang,
+        tokens: workerActiveDocs.map((d) => ({ docId: d.id, token: String(d.data().token) })),
+        title: customTitle || '[DEMO] Test Notification from ROJGAR SETU',
+        body: customBody || 'Admin live notification verification message.',
+        category: 'announcements',
+        targetRoute: 'worker-dashboard',
+        clickUrl: '/?route=worker-dashboard',
+        dedupeKey: `admin_worker_${targetUid}_${Date.now()}`,
+      });
+    } else if (action === 'test_all_demo_workers') {
+      if (!confirmed) {
+        return { httpStatus: 400, payload: { ok: false, errorCode: 'CONFIRMATION_REQUIRED', message: 'Explicit confirmation required.' } };
+      }
+      const enabledSnap = await runtime.db
+        .collection('device_tokens')
+        .where('enabled', '==', true)
+        .get();
+      const demoDocs = enabledSnap.docs.filter((d) => Boolean(d.data().isDemo) && Boolean(d.data().token));
+
+      if (demoDocs.length === 0) {
+        return {
+          httpStatus: 400,
+          payload: {
+            ok: false,
+            errorCode: 'NO_ELIGIBLE_DEMO_DEVICE',
+            message: 'No eligible demo device is registered. Install the app on a test mobile and enable notifications first.',
+            attemptedTokens: 0,
+            sentCount: 0,
+            failedCount: 0,
+          },
+        };
+      }
+
+      const byUid = new Map<string, Array<{ docId: string; token: string; preferredLanguage?: string }>>();
+      demoDocs.forEach((d) => {
+        const data = d.data();
+        const list = byUid.get(data.ownerUid) || [];
+        list.push({ docId: d.id, token: data.token, preferredLanguage: data.preferredLanguage });
+        byUid.set(data.ownerUid, list);
+      });
+
+      for (const [uid, tokList] of byUid.entries()) {
+        const targetLang = getLanguageOrDefault(tokList[0]?.preferredLanguage || lang);
         targets.push({
-          uid: targetUid,
-          label: targetLabel,
-          role: workerTokens.docs[0].data().isDemo ? 'demo_worker' : 'worker',
-          isDemo: Boolean(workerTokens.docs[0].data().isDemo),
-          language: lang,
-          tokens: workerTokens.docs.map((d) => ({ docId: d.id, token: String(d.data().token) })),
-          title: customTitle || '[DEMO] Test Notification from ROJGAR SETU',
-          body: customBody || 'Admin live notification verification message.',
+          uid,
+          label: `DEMO Tester (${uid.slice(0, 6)})`,
+          role: 'demo_worker',
+          isDemo: true,
+          language: targetLang,
+          tokens: tokList.map((t) => ({ docId: t.docId, token: t.token })),
+          title: customTitle || '[DEMO] ROJGAR SETU Test Worker Broadcast',
+          body: customBody || 'Demo broadcast received on your registered test mobile device.',
           category: 'announcements',
           targetRoute: 'worker-dashboard',
           clickUrl: '/?route=worker-dashboard',
-          dedupeKey: `admin_worker_${targetUid}_${Date.now()}`,
+          dedupeKey: `admin_all_demo_${uid}_${Date.now()}`,
         });
-      } else if (action === 'test_all_demo_workers') {
-        if (!confirmed) {
-          res.status(400).json({ ok: false, errorCode: 'CONFIRMATION_REQUIRED', message: 'Explicit confirmation required.' });
-          return;
-        }
-        const demoTokens = await runtime.db
-          .collection('device_tokens')
-          .where('isDemo', '==', true)
-          .where('enabled', '==', true)
-          .get();
+      }
+    } else if (action === 'demo_job_blast') {
+      const demoJobId = typeof params.body?.demoJobId === 'string' ? params.body.demoJobId.trim() : '';
+      if (!demoJobId) {
+        return { httpStatus: 400, payload: { ok: false, errorCode: 'MISSING_DEMO_JOB_ID', message: 'Demo Job ID is required.' } };
+      }
+      const djSnap = await runtime.db.collection('demo_jobs').doc(demoJobId).get();
+      if (!djSnap.exists) {
+        return { httpStatus: 404, payload: { ok: false, errorCode: 'DEMO_JOB_NOT_FOUND', message: 'Demo job not found.' } };
+      }
+      const dj = djSnap.data()!;
 
-        if (demoTokens.empty) {
-          res.status(400).json({
+      const enabledSnap = await runtime.db
+        .collection('device_tokens')
+        .where('enabled', '==', true)
+        .get();
+      const demoDocs = enabledSnap.docs.filter((d) => Boolean(d.data().isDemo) && Boolean(d.data().token));
+
+      if (demoDocs.length === 0) {
+        return {
+          httpStatus: 400,
+          payload: {
             ok: false,
             errorCode: 'NO_ELIGIBLE_DEMO_DEVICE',
             message: 'No eligible demo device is registered. Install the app on a test mobile and enable notifications first.',
             attemptedTokens: 0,
             sentCount: 0,
             failedCount: 0,
-          });
-          return;
-        }
+          },
+        };
+      }
 
-        const byUid = new Map<string, Array<{ docId: string; token: string; preferredLanguage?: string }>>();
-        demoTokens.docs.forEach((d) => {
-          const data = d.data();
-          const list = byUid.get(data.ownerUid) || [];
-          list.push({ docId: d.id, token: data.token, preferredLanguage: data.preferredLanguage });
-          byUid.set(data.ownerUid, list);
+      const byUid = new Map<string, Array<{ docId: string; token: string; preferredLanguage?: string }>>();
+      demoDocs.forEach((d) => {
+        const data = d.data();
+        const list = byUid.get(data.ownerUid) || [];
+        list.push({ docId: d.id, token: data.token, preferredLanguage: data.preferredLanguage });
+        byUid.set(data.ownerUid, list);
+      });
+
+      for (const [uid, tokList] of byUid.entries()) {
+        const targetLang = getLanguageOrDefault(tokList[0]?.preferredLanguage || lang);
+        const msg = buildLocalizedJobMessage({
+          lang: targetLang,
+          title: String(dj.title || 'Sample Job'),
+          category: String(dj.category || 'General'),
+          district: String(dj.district || 'Chandrapur'),
+          offeredWage: Number(dj.offeredWage) || 0,
+          wageUnit: String(dj.wageUnit || 'daily'),
+          isDemo: true,
         });
-
-        for (const [uid, tokList] of byUid.entries()) {
-          const targetLang = getLanguageOrDefault(tokList[0]?.preferredLanguage || lang);
-          targets.push({
-            uid,
-            label: `DEMO Tester (${uid.slice(0, 6)})`,
-            role: 'demo_worker',
-            isDemo: true,
-            language: targetLang,
-            tokens: tokList.map((t) => ({ docId: t.docId, token: t.token })),
-            title: customTitle || '[DEMO] ROJGAR SETU Test Worker Broadcast',
-            body: customBody || 'Demo broadcast received on your registered test mobile device.',
-            category: 'announcements',
-            targetRoute: 'worker-dashboard',
-            clickUrl: '/?route=worker-dashboard',
-            dedupeKey: `admin_all_demo_${uid}_${Date.now()}`,
-          });
-        }
-      } else if (action === 'demo_job_blast') {
-        const demoJobId = typeof req.body?.demoJobId === 'string' ? req.body.demoJobId.trim() : '';
-        if (!demoJobId) {
-          res.status(400).json({ ok: false, errorCode: 'MISSING_DEMO_JOB_ID', message: 'Demo Job ID is required.' });
-          return;
-        }
-        const djSnap = await runtime.db.collection('demo_jobs').doc(demoJobId).get();
-        if (!djSnap.exists) {
-          res.status(404).json({ ok: false, errorCode: 'DEMO_JOB_NOT_FOUND', message: 'Demo job not found.' });
-          return;
-        }
-        const dj = djSnap.data()!;
-
-        const demoTokens = await runtime.db
-          .collection('device_tokens')
-          .where('isDemo', '==', true)
-          .where('enabled', '==', true)
-          .get();
-
-        if (demoTokens.empty) {
-          res.status(400).json({
-            ok: false,
-            errorCode: 'NO_ELIGIBLE_DEMO_DEVICE',
-            message: 'No eligible demo device is registered. Install the app on a test mobile and enable notifications first.',
-            attemptedTokens: 0,
-            sentCount: 0,
-            failedCount: 0,
-          });
-          return;
-        }
-
-        const byUid = new Map<string, Array<{ docId: string; token: string; preferredLanguage?: string }>>();
-        demoTokens.docs.forEach((d) => {
-          const data = d.data();
-          const list = byUid.get(data.ownerUid) || [];
-          list.push({ docId: d.id, token: data.token, preferredLanguage: data.preferredLanguage });
-          byUid.set(data.ownerUid, list);
+        targets.push({
+          uid,
+          label: `DEMO Tester (${uid.slice(0, 6)})`,
+          role: 'demo_worker',
+          isDemo: true,
+          language: targetLang,
+          tokens: tokList.map((t) => ({ docId: t.docId, token: t.token })),
+          title: msg.title,
+          body: msg.body,
+          category: 'matchingJobs',
+          targetRoute: 'worker-dashboard',
+          targetDemoJobId: demoJobId,
+          clickUrl: `/?route=worker-dashboard&demoJobId=${encodeURIComponent(demoJobId)}`,
+          dedupeKey: `demo_job_${demoJobId}_${uid}_${Date.now()}`,
         });
+      }
+    } else if (action === 'demo_announcement') {
+      if (!confirmed) {
+        return { httpStatus: 400, payload: { ok: false, errorCode: 'CONFIRMATION_REQUIRED', message: 'Confirmation required.' } };
+      }
+      const audience = params.body?.audience === 'all_opted_in' ? 'all_opted_in' : 'demo_only';
+      const snap = await runtime.db.collection('device_tokens').where('enabled', '==', true).get();
+      const matchingDocs = snap.docs.filter((d) => {
+        const data = d.data();
+        if (!data.token) return false;
+        return audience === 'demo_only' ? Boolean(data.isDemo) : true;
+      });
 
-        for (const [uid, tokList] of byUid.entries()) {
-          const targetLang = getLanguageOrDefault(tokList[0]?.preferredLanguage || lang);
-          const msg = buildLocalizedJobMessage({
-            lang: targetLang,
-            title: String(dj.title || 'Sample Job'),
-            category: String(dj.category || 'General'),
-            district: String(dj.district || 'Chandrapur'),
-            offeredWage: Number(dj.offeredWage) || 0,
-            wageUnit: String(dj.wageUnit || 'daily'),
-            isDemo: true,
-          });
-          targets.push({
-            uid,
-            label: `DEMO Tester (${uid.slice(0, 6)})`,
-            role: 'demo_worker',
-            isDemo: true,
-            language: targetLang,
-            tokens: tokList.map((t) => ({ docId: t.docId, token: t.token })),
-            title: msg.title,
-            body: msg.body,
-            category: 'matchingJobs',
-            targetRoute: 'worker-dashboard',
-            targetDemoJobId: demoJobId,
-            clickUrl: `/?route=worker-dashboard&demoJobId=${encodeURIComponent(demoJobId)}`,
-            dedupeKey: `demo_job_${demoJobId}_${uid}_${Date.now()}`,
-          });
-        }
-      } else if (action === 'demo_announcement') {
-        if (!confirmed) {
-          res.status(400).json({ ok: false, errorCode: 'CONFIRMATION_REQUIRED', message: 'Confirmation required.' });
-          return;
-        }
-        const audience = req.body?.audience === 'all_opted_in' ? 'all_opted_in' : 'demo_only';
-        const q =
-          audience === 'demo_only'
-            ? runtime.db.collection('device_tokens').where('isDemo', '==', true).where('enabled', '==', true)
-            : runtime.db.collection('device_tokens').where('enabled', '==', true);
-
-        const snap = await q.get();
-        if (snap.empty) {
-          res.status(400).json({
+      if (matchingDocs.length === 0) {
+        return {
+          httpStatus: 400,
+          payload: {
             ok: false,
             errorCode: 'NO_ELIGIBLE_DEVICE',
             message:
@@ -1621,72 +1753,120 @@ export function registerNotificationRoutes(
             attemptedTokens: 0,
             sentCount: 0,
             failedCount: 0,
-          });
-          return;
-        }
-
-        const byUid = new Map<string, Array<{ docId: string; token: string; isDemo?: boolean; preferredLanguage?: string }>>();
-        snap.docs.forEach((d) => {
-          const data = d.data();
-          const list = byUid.get(data.ownerUid) || [];
-          list.push({
-            docId: d.id,
-            token: data.token,
-            isDemo: Boolean(data.isDemo),
-            preferredLanguage: data.preferredLanguage,
-          });
-          byUid.set(data.ownerUid, list);
-        });
-
-        for (const [uid, tokList] of byUid.entries()) {
-          const targetLang = getLanguageOrDefault(tokList[0]?.preferredLanguage || lang);
-          targets.push({
-            uid,
-            label: tokList[0]?.isDemo ? `DEMO Tester (${uid.slice(0, 6)})` : `User (${uid.slice(0, 6)})`,
-            role: tokList[0]?.isDemo ? 'demo_worker' : 'worker',
-            isDemo: Boolean(tokList[0]?.isDemo),
-            language: targetLang,
-            tokens: tokList.map((t) => ({ docId: t.docId, token: t.token })),
-            title: customTitle || '[DEMO] ROJGAR SETU Important Announcement',
-            body:
-              customBody ||
-              'New skill training & local work alerts are now active via ROJGAR SETU.',
-            category: 'announcements',
-            targetRoute: 'home',
-            clickUrl: '/?route=home',
-            dedupeKey: `admin_ann_${uid}_${Date.now()}`,
-          });
-        }
-      } else {
-        res.status(400).json({ ok: false, errorCode: 'UNKNOWN_ACTION', message: 'Invalid demo notification action.' });
-        return;
+          },
+        };
       }
 
-      const dispatchResult = await dispatchAndRecordTargets({
-        runtime,
-        targets,
-        sentByUid: authUser.decoded.uid,
+      const byUid = new Map<string, Array<{ docId: string; token: string; isDemo?: boolean; preferredLanguage?: string }>>();
+      matchingDocs.forEach((d) => {
+        const data = d.data();
+        const list = byUid.get(data.ownerUid) || [];
+        list.push({
+          docId: d.id,
+          token: data.token,
+          isDemo: Boolean(data.isDemo),
+          preferredLanguage: data.preferredLanguage,
+        });
+        byUid.set(data.ownerUid, list);
       });
 
-      // Write audit log entry
-      await runtime.db
-        .collection('auditLogs')
-        .add({
-          adminUid: authUser.decoded.uid,
-          adminEmail: authUser.decoded.email || 'admin@rojgarsetu',
-          action: `notification_${action}`,
-          targetCollection: 'notification_delivery_logs',
-          targetId: action,
-          details: `Sent=${dispatchResult.sentCount}, Failed=${dispatchResult.failedCount}, Attempted=${dispatchResult.attemptedTokens}`,
-          createdAt: FieldValue.serverTimestamp(),
-        })
-        .catch(() => undefined);
-
-      res.json(dispatchResult);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Admin demo notification error';
-      res.status(500).json({ ok: false, errorCode: 'SERVER_ERROR', message });
+      for (const [uid, tokList] of byUid.entries()) {
+        const targetLang = getLanguageOrDefault(tokList[0]?.preferredLanguage || lang);
+        targets.push({
+          uid,
+          label: tokList[0]?.isDemo ? `DEMO Tester (${uid.slice(0, 6)})` : `User (${uid.slice(0, 6)})`,
+          role: tokList[0]?.isDemo ? 'demo_worker' : 'worker',
+          isDemo: Boolean(tokList[0]?.isDemo),
+          language: targetLang,
+          tokens: tokList.map((t) => ({ docId: t.docId, token: t.token })),
+          title: customTitle || '[DEMO] ROJGAR SETU Important Announcement',
+          body:
+            customBody ||
+            'New skill training & local work alerts are now active via ROJGAR SETU.',
+          category: 'announcements',
+          targetRoute: 'home',
+          clickUrl: '/?route=home',
+          dedupeKey: `admin_ann_${uid}_${Date.now()}`,
+        });
+      }
+    } else {
+      return { httpStatus: 400, payload: { ok: false, errorCode: 'UNKNOWN_ACTION', message: 'Invalid demo notification action.' } };
     }
+
+    const dispatchResult = await dispatchAndRecordTargets({
+      runtime,
+      targets,
+      sentByUid: authUser.decoded.uid,
+    });
+
+    await runtime.db
+      .collection('auditLogs')
+      .add({
+        adminUid: authUser.decoded.uid,
+        adminEmail: authUser.decoded.email || 'admin@rojgarsetu',
+        action: `notification_${action}`,
+        targetCollection: 'notification_delivery_logs',
+        targetId: action,
+        details: `Sent=${dispatchResult.sentCount}, Failed=${dispatchResult.failedCount}, Attempted=${dispatchResult.attemptedTokens}`,
+        createdAt: FieldValue.serverTimestamp(),
+      })
+      .catch(() => undefined);
+
+    return { httpStatus: 200, payload: dispatchResult };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Admin demo notification error';
+    return { httpStatus: 500, payload: { ok: false, errorCode: 'SERVER_ERROR', message } };
+  }
+}
+
+export function registerNotificationRoutes(
+  app: { get: (p: string, h: (req: Request, res: Response) => void | Promise<void>) => void; post: (p: string, h: (req: Request, res: Response) => void | Promise<void>) => void },
+  rootDir: string
+): void {
+  app.get('/api/notifications/config-status', (req: Request, res: Response) => {
+    const result = handleNotificationConfigStatus({
+      rootDir,
+      headers: req.headers as Record<string, unknown>,
+      secure: req.secure,
+      hostname: req.hostname,
+    });
+    res.status(result.httpStatus).json(result.payload);
+  });
+
+  app.post('/api/notifications/send-matching-job', async (req: Request, res: Response) => {
+    const result = await handleSendMatchingJob({
+      authHeader: req.headers.authorization || '',
+      body: (req.body || {}) as Record<string, unknown>,
+      rootDir,
+    });
+    res.status(result.httpStatus).json(result.payload);
+  });
+
+  app.post('/api/notifications/expand-job-radius', async (req: Request, res: Response) => {
+    const result = await handleExpandJobRadius({
+      authHeader: req.headers.authorization || '',
+      body: (req.body || {}) as Record<string, unknown>,
+      rootDir,
+    });
+    res.status(result.httpStatus).json(result.payload);
+  });
+
+  app.post('/api/notifications/send-customer-event', async (req: Request, res: Response) => {
+    const result = await handleSendCustomerEvent({
+      authHeader: req.headers.authorization || '',
+      body: (req.body || {}) as Record<string, unknown>,
+      rootDir,
+    });
+    res.status(result.httpStatus).json(result.payload);
+  });
+
+  app.post('/api/notifications/admin-demo', async (req: Request, res: Response) => {
+    const result = await handleAdminDemoNotification({
+      authHeader: req.headers.authorization || '',
+      body: (req.body || {}) as Record<string, unknown>,
+      rootDir,
+    });
+    res.status(result.httpStatus).json(result.payload);
   });
 
   app.post('/api/notifications/demo-push', async (req: Request, res: Response) => {
@@ -1810,10 +1990,14 @@ export async function handleDemoPushDispatch(params: {
     const tokenSnap = await runtime.db
       .collection('device_tokens')
       .where('ownerUid', '==', recipientOwnerUid)
-      .where('enabled', '==', true)
       .get();
 
-    if (tokenSnap.empty) {
+    const activeTokenDocs = tokenSnap.docs.filter((d) => {
+      const data = d.data() as { enabled?: boolean; token?: string };
+      return data.enabled === true && Boolean(data.token);
+    });
+
+    if (activeTokenDocs.length === 0) {
       return {
         httpStatus: 200,
         payload: {
@@ -1828,26 +2012,12 @@ export async function handleDemoPushDispatch(params: {
       };
     }
 
-    const tokens = tokenSnap.docs.map((d) => ({
+    const tokens = activeTokenDocs.map((d) => ({
       docId: d.id,
       token: String((d.data() as { token?: string }).token || ''),
     })).filter((t) => Boolean(t.token));
 
-    if (tokens.length === 0) {
-      return {
-        httpStatus: 200,
-        payload: {
-          ok: false,
-          fcmPushStatus: 'skipped_no_token',
-          attemptedTokens: 0,
-          sentCount: 0,
-          failedCount: 0,
-          reason: 'Recipient has no valid active push token.',
-        },
-      };
-    }
-
-    const firstTokenLang = getLanguageOrDefault((tokenSnap.docs[0].data() as { preferredLanguage?: string })?.preferredLanguage);
+    const firstTokenLang = getLanguageOrDefault((activeTokenDocs[0].data() as { preferredLanguage?: string })?.preferredLanguage);
     const dispatchResult = await dispatchAndRecordTargets({
       runtime,
       targets: [

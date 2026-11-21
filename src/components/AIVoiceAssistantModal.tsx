@@ -34,7 +34,7 @@ import {
   classifyRequestRuleBased,
   type StructuredWorkClassification,
 } from '../lib/aiFallbackClassifier';
-import { callNotificationApi, createJobPosting } from '../lib/firestoreService';
+import { broadcastSmartJobAlerts, callNotificationApi, createJobPosting } from '../lib/firestoreService';
 import type {
   AiHirePrefill,
   Language,
@@ -792,40 +792,52 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
         .join(' · ')
         .slice(0, 2000);
 
-      const jobId = await createJobPosting(
-        {
-          employerUid: user.uid,
-          employerName: employerProfile?.businessName || user.displayName || 'ROJGAR SETU Customer',
-          title: (aiResult.suggestedTitle || aiResult.matchedCategory || 'Work Requirement').slice(0, 140),
-          category: aiResult.matchedCategory || 'Construction Workers',
-          description: descParts.length >= 10 ? descParts : `${descParts} Work requirement in ${distName}`.slice(0, 2000),
-          workersRequired: workersCount,
-          requiredSkills: [
-            aiResult.subcategory || aiResult.matchedCategory || 'General Work',
-          ].slice(0, 15),
-          state: stateName,
-          district: distName.slice(0, 80),
-          cityOrVillage: locVal.slice(0, 100),
-          workLocationLabel: locVal.slice(0, 160),
-          lat: customerPreference?.defaultLat ?? coords.lat,
-          lng: customerPreference?.defaultLng ?? coords.lng,
-          jobDate: new Date().toISOString().split('T')[0],
-          startTime: '09:30',
-          duration: aiResult.urgency === 'tomorrow' ? 'Tomorrow' : 'Today / Urgent',
-          workType: 'daily_wage',
-          offeredWage: wage,
-          wageUnit: 'daily',
-          paymentTerms: 'Direct cash / UPI on work completion',
-          contactPreference: 'phone_after_confirm',
-          isWomenFriendly: false,
-          isAccessible: false,
-          biddingEnabled: true,
-          ...(photoData?.compressedAttachment ? { photoAttachment: photoData.compressedAttachment } : {}),
-          ...(photoData ? { photoAnalyzed: Boolean(aiResult.photoAnalyzed) } : {}),
-        },
-        clientRequestId
-      );
+      const directJobPayload = {
+        employerUid: user.uid,
+        employerName: employerProfile?.businessName || user.displayName || 'ROJGAR SETU Customer',
+        title: (aiResult.suggestedTitle || aiResult.matchedCategory || 'Work Requirement').slice(0, 140),
+        category: aiResult.matchedCategory || 'Construction Workers',
+        description: descParts.length >= 10 ? descParts : `${descParts} Work requirement in ${distName}`.slice(0, 2000),
+        workersRequired: workersCount,
+        requiredSkills: [
+          aiResult.subcategory || aiResult.matchedCategory || 'General Work',
+        ].slice(0, 15),
+        state: stateName,
+        district: distName.slice(0, 80),
+        cityOrVillage: locVal.slice(0, 100),
+        workLocationLabel: locVal.slice(0, 160),
+        lat: customerPreference?.defaultLat ?? coords.lat,
+        lng: customerPreference?.defaultLng ?? coords.lng,
+        jobDate: new Date().toISOString().split('T')[0],
+        startTime: '09:30',
+        duration: aiResult.urgency === 'tomorrow' ? 'Tomorrow' : 'Today / Urgent',
+        workType: 'daily_wage' as const,
+        offeredWage: wage,
+        wageUnit: 'daily' as const,
+        paymentTerms: 'Direct cash / UPI on work completion',
+        contactPreference: 'phone_after_confirm' as const,
+        isWomenFriendly: false,
+        isAccessible: false,
+        biddingEnabled: true,
+        initialRadiusKm: 10 as const,
+        currentRadiusKm: 10 as const,
+        ...(photoData?.compressedAttachment ? { photoAttachment: photoData.compressedAttachment } : {}),
+        ...(photoData ? { photoAnalyzed: Boolean(aiResult.photoAnalyzed) } : {}),
+      };
+
+      const jobId = await createJobPosting(directJobPayload, clientRequestId);
       setPublishedJobId(jobId);
+
+      if (workers.length > 0) {
+        await broadcastSmartJobAlerts({
+          jobId,
+          job: directJobPayload,
+          workers,
+          stageRadiusKm: 10,
+          autoExpandIfEmpty: true,
+        }).catch(() => undefined);
+      }
+
       void callNotificationApi('/api/notifications/send-matching-job', { jobId }).catch(() => undefined);
     } catch (err) {
       setFormErrorMsg(err instanceof Error ? err.message : 'Unable to save work request.');

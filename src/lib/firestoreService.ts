@@ -591,40 +591,46 @@ export async function dispatchTwoWayDealNotification(params: {
       ? params.distanceKm
       : undefined;
 
+  const safeLanguage: Language =
+    params.language === 'hi' || params.language === 'mr' ? params.language : 'en';
+  const rawTitle = (params.title || 'ROJGAR SETU Alert').trim().slice(0, 160);
+  const safeTitle = rawTitle.length >= 2 ? rawTitle : 'ROJGAR SETU Alert';
+  const rawBody = (params.body || 'New work update on ROJGAR SETU.').trim().slice(0, 500);
+  const safeBody = rawBody.length >= 2 ? rawBody : 'New work update on ROJGAR SETU.';
+
   try {
-    const existing = await getDoc(notifRef);
-    if (!existing.exists()) {
-      await setDoc(notifRef, {
-        recipientUid: params.recipientUid,
-        recipientRole: params.recipientRole,
-        senderUid: params.senderUid,
-        senderName: (params.senderName || 'ROJGAR SETU User').slice(0, 140),
-        isDemo: false,
-        category: params.category,
-        eventType: params.eventType,
-        toneType: resolvedTone,
-        ...(params.dealStatus ? { dealStatus: params.dealStatus } : {}),
-        title: params.title.slice(0, 160),
-        body: params.body.slice(0, 500),
-        ...(params.voiceScript ? { voiceScript: params.voiceScript.slice(0, 680) } : {}),
-        ...(params.approxLocationLabel ? { approxLocationLabel: params.approxLocationLabel.slice(0, 155) } : {}),
-        ...(validDist !== undefined ? { distanceKm: validDist } : {}),
-        ...(params.customerName ? { customerName: params.customerName.slice(0, 155) } : {}),
-        ...(params.jobCategory ? { jobCategory: params.jobCategory.slice(0, 75) } : {}),
-        ...(typeof params.playSound === 'boolean' ? { playSound: params.playSound } : {}),
-        ...(typeof params.speakVoice === 'boolean' ? { speakVoice: params.speakVoice } : {}),
-        ...(params.metadataLabel ? { metadataLabel: params.metadataLabel.slice(0, 240) } : {}),
-        language: params.language || 'en',
-        targetRoute: params.targetRoute.slice(0, 60),
-        ...(params.targetJobId ? { targetJobId: params.targetJobId } : {}),
-        ...(params.targetApplicationId ? { targetApplicationId: params.targetApplicationId } : {}),
-        dedupeKey: safeId,
-        deliveryStatus: 'in_app_only',
-        read: false,
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-    }
+    // Call setDoc directly without a pre-read getDoc: Firestore rules reject getDoc on
+    // non-existent or other-user notification docs while enforcing !exists(...) on create.
+    await setDoc(notifRef, {
+      recipientUid: params.recipientUid,
+      recipientRole: params.recipientRole,
+      senderUid: params.senderUid,
+      senderName: (params.senderName || 'ROJGAR SETU User').slice(0, 140),
+      isDemo: false,
+      category: params.category,
+      eventType: params.eventType,
+      toneType: resolvedTone,
+      ...(params.dealStatus ? { dealStatus: params.dealStatus } : {}),
+      title: safeTitle,
+      body: safeBody,
+      ...(params.voiceScript ? { voiceScript: params.voiceScript.slice(0, 680) } : {}),
+      ...(params.approxLocationLabel ? { approxLocationLabel: params.approxLocationLabel.slice(0, 155) } : {}),
+      ...(validDist !== undefined ? { distanceKm: validDist } : {}),
+      ...(params.customerName ? { customerName: params.customerName.slice(0, 155) } : {}),
+      ...(params.jobCategory ? { jobCategory: params.jobCategory.slice(0, 75) } : {}),
+      ...(typeof params.playSound === 'boolean' ? { playSound: params.playSound } : {}),
+      ...(typeof params.speakVoice === 'boolean' ? { speakVoice: params.speakVoice } : {}),
+      ...(params.metadataLabel ? { metadataLabel: params.metadataLabel.slice(0, 240) } : {}),
+      language: safeLanguage,
+      targetRoute: params.targetRoute.slice(0, 60),
+      ...(params.targetJobId ? { targetJobId: params.targetJobId } : {}),
+      ...(params.targetApplicationId ? { targetApplicationId: params.targetApplicationId } : {}),
+      dedupeKey: safeId,
+      deliveryStatus: 'in_app_only',
+      read: false,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
   } catch (err) {
     console.warn('In-app notification record creation skipped or rejected:', err);
   }
@@ -2292,7 +2298,7 @@ export async function saveNotificationPreferences(
         toneNewOfferEnabled: updates.toneNewOfferEnabled ?? true,
         toneDealConfirmedEnabled: updates.toneDealConfirmedEnabled ?? true,
         toneDealClosedEnabled: updates.toneDealClosedEnabled ?? true,
-        preferredRadiusKm: updates.preferredRadiusKm ?? 10,
+        preferredRadiusKm: updates.preferredRadiusKm ?? 30,
         ...(Array.isArray(updates.preferredCategories)
           ? { preferredCategories: updates.preferredCategories.slice(0, 35) }
           : {}),
