@@ -1137,10 +1137,18 @@ export async function applyToJob(
         })
       : payload.jobLocationLabel || '';
 
+    const safeTravelCharges =
+      typeof cleanPayload.travelCharges === 'number' &&
+      Number.isFinite(cleanPayload.travelCharges) &&
+      cleanPayload.travelCharges > 0
+        ? Math.min(100000, Math.round(cleanPayload.travelCharges))
+        : 0;
+
     if (existingSnap.exists()) {
       await updateDoc(appRef, {
         proposedWage: cleanPayload.proposedWage,
         offerAmount: cleanPayload.offerAmount ?? cleanPayload.proposedWage,
+        ...(safeTravelCharges > 0 ? { travelCharges: safeTravelCharges } : {}),
         ...(cleanPayload.estimatedArrivalTime
           ? { estimatedArrivalTime: cleanPayload.estimatedArrivalTime.slice(0, 80) }
           : {}),
@@ -1156,6 +1164,7 @@ export async function applyToJob(
     } else {
       await setDoc(appRef, {
         ...cleanPayload,
+        ...(safeTravelCharges > 0 ? { travelCharges: safeTravelCharges } : {}),
         ...(jobMeta?.employerName ? { customerName: jobMeta.employerName.slice(0, 160) } : {}),
         ...(jobMeta?.category ? { jobCategory: jobMeta.category.slice(0, 80) } : {}),
         ...(jobMeta?.district ? { jobDistrict: jobMeta.district.slice(0, 80) } : {}),
@@ -1178,6 +1187,9 @@ export async function applyToJob(
       }).catch(() => undefined);
     }
 
+    const travelLabel = safeTravelCharges > 0 ? ` + ₹${safeTravelCharges} travel` : '';
+    const displayOfferPrice = payload.offerAmount ?? payload.proposedWage;
+
     await dispatchTwoWayDealNotification({
       recipientUid: payload.employerUid,
       recipientRole: 'employer',
@@ -1188,8 +1200,8 @@ export async function applyToJob(
       toneType: 'new_offer',
       dealStatus: 'OFFER_RECEIVED',
       title: `New Worker Offer: ${payload.jobTitle}`,
-      body: `${payload.workerName} (${payload.workerPrimarySkill}) offered ₹${payload.offerAmount ?? payload.proposedWage}${payload.estimatedArrivalTime ? ` · ETA: ${payload.estimatedArrivalTime}` : ''}${payload.offerMessage || payload.note ? ` — "${(payload.offerMessage || payload.note || '').slice(0, 100)}"` : ''}`,
-      metadataLabel: `₹${payload.offerAmount ?? payload.proposedWage}${payload.estimatedArrivalTime ? ` · ETA ${payload.estimatedArrivalTime}` : ''}`,
+      body: `${payload.workerName} (${payload.workerPrimarySkill}) offered ₹${displayOfferPrice}${travelLabel}${payload.offerMessage || payload.note ? ` — "${(payload.offerMessage || payload.note || '').slice(0, 100)}"` : ''}`,
+      metadataLabel: `₹${displayOfferPrice}${travelLabel}`,
       targetRoute: 'employer-dashboard',
       targetJobId: payload.jobId,
       targetApplicationId: deterministicAppId,
@@ -1197,7 +1209,7 @@ export async function applyToJob(
       pushPayload: {
         workerName: payload.workerName,
         jobTitle: payload.jobTitle,
-        proposedWage: payload.offerAmount ?? payload.proposedWage,
+        proposedWage: displayOfferPrice + safeTravelCharges,
         eta: payload.estimatedArrivalTime,
         messageSnippet: payload.offerMessage || payload.note,
       },
@@ -1214,14 +1226,29 @@ export async function submitWorkerOffer(params: {
   worker: PublicWorkerProfile;
   workerUid: string;
   offeredPrice: number;
-  estimatedArrivalTime: string;
+  travelCharges?: number;
+  estimatedArrivalTime?: string;
   offerMessage: string;
   existingApplicationId?: string;
 }): Promise<string> {
-  const { job, worker, workerUid, offeredPrice, estimatedArrivalTime, offerMessage, existingApplicationId } = params;
-  const price = Math.max(0, Number(offeredPrice) || job.offeredWage || worker.expectedWage);
-  const eta = estimatedArrivalTime.trim().slice(0, 80) || 'Within 1 hour';
+  const {
+    job,
+    worker,
+    workerUid,
+    offeredPrice,
+    travelCharges,
+    estimatedArrivalTime,
+    offerMessage,
+    existingApplicationId,
+  } = params;
+  const price = Math.max(1, Math.round(Number(offeredPrice) || job.offeredWage || worker.expectedWage || 100));
+  const safeTravel =
+    typeof travelCharges === 'number' && Number.isFinite(travelCharges) && travelCharges > 0
+      ? Math.min(100000, Math.round(travelCharges))
+      : 0;
+  const eta = (estimatedArrivalTime || '').trim().slice(0, 80);
   const message = offerMessage.trim().slice(0, 600);
+  const travelLabel = safeTravel > 0 ? ` + ₹${safeTravel} travel` : '';
 
   if (existingApplicationId) {
     const appRef = doc(db, 'applications', existingApplicationId);
@@ -1231,7 +1258,8 @@ export async function submitWorkerOffer(params: {
         dealStatus: 'OFFER_RECEIVED',
         proposedWage: price,
         offerAmount: price,
-        estimatedArrivalTime: eta,
+        ...(safeTravel > 0 ? { travelCharges: safeTravel } : {}),
+        ...(eta ? { estimatedArrivalTime: eta } : {}),
         ...(message ? { offerMessage: message, note: message } : {}),
         offerSubmittedAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -1251,8 +1279,8 @@ export async function submitWorkerOffer(params: {
         toneType: 'new_offer',
         dealStatus: 'OFFER_RECEIVED',
         title: `New Offer from ${worker.displayName}: ${job.title}`,
-        body: `${worker.displayName} (${worker.primarySkill}) sent an offer of ₹${price} · ETA: ${eta}${message ? ` — "${message.slice(0, 100)}"` : ''}`,
-        metadataLabel: `₹${price} · ETA: ${eta}`,
+        body: `${worker.displayName} (${worker.primarySkill}) sent an offer of ₹${price}${travelLabel}${message ? ` — "${message.slice(0, 100)}"` : ''}`,
+        metadataLabel: `₹${price}${travelLabel}`,
         targetRoute: 'employer-dashboard',
         targetJobId: job.id,
         targetApplicationId: existingApplicationId,
@@ -1260,8 +1288,8 @@ export async function submitWorkerOffer(params: {
         pushPayload: {
           workerName: worker.displayName,
           jobTitle: job.title,
-          proposedWage: price,
-          eta,
+          proposedWage: price + safeTravel,
+          ...(eta ? { eta } : {}),
           messageSnippet: message,
         },
       });
@@ -1282,9 +1310,10 @@ export async function submitWorkerOffer(params: {
     ...(worker.photoDocId ? { workerPhotoDocId: worker.photoDocId } : {}),
     proposedWage: price,
     offerAmount: price,
-    estimatedArrivalTime: eta,
+    ...(safeTravel > 0 ? { travelCharges: safeTravel } : {}),
+    ...(eta ? { estimatedArrivalTime: eta } : {}),
     offerMessage: message,
-    note: message || `Offer ₹${price} · Arrival: ${eta}`,
+    note: message || `Offer ₹${price}${travelLabel}`,
     jobMeta: job,
   });
 }
@@ -1364,7 +1393,15 @@ export async function respondToWorkerOffer(params: {
   };
 }): Promise<void> {
   const { app, decision, customerName, jobLocationLabel, photoGrantContext } = params;
-  const agreedPrice = app.offerAmount ?? app.proposedWage;
+  // Prevent duplicate confirmation clicks
+  if (
+    decision === 'accepted' &&
+    (app.status === 'accepted' || app.dealStatus === 'DEAL_CONFIRMED' || app.dealStatus === 'WORK_IN_PROGRESS')
+  ) {
+    return;
+  }
+
+  const agreedPrice = (app.offerAmount ?? app.proposedWage) + (app.travelCharges || 0);
   const nextDealStatus: DealStatus = decision === 'accepted' ? 'DEAL_CONFIRMED' : 'CANCELLED';
   const loc = jobLocationLabel || app.jobLocationLabel || app.jobDistrict || '';
   const path = `applications/${app.id}`;
@@ -1417,15 +1454,15 @@ export async function respondToWorkerOffer(params: {
       dealStatus: nextDealStatus,
       title:
         decision === 'accepted'
-          ? 'Congratulations! Your work has been confirmed.'
+          ? 'Offer Accepted! Your work is confirmed.'
           : `Offer Not Accepted: ${app.jobTitle}`,
       body:
         decision === 'accepted'
-          ? `Congratulations! ${customerName} confirmed work for "${app.jobTitle}" at ₹${agreedPrice}${loc ? ` · Location: ${loc}` : ''}. Customer location & chat are now unlocked.`
+          ? `${customerName} accepted your offer for "${app.jobTitle}" at ₹${agreedPrice}${loc ? ` · ${loc}` : ''}. Live location & chat are now active.`
           : `${customerName} declined your offer for "${app.jobTitle}".`,
       metadataLabel:
         decision === 'accepted'
-          ? `Work Confirmed · ₹${agreedPrice}${loc ? ` · ${loc}` : ''}`
+          ? `Offer Accepted · ₹${agreedPrice}${loc ? ` · ${loc}` : ''}`
           : app.jobTitle,
       targetRoute: 'worker-dashboard',
       targetJobId: app.jobId,
@@ -1438,6 +1475,33 @@ export async function respondToWorkerOffer(params: {
         locationLabel: loc,
       },
     });
+
+    // Notify Customer too when offer is accepted so BOTH customer and worker receive confirmation alert + sound
+    if (decision === 'accepted') {
+      await dispatchTwoWayDealNotification({
+        recipientUid: app.employerUid,
+        recipientRole: 'employer',
+        senderUid: app.employerUid,
+        senderName: app.workerName,
+        category: 'bookingNotifications',
+        eventType: 'deal_confirmed',
+        toneType: 'deal_accepted',
+        dealStatus: 'DEAL_CONFIRMED',
+        title: `Offer Accepted: ${app.workerName}`,
+        body: `Confirmed "${app.jobTitle}" with ${app.workerName} at ₹${agreedPrice}. Tap "SHARE MY EXACT LOCATION" so the worker can navigate to you.`,
+        metadataLabel: `Offer Accepted · ₹${agreedPrice}`,
+        targetRoute: 'employer-dashboard',
+        targetJobId: app.jobId,
+        targetApplicationId: app.id,
+        dedupeKey: sanitizeSafeId(`offer_resp_cust_${app.id}_${Date.now()}`),
+        pushPayload: {
+          workerName: app.workerName,
+          jobTitle: app.jobTitle,
+          proposedWage: agreedPrice,
+          locationLabel: loc,
+        },
+      }).catch(() => undefined);
+    }
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, path);
   }
@@ -2516,6 +2580,7 @@ export async function updateDealLiveLocation(params: {
 
   try {
     const existing = await getDoc(shareRef);
+    const wasActive = existing.exists() && existing.data()?.sharingActive === true;
     const authorizedUids = [params.app.employerUid, params.app.workerUid];
     const safeParticipantName =
       params.participantName.trim().length >= 2
@@ -2549,6 +2614,44 @@ export async function updateDealLiveLocation(params: {
         source: params.source || 'gps_once',
         updatedAt: serverTimestamp(),
       });
+    }
+
+    // Immediately notify counterparty when location sharing is turned ON
+    if (params.sharingActive && !wasActive) {
+      const isCustomerSharing = params.role === 'customer';
+      const recipientUid = isCustomerSharing ? params.app.workerUid : params.app.employerUid;
+      const recipientRole = isCustomerSharing ? 'worker' : 'employer';
+      const targetRoute = isCustomerSharing ? 'worker-dashboard' : 'employer-dashboard';
+      const eventType: DealNotificationEventType = isCustomerSharing
+        ? 'customer_location_shared'
+        : 'worker_location_shared';
+
+      await dispatchTwoWayDealNotification({
+        recipientUid,
+        recipientRole,
+        senderUid: params.ownerUid,
+        senderName: safeParticipantName,
+        category: 'bookingNotifications',
+        eventType,
+        toneType: 'deal_accepted',
+        dealStatus: getEffectiveDealStatus(params.app),
+        title: isCustomerSharing
+          ? `Customer Shared Exact Location: ${params.app.jobTitle}`
+          : `Worker Shared Live Location: ${params.app.jobTitle}`,
+        body: isCustomerSharing
+          ? `${safeParticipantName} shared their exact location pin. Open dashboard to view on map and tap GET DIRECTIONS.`
+          : `${safeParticipantName} started sharing live location for "${params.app.jobTitle}". Open dashboard to track arrival.`,
+        metadataLabel: isCustomerSharing ? 'Exact Location Shared' : 'Worker Live Location',
+        targetRoute,
+        targetJobId: params.app.jobId,
+        targetApplicationId: params.app.id,
+        dedupeKey: sanitizeSafeId(`loc_share_${params.app.id}_${params.role}_${Date.now()}`),
+        pushPayload: {
+          workerName: safeParticipantName,
+          jobTitle: params.app.jobTitle,
+          locationLabel: params.app.jobLocationLabel || params.app.jobDistrict || '',
+        },
+      }).catch(() => undefined);
     }
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, path);

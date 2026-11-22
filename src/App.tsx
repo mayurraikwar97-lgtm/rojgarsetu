@@ -2,7 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, BellRing, Volume2, VolumeX, X } from 'lucide-react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { LanguageProvider, useLanguage } from './i18n/LanguageContext';
-import { subscribeForegroundPush } from './lib/pushNotifications';
+import {
+  subscribeForegroundPush,
+  syncPushTokenSilentlyIfGranted,
+} from './lib/pushNotifications';
 import {
   markAllNotificationsRead,
   markNotificationRead,
@@ -228,6 +231,23 @@ const AppShell: React.FC = () => {
     }
     return subscribeNotificationPreferences(user.uid, setNotifPrefs);
   }, [user?.uid, user?.emailVerified]);
+
+  // Silently refresh FCM device token whenever permission is already granted
+  useEffect(() => {
+    if (!user?.emailVerified) return;
+    if (notifPrefs && notifPrefs.masterEnabled === false) return;
+    const isRegisteredWorker = workers.some((w) => w.ownerUid === user.uid);
+    const resolvedRole: 'worker' | 'employer' | 'admin' = isAdmin
+      ? 'admin'
+      : isRegisteredWorker
+      ? 'worker'
+      : 'employer';
+    void syncPushTokenSilentlyIfGranted({
+      uid: user.uid,
+      role: resolvedRole,
+      language: notifPrefs?.preferredLanguage || lang,
+    });
+  }, [user?.uid, user?.emailVerified, isAdmin, workers.length, notifPrefs?.masterEnabled, notifPrefs?.preferredLanguage, lang]);
 
   // Parse deep links from URL query parameters on boot (?route=worker-dashboard&jobId=...&speak=1&lang=mr)
   useEffect(() => {
@@ -701,6 +721,7 @@ const AppShell: React.FC = () => {
         {route === 'transport' && (
           <LocalTransportView
             vehicles={vehicles}
+            workers={workers}
             initialFilter={categoryFilter as VehicleType | 'passenger' | 'goods' | ''}
             aiPrefill={aiPrefill}
             onClearAiPrefill={() => setAiPrefill(null)}

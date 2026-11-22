@@ -305,6 +305,16 @@ function buildLocalizedCustomerEventMessage(params: {
           title: `काम पूर्ण झाले: ${safeJob}`,
           body: `${safeJob} पूर्ण झाले आहे. लाइव्ह लोकेशन शेअरिंग सुरक्षितपणे बंद केले आहे.`,
         };
+      case 'customer_location_shared':
+        return {
+          title: `ग्राहकाने अचूक लोकेशन शेअर केले: ${safeJob}`,
+          body: `${safeName} यांनी अचूक पत्ता व पिन शेअर केला आहे${locText}. नकाशावर पहा आणि मार्ग (Directions) सुरू करा.`,
+        };
+      case 'worker_location_shared':
+        return {
+          title: `कामगाराने लाइव्ह लोकेशन शेअर केले: ${safeJob}`,
+          body: `${safeName} यांचे लाइव्ह लोकेशन आता नकाशावर दिसत आहे${locText}.`,
+        };
       case 'deal_cancelled':
       case 'booking_cancelled':
         return {
@@ -372,6 +382,16 @@ function buildLocalizedCustomerEventMessage(params: {
           title: `कार्य पूर्ण: ${safeJob}`,
           body: `${safeJob} पूर्ण हो गया है। लाइव लोकेशन साझाकरण बंद कर दिया गया है।`,
         };
+      case 'customer_location_shared':
+        return {
+          title: `ग्राहक ने सटीक लोकेशन साझा की: ${safeJob}`,
+          body: `${safeName} ने सटीक लोकेशन पिन साझा किया है${locText}। नक्शे पर देखें और दिशा (Directions) प्राप्त करें।`,
+        };
+      case 'worker_location_shared':
+        return {
+          title: `कामगार ने लाइव लोकेशन साझा की: ${safeJob}`,
+          body: `${safeName} की लाइव लोकेशन अब नक्शे पर दिख रही है${locText}।`,
+        };
       case 'deal_cancelled':
       case 'booking_cancelled':
         return {
@@ -437,6 +457,16 @@ function buildLocalizedCustomerEventMessage(params: {
       return {
         title: `Work Completed: ${safeJob}`,
         body: `${safeJob} has been marked completed. Live location sharing is now stopped.`,
+      };
+    case 'customer_location_shared':
+      return {
+        title: `Customer Shared Exact Location: ${safeJob}`,
+        body: `${safeName} shared their exact location pin${locText}. Tap to view on map and get directions.`,
+      };
+    case 'worker_location_shared':
+      return {
+        title: `Worker Shared Live Location: ${safeJob}`,
+        body: `${safeName} is sharing their live location${locText}. Tap to view distance on the map.`,
       };
     case 'deal_cancelled':
     case 'booking_cancelled':
@@ -680,11 +710,16 @@ async function dispatchAndRecordTargets(params: {
   for (const target of targets) {
     // Deterministic doc ID dedupe check so client Firestore writes and server FCM writes never duplicate
     const safeDocId = target.dedupeKey.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120);
+    let alreadyRecordedInFirestore = false;
     if (safeDocId.length >= 8) {
       try {
         const directSnap = await runtime.db.collection('notifications').doc(safeDocId).get();
-        if (directSnap.exists && target.tokens.length === 0) {
-          continue;
+        if (directSnap.exists) {
+          alreadyRecordedInFirestore = true;
+          const prevStatus = directSnap.data()?.deliveryStatus;
+          if (prevStatus === 'sent' || target.tokens.length === 0) {
+            continue;
+          }
         }
       } catch {
         // Proceed
@@ -692,22 +727,24 @@ async function dispatchAndRecordTargets(params: {
     }
 
     // Deduplication query check
-    let alreadyRecordedInFirestore = false;
-    try {
-      const dupSnap = await runtime.db
-        .collection('notifications')
-        .where('recipientUid', '==', target.uid)
-        .where('dedupeKey', '==', target.dedupeKey)
-        .limit(1)
-        .get();
-      if (!dupSnap.empty) {
-        alreadyRecordedInFirestore = true;
-        if (target.tokens.length === 0) {
-          continue;
+    if (!alreadyRecordedInFirestore) {
+      try {
+        const dupSnap = await runtime.db
+          .collection('notifications')
+          .where('recipientUid', '==', target.uid)
+          .where('dedupeKey', '==', target.dedupeKey)
+          .limit(1)
+          .get();
+        if (!dupSnap.empty) {
+          alreadyRecordedInFirestore = true;
+          const prevStatus = dupSnap.docs[0]?.data()?.deliveryStatus;
+          if (prevStatus === 'sent' || target.tokens.length === 0) {
+            continue;
+          }
         }
+      } catch {
+        // Proceed if query fails due to unconfigured credentials; handled below
       }
-    } catch {
-      // Proceed if query fails due to unconfigured credentials; handled below
     }
 
     if (target.tokens.length === 0) {
@@ -762,44 +799,62 @@ async function dispatchAndRecordTargets(params: {
     const soundActive = target.playSound !== false;
 
     try {
+      const notifTitle = target.title.slice(0, 140);
+      const notifBody = target.body.slice(0, 400);
+      const notifTag = `${toneCfg.channelId}_${safeDocId || target.dedupeKey || 'alert'}`.slice(0, 96);
+      const sharedDataPayload: Record<string, string> = {
+        title: notifTitle,
+        body: notifBody,
+        clickUrl: target.clickUrl,
+        route: target.targetRoute,
+        jobId: target.targetJobId || '',
+        demoJobId: target.targetDemoJobId || '',
+        dedupeKey: target.dedupeKey,
+        lang: target.language,
+        toneType,
+        eventType: target.eventType || '',
+        voiceScript: (target.voiceScript || '').slice(0, 680),
+        approxLocationLabel: (target.approxLocationLabel || '').slice(0, 155),
+        distanceKm:
+          typeof target.distanceKm === 'number' && Number.isFinite(target.distanceKm)
+            ? String(target.distanceKm)
+            : '',
+        customerName: (target.customerName || '').slice(0, 155),
+        jobCategory: (target.jobCategory || '').slice(0, 75),
+        playSound: soundActive ? 'true' : 'false',
+        speakVoice: target.speakVoice === false ? 'false' : 'true',
+        speak: target.speakVoice === false ? '0' : '1',
+      };
+
       const multicastRes = await runtime.messaging.sendEachForMulticast({
         tokens: tokenStrings,
         notification: {
-          title: target.title.slice(0, 140),
-          body: target.body.slice(0, 400),
+          title: notifTitle,
+          body: notifBody,
         },
-        data: {
-          title: target.title.slice(0, 140),
-          body: target.body.slice(0, 400),
-          clickUrl: target.clickUrl,
-          route: target.targetRoute,
-          jobId: target.targetJobId || '',
-          demoJobId: target.targetDemoJobId || '',
-          dedupeKey: target.dedupeKey,
-          lang: target.language,
-          toneType,
-          eventType: target.eventType || '',
-          voiceScript: (target.voiceScript || '').slice(0, 680),
-          approxLocationLabel: (target.approxLocationLabel || '').slice(0, 155),
-          distanceKm:
-            typeof target.distanceKm === 'number' && Number.isFinite(target.distanceKm)
-              ? String(target.distanceKm)
-              : '',
-          customerName: (target.customerName || '').slice(0, 155),
-          jobCategory: (target.jobCategory || '').slice(0, 75),
-          playSound: soundActive ? 'true' : 'false',
-          speakVoice: target.speakVoice === false ? 'false' : 'true',
-          speak: target.speakVoice === false ? '0' : '1',
-        },
+        data: sharedDataPayload,
         android: {
           priority: 'high',
+          ttl: 86400 * 1000,
           notification: {
             channelId: toneCfg.channelId,
+            tag: notifTag,
             ...(soundActive ? { sound: 'default', defaultSound: true } : { defaultSound: false }),
             defaultVibrateTimings: false,
             vibrateTimingsMillis: soundActive ? toneCfg.vibrateMillis : [0],
             priority: 'max',
             visibility: 'public',
+          },
+        },
+        apns: {
+          headers: {
+            'apns-priority': '10',
+          },
+          payload: {
+            aps: {
+              ...(soundActive ? { sound: 'default' } : {}),
+              'content-available': 1,
+            },
           },
         },
         webpush: {
@@ -808,13 +863,16 @@ async function dispatchAndRecordTargets(params: {
             TTL: '86400',
           },
           notification: {
+            title: notifTitle,
+            body: notifBody,
             icon: '/pwa-192x192.png',
             badge: '/pwa-192x192.png',
-            tag: `${toneCfg.channelId}_${safeDocId || target.dedupeKey || 'alert'}`,
+            tag: notifTag,
             renotify: true,
             requireInteraction: true,
             silent: !soundActive,
             ...(soundActive ? { vibrate: toneCfg.vibratePattern } : {}),
+            data: sharedDataPayload,
           },
           fcmOptions: {
             link: target.clickUrl,

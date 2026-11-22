@@ -21,9 +21,48 @@ export function getNextRadiusStage(currentRadiusKm: unknown): ServiceRadiusKm | 
   return SERVICE_RADIUS_STAGES[idx + 1];
 }
 
+export const BIKE_TRANSPORT_CATEGORY_NAME = 'Bike Hire & Transport';
+
+const TRANSPORT_RIDER_TOKENS = new Set<string>([
+  'bike_transport',
+  'driver',
+  'auto_taxi_operator',
+  'delivery_personnel',
+  'transport_logistics',
+]);
+
+export function isBikeOrTransportCategory(raw: string): boolean {
+  const token = normalizeCategoryToken(raw);
+  return TRANSPORT_RIDER_TOKENS.has(token);
+}
+
 export function normalizeCategoryToken(raw: string): string {
   const clean = (raw || '').toLowerCase().trim().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ');
   if (!clean) return '';
+  if (
+    clean.includes('bike hire') ||
+    clean.includes('bike taxi') ||
+    clean.includes('bike rider') ||
+    clean.includes('bike transport') ||
+    clean === 'rider' ||
+    clean.includes('रायडर') ||
+    clean.includes('राइडर') ||
+    clean.includes('बाईक भाडे') ||
+    clean.includes('बाईक टॅक्सी') ||
+    clean.includes('बाइक टैक्सी')
+  ) {
+    return 'bike_transport';
+  }
+  if (
+    clean.includes('transport') ||
+    clean.includes('logistics') ||
+    clean.includes('वाहतूक') ||
+    clean.includes('परिवहन') ||
+    clean.includes('ट्रान्सपोर्ट') ||
+    clean.includes('ट्रांसपोर्ट')
+  ) {
+    return 'transport_logistics';
+  }
   if (
     clean.includes('daily labour') ||
     clean.includes('daily labor') ||
@@ -38,18 +77,18 @@ export function normalizeCategoryToken(raw: string): string {
     clean.includes('मजदूर') ||
     clean.includes('कामगार')
   ) {
-    if (!clean.includes('बांधकाम') && !clean.includes('कृषी') && !clean.includes('घरगुती') && !clean.includes('औद्योगिक')) {
+    if (!clean.includes('बांधकाम') && !clean.includes('कृषी') && !clean.includes('घरगुती') && !clean.includes('औद्योगिक') && !clean.includes('वाहतूक')) {
       return 'helpers_and_general_labour';
     }
   }
-  if (clean.includes('carpenter') || clean.includes('सुतार') || clean.includes('बढ़ई')) return 'carpenter';
+  if (clean.includes('carpenter') || clean.includes('सुतार') || clean.includes('बढ़ई') || clean.includes('कारपेंटर')) return 'carpenter';
   if (clean.includes('electrician') || clean.includes('इलेक्ट्रिशियन') || clean.includes('इलेक्ट्रीशियन') || clean.includes('वीजतंत्री')) {
     return 'electrician';
   }
   if (clean.includes('plumber') || clean.includes('प्लंबर') || clean.includes('नलसाज') || clean.includes('नळ कारागीर')) {
     return 'plumber';
   }
-  if (clean.includes('auto') && clean.includes('taxi')) return 'auto_taxi_operator';
+  if (clean.includes('auto') && (clean.includes('taxi') || clean.includes('rickshaw') || clean.includes('commercial'))) return 'auto_taxi_operator';
   if (clean.includes('tractor') || clean.includes('ट्रॅक्टर') || clean.includes('ट्रैक्टर')) return 'tractor_operator';
   if (clean.includes('driver') || clean.includes('ड्रायव्हर') || clean.includes('ड्राइवर') || clean.includes('चालक')) {
     return 'driver';
@@ -81,7 +120,7 @@ export function normalizeCategoryToken(raw: string): string {
   if (clean.includes('mechanic') || clean.includes('technician') || clean.includes('मेकॅनिक') || clean.includes('मैकेनिक')) {
     return 'technician_mechanic';
   }
-  if (clean.includes('housekeeping') || clean.includes('cleaning') || clean.includes('हाउसकीपिंग')) {
+  if (clean.includes('housekeeping') || clean.includes('cleaning') || clean.includes('cleaner') || clean.includes('स्वच्छता') || clean.includes('हाउसकीपिंग')) {
     return 'housekeeping_cleaning';
   }
   if (clean.includes('domestic') || clean.includes('घरगुती') || clean.includes('घरेलू')) return 'domestic_worker';
@@ -103,7 +142,7 @@ export function normalizeCategoryToken(raw: string): string {
   return clean.replace(/s$/, '');
 }
 
-function getCategoryCanonicalAndSkills(categoryOrSkill: string): Set<string> {
+function getCategoryCanonicalSkillsOnly(categoryOrSkill: string): Set<string> {
   const tokens = new Set<string>();
   const norm = normalizeCategoryToken(categoryOrSkill);
   if (norm) tokens.add(norm);
@@ -111,8 +150,7 @@ function getCategoryCanonicalAndSkills(categoryOrSkill: string): Set<string> {
   const matchedCat = EMPLOYMENT_CATEGORIES.find(
     (c) =>
       c.en.toLowerCase() === rawLower ||
-      normalizeCategoryToken(c.en) === norm ||
-      c.skillsEn.some((sk) => sk.toLowerCase() === rawLower)
+      normalizeCategoryToken(c.en) === norm
   );
   if (matchedCat) {
     tokens.add(normalizeCategoryToken(matchedCat.en));
@@ -134,31 +172,36 @@ export function doesCategoryMatch(
   const jobCatNorm = normalizeCategoryToken(jobCategory);
   if (!jobCatNorm) return false;
 
-  const jobSkillNorms = (jobRequiredSkills || []).map(normalizeCategoryToken).filter(Boolean);
-  const jobExpandedSet = new Set<string>([
-    jobCatNorm,
-    ...jobSkillNorms,
-    ...getCategoryCanonicalAndSkills(jobCategory),
-  ]);
-
   const workerPrimaryNorm = normalizeCategoryToken(workerPrimarySkill);
   const workerSkillNorms = (workerSkills || []).map(normalizeCategoryToken).filter(Boolean);
-  const workerExpandedSet = new Set<string>([
-    ...(workerPrimaryNorm ? [workerPrimaryNorm] : []),
-    ...workerSkillNorms,
-    ...(workerPrimarySkill ? Array.from(getCategoryCanonicalAndSkills(workerPrimarySkill)) : []),
-  ]);
+
+  // Strict Bike Hire / Transport isolation: ONLY Bike Rider / Transport workers receive Bike Hire / Transport orders!
+  if (jobCatNorm === 'bike_transport') {
+    const isTransportWorker =
+      TRANSPORT_RIDER_TOKENS.has(workerPrimaryNorm) ||
+      workerSkillNorms.some((ws) => TRANSPORT_RIDER_TOKENS.has(ws));
+    if (!isTransportWorker) return false;
+    const prefCats = Array.isArray(workerPreferredCategories)
+      ? workerPreferredCategories.map(normalizeCategoryToken).filter(Boolean)
+      : [];
+    if (prefCats.length === 0) return true;
+    return prefCats.some((pref) => TRANSPORT_RIDER_TOKENS.has(pref));
+  }
+
+  // Normal work orders: strict canonical category matching (no cross-category leakage!)
+  const jobPrimarySkills = getCategoryCanonicalSkillsOnly(jobCategory);
+  const jobReqNorms = (jobRequiredSkills || []).map(normalizeCategoryToken).filter(Boolean);
+  const allowedJobTokens = new Set<string>([jobCatNorm, ...jobPrimarySkills]);
+  // Only include required skills that belong to this job's own canonical trade (prevents cross-trade bleed)
+  jobReqNorms.forEach((sk) => {
+    if (sk === jobCatNorm || jobPrimarySkills.has(sk)) {
+      allowedJobTokens.add(sk);
+    }
+  });
 
   const skillMatches =
-    Boolean(
-      workerPrimaryNorm &&
-        (jobCatNorm === workerPrimaryNorm ||
-          jobExpandedSet.has(workerPrimaryNorm) ||
-          workerPrimaryNorm.includes(jobCatNorm) ||
-          jobCatNorm.includes(workerPrimaryNorm))
-    ) ||
-    workerSkillNorms.some((ws) => jobExpandedSet.has(ws)) ||
-    jobSkillNorms.some((js) => workerExpandedSet.has(js));
+    Boolean(workerPrimaryNorm && (workerPrimaryNorm === jobCatNorm || allowedJobTokens.has(workerPrimaryNorm))) ||
+    workerSkillNorms.some((ws) => ws === jobCatNorm || jobPrimarySkills.has(ws));
 
   if (!skillMatches) return false;
 
@@ -168,13 +211,7 @@ export function doesCategoryMatch(
 
   if (prefCats.length === 0) return true;
 
-  return prefCats.some(
-    (pref) =>
-      pref === jobCatNorm ||
-      pref.includes(jobCatNorm) ||
-      jobCatNorm.includes(pref) ||
-      jobExpandedSet.has(pref)
-  );
+  return prefCats.some((pref) => pref === jobCatNorm || allowedJobTokens.has(pref));
 }
 
 /**

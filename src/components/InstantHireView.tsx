@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   ArrowRight,
   Calendar,
+  Camera,
   Car,
   Check,
   CheckCircle2,
@@ -56,6 +57,7 @@ import {
   buildApproxLocationLabel,
   SERVICE_RADIUS_STAGES,
 } from '../lib/smartVoiceJobAlert';
+import { MAX_WORK_PHOTOS, uploadCustomerWorkPhoto } from '../lib/workPhotoService';
 import type {
   AiHirePrefill,
   JobWorkType,
@@ -91,19 +93,20 @@ function tr(lang: Language, en: string, hi: string, mr: string): string {
   return lang === 'hi' ? hi : lang === 'mr' ? mr : en;
 }
 
+// Strictly separate Bike Hire / Transport from normal work orders
+const NORMAL_WORK_CATEGORIES = EMPLOYMENT_CATEGORIES.filter((c) => c.group !== 'transport');
+
 const FEATURED_TRADE_IDS = [
   'electricians',
   'plumbers',
   'carpenters',
   'construction-workers',
-  'drivers',
   'painters',
   'technicians-mechanics',
   'welders',
   'helpers-general-labour',
   'cooks-kitchen-staff',
   'housekeeping-cleaning-staff',
-  'delivery-personnel',
   'agricultural-workers',
   'domestic-workers',
   'security-guards',
@@ -200,6 +203,9 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
   const [workNote, setWorkNote] = useState('');
   const [prefillPhotoAttachment, setPrefillPhotoAttachment] = useState<string>('');
   const [prefillPhotoAnalyzed, setPrefillPhotoAnalyzed] = useState<boolean>(false);
+  const [workPhotoUrls, setWorkPhotoUrls] = useState<string[]>([]);
+  const [photoUploading, setPhotoUploading] = useState(false);
+  const [photoUploadError, setPhotoUploadError] = useState('');
   const [checkoutRequestId, setCheckoutRequestId] = useState<string>('');
   const [initialRadiusKm, setInitialRadiusKm] = useState<ServiceRadiusKm>(5);
   const [submitting, setSubmitting] = useState(false);
@@ -222,6 +228,44 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
     category: string;
     notifiedCount: number;
   } | null>(null);
+
+  const handleUploadWorkPhotos = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setPhotoUploadError('');
+    const remainingSlots = MAX_WORK_PHOTOS - workPhotoUrls.length;
+    if (remainingSlots <= 0) {
+      setPhotoUploadError(
+        tr(
+          lang,
+          `Maximum ${MAX_WORK_PHOTOS} work photos allowed per order.`,
+          `एक ऑर्डर में अधिकतम ${MAX_WORK_PHOTOS} फोटो जोड़े जा सकते हैं।`,
+          `एका ऑर्डरसाठी जास्तीत जास्त ${MAX_WORK_PHOTOS} फोटो जोडता येतात.`
+        )
+      );
+      return;
+    }
+
+    const picked = Array.from(files).slice(0, remainingSlots);
+    setPhotoUploading(true);
+    try {
+      const uploaded: string[] = [];
+      for (const file of picked) {
+        const res = await uploadCustomerWorkPhoto({
+          file,
+          ownerUid: user?.uid || 'guest',
+          folder: 'work',
+        });
+        uploaded.push(res.url);
+      }
+      setWorkPhotoUrls((prev) => [...prev, ...uploaded].slice(0, MAX_WORK_PHOTOS));
+    } catch (err) {
+      setPhotoUploadError(
+        err instanceof Error ? err.message : 'Unable to upload photo. Try a JPG/PNG under 10 MB.'
+      );
+    } finally {
+      setPhotoUploading(false);
+    }
+  };
 
   useEffect(() => {
     if (initialCategory) {
@@ -287,7 +331,7 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
 
   const featuredCategories = useMemo(
     () =>
-      FEATURED_TRADE_IDS.map((id) => EMPLOYMENT_CATEGORIES.find((c) => c.id === id)).filter(
+      FEATURED_TRADE_IDS.map((id) => NORMAL_WORK_CATEGORIES.find((c) => c.id === id)).filter(
         (c): c is NonNullable<typeof c> => Boolean(c)
       ),
     []
@@ -571,7 +615,7 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
     setCheckoutError('');
 
     const primaryTrade =
-      selectedCategory || targetWorkers[0]?.primarySkill || EMPLOYMENT_CATEGORIES[0].en;
+      selectedCategory || targetWorkers[0]?.primarySkill || NORMAL_WORK_CATEGORIES[0].en;
 
     const avgWage =
       targetWorkers.length > 0
@@ -707,6 +751,8 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
           isWomenFriendly: false,
           isAccessible: false,
           biddingEnabled: true,
+          orderKind: 'work',
+          ...(workPhotoUrls.length > 0 ? { workPhotoUrls: workPhotoUrls.slice(0, MAX_WORK_PHOTOS) } : {}),
           ...(prefillPhotoAttachment
             ? {
                 photoAttachment: prefillPhotoAttachment,
@@ -746,6 +792,7 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
       setSelectedWorkerIds([]);
       setPrefillPhotoAttachment('');
       setPrefillPhotoAnalyzed(false);
+      setWorkPhotoUrls([]);
     } catch (err) {
       setCheckoutError(err instanceof Error ? err.message : 'Unable to send instant hire request.');
     } finally {
@@ -763,7 +810,7 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
       return;
     }
 
-    const cleanCategory = (selectedCategory || EMPLOYMENT_CATEGORIES[0].en).trim();
+    const cleanCategory = (selectedCategory || NORMAL_WORK_CATEGORIES[0].en).trim();
     const effState = locationPin?.state || selectedState || employerProfile?.state || 'Maharashtra';
     const effDistrict =
       locationPin?.district ||
@@ -824,6 +871,8 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
           isWomenFriendly: false,
           isAccessible: false,
           biddingEnabled: true,
+          orderKind: 'work',
+          ...(workPhotoUrls.length > 0 ? { workPhotoUrls: workPhotoUrls.slice(0, MAX_WORK_PHOTOS) } : {}),
         },
         [],
         `${safeTitle} · ${safeLocality}, ${effDistrict}`,
@@ -853,6 +902,7 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
         notifiedCount: result.notifiedCount,
       });
       setQuickTitle('');
+      setWorkPhotoUrls([]);
     } catch (err) {
       setQuickError(
         err instanceof Error ? err.message : 'Unable to send request right now. Please try again.'
@@ -1143,13 +1193,13 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
               <select
                 value={selectedCategory}
                 onChange={(e) => setSelectedCategory(e.target.value)}
-                aria-label="All 32 Employment Categories"
+                aria-label="Work Service Categories"
                 className="w-full px-3 py-2.5 bg-slate-50 border border-slate-300 rounded-md text-sm font-semibold text-[#0B3B75] focus:bg-white focus:outline-none focus:ring-2 focus:ring-[#0B3B75]"
               >
                 <option value="">
-                  {tr(lang, 'All 32 Trades & Categories', 'सभी 32 काम श्रेणियां', 'सर्व 32 कामाच्या श्रेणी')}
+                  {tr(lang, 'All Work Categories', 'सभी काम श्रेणियां', 'सर्व कामाच्या श्रेणी')}
                 </option>
-                {EMPLOYMENT_CATEGORIES.map((cat) => (
+                {NORMAL_WORK_CATEGORIES.map((cat) => (
                   <option key={cat.id} value={cat.en}>
                     {lang === 'hi' ? cat.hi : lang === 'mr' ? cat.mr : cat.en}
                   </option>
@@ -1239,11 +1289,11 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
                 {tr(lang, 'Service Category', 'काम की श्रेणी', 'कामाचा प्रकार')}
               </label>
               <select
-                value={selectedCategory || EMPLOYMENT_CATEGORIES[0].en}
+                value={selectedCategory || NORMAL_WORK_CATEGORIES[0].en}
                 onChange={(e) => setSelectedCategory(e.target.value)}
                 className="w-full min-h-[44px] px-3 py-2 border border-slate-300 rounded-md text-xs sm:text-sm font-semibold text-[#0B3B75] bg-slate-50"
               >
-                {EMPLOYMENT_CATEGORIES.map((cat) => (
+                {NORMAL_WORK_CATEGORIES.map((cat) => (
                   <option key={cat.id} value={cat.en}>
                     {lang === 'hi' ? cat.hi : lang === 'mr' ? cat.mr : cat.en}
                   </option>
@@ -1287,7 +1337,7 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
             <div className="sm:col-span-3">
               <button
                 type="submit"
-                disabled={quickSubmitting}
+                disabled={quickSubmitting || photoUploading}
                 className="w-full min-h-[44px] inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-md bg-[#E06D1B] text-white text-sm font-extrabold hover:bg-[#c55b10] disabled:opacity-60 whitespace-nowrap cursor-pointer"
               >
                 <Zap className="w-4 h-4 shrink-0" />
@@ -1299,6 +1349,87 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
               </button>
             </div>
           </div>
+
+          {/* Customer Work Photos Upload (1 or more) + SHARE JOB LOCATION */}
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100">
+            <div className="flex flex-wrap items-center gap-2">
+              <label className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-[#0B3B75] bg-blue-50/70 text-[#0B3B75] text-xs font-bold hover:bg-blue-100 cursor-pointer">
+                <Camera className="w-4 h-4 text-[#E06D1B]" />
+                <span>
+                  {photoUploading
+                    ? tr(lang, 'Uploading photo...', 'फोटो अपलोड हो रहा है...', 'फोटो अपलोड होत आहे...')
+                    : tr(
+                        lang,
+                        `Upload Work Photos (${workPhotoUrls.length}/${MAX_WORK_PHOTOS})`,
+                        `काम की फोटो जोड़ें (${workPhotoUrls.length}/${MAX_WORK_PHOTOS})`,
+                        `कामाचे फोटो जोडा (${workPhotoUrls.length}/${MAX_WORK_PHOTOS})`
+                      )}
+                </span>
+                <input
+                  type="file"
+                  accept="image/jpeg,image/png,image/webp"
+                  multiple
+                  disabled={photoUploading || workPhotoUrls.length >= MAX_WORK_PHOTOS}
+                  onChange={(e) => {
+                    void handleUploadWorkPhotos(e.target.files);
+                    e.target.value = '';
+                  }}
+                  className="hidden"
+                />
+              </label>
+
+              <button
+                type="button"
+                disabled={gpsLoading}
+                onClick={handleUseGps}
+                className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#15803D] text-white text-xs font-bold hover:bg-emerald-800 cursor-pointer disabled:opacity-60"
+              >
+                <LocateFixed className="w-4 h-4" />
+                <span>
+                  {tr(lang, 'SHARE JOB LOCATION', 'काम की लोकेशन शेयर करें', 'कामाचे लोकेशन शेअर करा')}
+                </span>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setShowPinModal(true)}
+                className="min-h-[40px] inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md border border-slate-300 bg-white text-slate-700 text-xs font-semibold hover:bg-slate-50 cursor-pointer"
+              >
+                <MapPin className="w-3.5 h-3.5 text-[#E06D1B]" />
+                <span>{tr(lang, 'Pin on Map', 'मैप पर पिन', 'नकाशावर पिन')}</span>
+              </button>
+            </div>
+
+            {workPhotoUrls.length > 0 && (
+              <div className="flex flex-wrap items-center gap-2">
+                {workPhotoUrls.map((url, idx) => (
+                  <div key={`${url.slice(0, 24)}-${idx}`} className="relative group">
+                    <img
+                      src={url}
+                      alt={`Work photo ${idx + 1}`}
+                      className="w-12 h-12 rounded object-cover border border-slate-300"
+                    />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setWorkPhotoUrls((prev) => prev.filter((_, i) => i !== idx))
+                      }
+                      aria-label="Remove photo"
+                      className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-700 text-white flex items-center justify-center text-[10px] font-bold cursor-pointer"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {photoUploadError && (
+            <p className="text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded px-3 py-1.5">
+              {photoUploadError}
+            </p>
+          )}
 
           {quickError && (
             <p className="text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
@@ -1926,6 +2057,57 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
                     )}
                     className="w-full px-3 py-2 border border-slate-300 rounded text-sm"
                   />
+                </div>
+
+                {/* Upload Work Photos (1 or more) in Checkout Modal */}
+                <div className="bg-slate-50 border border-slate-200 rounded-md p-3 space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-[#0B3B75]">
+                      {tr(lang, 'Work Photos (Optional, up to 4)', 'काम की फोटो (वैकल्पिक, अधिकतम 4)', 'कामाचे फोटो (ऐच्छिक, जास्तीत जास्त ४)')}
+                    </span>
+                    <label className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#0B3B75] text-white text-xs font-bold hover:bg-slate-800 cursor-pointer">
+                      <Camera className="w-3.5 h-3.5" />
+                      <span>
+                        {photoUploading
+                          ? tr(lang, 'Uploading...', 'अपलोड...', 'अपलोड...')
+                          : tr(lang, 'Add Photos', 'फोटो जोड़ें', 'फोटो जोडा')}
+                      </span>
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        multiple
+                        disabled={photoUploading || workPhotoUrls.length >= MAX_WORK_PHOTOS}
+                        onChange={(e) => {
+                          void handleUploadWorkPhotos(e.target.files);
+                          e.target.value = '';
+                        }}
+                        className="hidden"
+                      />
+                    </label>
+                  </div>
+                  {workPhotoUrls.length > 0 && (
+                    <div className="flex flex-wrap gap-2 pt-1">
+                      {workPhotoUrls.map((url, idx) => (
+                        <div key={`modal-${idx}`} className="relative">
+                          <img
+                            src={url}
+                            alt={`Work photo ${idx + 1}`}
+                            className="w-14 h-14 rounded object-cover border border-slate-300"
+                          />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setWorkPhotoUrls((prev) => prev.filter((_, i) => i !== idx))
+                            }
+                            aria-label="Remove photo"
+                            className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-700 text-white text-[10px] font-bold flex items-center justify-center cursor-pointer"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {prefillPhotoAttachment && (

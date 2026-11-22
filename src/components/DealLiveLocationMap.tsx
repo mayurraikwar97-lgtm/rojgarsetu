@@ -108,6 +108,7 @@ interface DealLiveLocationMapProps {
   viewerUid: string;
   viewerRole: 'customer' | 'worker';
   viewerName: string;
+  onLocationStatusChange?: (hasActiveShare: boolean) => void;
 }
 
 export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
@@ -116,6 +117,7 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
   viewerUid,
   viewerRole,
   viewerName,
+  onLocationStatusChange,
 }) => {
   const { lang } = useLanguage();
   const [shares, setShares] = useState<DealLocationShare[]>([]);
@@ -186,6 +188,10 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
   const activeMarkers = useMemo(() => {
     return shares.filter((s) => s.sharingActive && Number.isFinite(s.lat) && Number.isFinite(s.lng));
   }, [shares]);
+
+  useEffect(() => {
+    onLocationStatusChange?.(activeMarkers.length > 0);
+  }, [activeMarkers.length, onLocationStatusChange]);
 
   const markerPoints = useMemo(() => {
     const pts = activeMarkers.map((m) => ({ lat: m.lat, lng: m.lng }));
@@ -390,28 +396,32 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-1.5">
+        <div className="flex flex-wrap items-center gap-2">
           {!watching ? (
             <button
               type="button"
               disabled={gpsBusy}
               onClick={handleStartLiveWatch}
-              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded bg-[#15803D] text-white text-[11px] font-bold hover:bg-emerald-800 cursor-pointer disabled:opacity-60"
+              className="min-h-[42px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md bg-[#15803D] text-white text-xs font-extrabold hover:bg-emerald-800 cursor-pointer disabled:opacity-60 shadow-sm"
             >
-              <Navigation className="w-3 h-3" />
-              {myShare?.sharingActive
-                ? tr(lang, 'Stream Live GPS', 'लाइव GPS चलाएं', 'लाइव्ह GPS सुरू करा')
-                : tr(lang, 'Share My Live Location', 'मेरी लाइव लोकेशन साझा करें', 'माझे लाइव्ह लोकेशन शेअर करा')}
+              <Navigation className="w-4 h-4" />
+              {viewerRole === 'customer'
+                ? myShare?.sharingActive
+                  ? tr(lang, 'UPDATE EXACT LOCATION', 'सटीक लोकेशन अपडेट करें', 'अचूक लोकेशन अपडेट करा')
+                  : tr(lang, 'SHARE MY EXACT LOCATION', 'मेरी सटीक लोकेशन साझा करें', 'माझे अचूक लोकेशन शेअर करा')
+                : myShare?.sharingActive
+                ? tr(lang, 'STREAM LIVE LOCATION', 'लाइव लोकेशन चालू करें', 'लाइव्ह लोकेशन सुरू करा')
+                : tr(lang, 'SHARE MY LOCATION', 'मेरी लोकेशन साझा करें', 'माझे लोकेशन शेअर करा')}
             </button>
           ) : (
             <button
               type="button"
               disabled={gpsBusy}
               onClick={handleStopSharing}
-              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded bg-red-700 text-white text-[11px] font-bold hover:bg-red-800 cursor-pointer"
+              className="min-h-[42px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md bg-red-700 text-white text-xs font-extrabold hover:bg-red-800 cursor-pointer shadow-sm"
             >
-              <Square className="w-3 h-3" />
-              {tr(lang, 'Stop Live Stream', 'साझाकरण बंद करें', 'शेअरिंग बंद करा')}
+              <Square className="w-3.5 h-3.5" />
+              {tr(lang, 'Stop Location Sharing', 'लोकेशन साझाकरण बंद करें', 'लोकेशन शेअरिंग बंद करा')}
             </button>
           )}
 
@@ -419,10 +429,10 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
             type="button"
             disabled={gpsBusy}
             onClick={handleShareOnce}
-            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded border border-slate-300 bg-white text-[#0B3B75] text-[11px] font-semibold hover:bg-slate-50 cursor-pointer"
+            className="min-h-[40px] inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-slate-300 bg-white text-[#0B3B75] text-xs font-bold hover:bg-slate-50 cursor-pointer"
           >
-            <Crosshair className="w-3 h-3" />
-            {tr(lang, 'Update Pin', 'पिन अपडेट', 'पिन अपडेट')}
+            <Crosshair className="w-3.5 h-3.5" />
+            {tr(lang, 'Pin Once', 'एक बार पिन करें', 'एकदा पिन करा')}
           </button>
 
           {myShare?.sharingActive && !watching && (
@@ -430,9 +440,10 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
               type="button"
               disabled={gpsBusy}
               onClick={handleStopSharing}
-              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded border border-red-300 bg-white text-red-700 text-[11px] font-semibold hover:bg-red-50 cursor-pointer"
+              className="min-h-[40px] inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-red-300 bg-white text-red-700 text-xs font-bold hover:bg-red-50 cursor-pointer"
             >
-              {tr(lang, 'Turn Off', 'बंद करें', 'बंद करा')}
+              <Square className="w-3 h-3" />
+              {tr(lang, 'Stop Location Sharing', 'लोकेशन बंद करें', 'लोकेशन शेअरिंग बंद करा')}
             </button>
           )}
 
@@ -441,10 +452,10 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
               href={directionsUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded bg-[#0B3B75] text-white text-[11px] font-bold hover:bg-slate-800"
+              className="min-h-[42px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md bg-[#0B3B75] text-white text-xs font-extrabold hover:bg-slate-800 shadow-sm"
             >
-              <ExternalLink className="w-3 h-3" />
-              {tr(lang, 'Open Directions', 'रास्ता देखें', 'दिशा पहा (Maps)')}
+              <ExternalLink className="w-4 h-4" />
+              {tr(lang, 'GET DIRECTIONS', 'दिशा प्राप्त करें (Maps)', 'दिशा पहा (GET DIRECTIONS)')}
             </a>
           )}
         </div>
@@ -508,7 +519,7 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
               defaultCenter={defaultCenter}
               defaultZoom={13}
               mapId="DEMO_MAP_ID"
-              internalUsageAttributionIds={['gmp_git_agentskills_v1']}
+              internalUsageAttributionIds={['gmp_mcp_codeassist_v1_aistudio']}
               gestureHandling="greedy"
               disableDefaultUI={false}
               className="w-full h-full"

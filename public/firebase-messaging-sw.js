@@ -47,10 +47,18 @@ function getSwTagPrefix(toneType) {
 }
 
 messaging.onBackgroundMessage((payload) => {
+  // CRITICAL: When FCM sends top-level `notification` / `webpush.notification`,
+  // Chrome/Android automatically displays the OS notification with sound & vibration
+  // (even when the screen is off / app is backgrounded). Calling showNotification again
+  // here would create duplicates or override OS sound channels. Only render manually
+  // for data-only background messages.
+  if (payload && payload.notification) {
+    return;
+  }
+
   const data = payload && payload.data ? payload.data : {};
-  const notif = payload && payload.notification ? payload.notification : {};
-  const title = notif.title || data.title || 'ROJGAR SETU';
-  const body = notif.body || data.body || 'New update on ROJGAR SETU.';
+  const title = data.title || 'ROJGAR SETU';
+  const body = data.body || 'New update on ROJGAR SETU.';
   const toneType = data.toneType || 'general';
   const baseTag = data.dedupeKey || data.jobId || data.demoJobId || 'alert';
   const tag = `${getSwTagPrefix(toneType)}-${baseTag}`;
@@ -87,16 +95,32 @@ messaging.onBackgroundMessage((payload) => {
   });
 });
 
+function extractNotificationData(notification) {
+  const raw = notification && notification.data ? notification.data : {};
+  const fcmMsgData =
+    raw && raw.FCM_MSG && raw.FCM_MSG.data && typeof raw.FCM_MSG.data === 'object'
+      ? raw.FCM_MSG.data
+      : {};
+  return Object.assign({}, fcmMsgData, raw);
+}
+
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const data = event.notification && event.notification.data ? event.notification.data : {};
-  const rawUrl = data.clickUrl || '/';
+  const data = extractNotificationData(event.notification);
+  const rawUrl =
+    data.clickUrl ||
+    (event.notification &&
+      event.notification.data &&
+      event.notification.data.FCM_MSG &&
+      event.notification.data.FCM_MSG.fcmOptions &&
+      event.notification.data.FCM_MSG.fcmOptions.link) ||
+    '/';
   const targetUrlObj = new URL(rawUrl, self.location.origin);
   if (data.speak && !targetUrlObj.searchParams.has('speak')) {
-    targetUrlObj.searchParams.set('speak', data.speak);
+    targetUrlObj.searchParams.set('speak', String(data.speak));
   }
   if (data.lang && !targetUrlObj.searchParams.has('lang')) {
-    targetUrlObj.searchParams.set('lang', data.lang);
+    targetUrlObj.searchParams.set('lang', String(data.lang));
   }
   const targetUrl = targetUrlObj.href;
 
@@ -116,8 +140,8 @@ self.addEventListener('notificationclick', (event) => {
             distanceKm: data.distanceKm || '',
             toneType: data.toneType || 'general',
             eventType: data.eventType || '',
-            playSound: data.playSound !== false,
-            speakVoice: data.speakVoice !== false,
+            playSound: data.playSound !== false && data.playSound !== 'false',
+            speakVoice: data.speakVoice !== false && data.speakVoice !== 'false',
           });
           return client.focus();
         }

@@ -289,6 +289,88 @@ export async function enablePushNotificationsForUser(params: {
   }
 }
 
+/**
+ * Silently refreshes and saves the user's FCM device token on login / app load
+ * ONLY when browser Notification permission is already 'granted' (no permission prompt).
+ * Keeps worker & customer device tokens fresh so background / screen-off push delivery stays reliable.
+ */
+export async function syncPushTokenSilentlyIfGranted(params: {
+  uid: string;
+  role: 'worker' | 'employer' | 'admin' | 'demo_worker';
+  language: Language;
+}): Promise<boolean> {
+  if (
+    typeof window === 'undefined' ||
+    !('Notification' in window) ||
+    !('serviceWorker' in navigator) ||
+    Notification.permission !== 'granted'
+  ) {
+    return false;
+  }
+
+  const vapidKey = getFirebaseVapidKey();
+  if (!vapidKey) return false;
+
+  try {
+    const messaging = await getFirebaseMessaging();
+    if (!messaging) return false;
+
+    const swReg = await navigator.serviceWorker.register('/firebase-messaging-sw.js', {
+      scope: '/firebase-cloud-messaging-push-scope',
+    });
+    await navigator.serviceWorker.ready;
+
+    const fcmToken = await getToken(messaging, {
+      vapidKey,
+      serviceWorkerRegistration: swReg,
+    });
+    if (!fcmToken) return false;
+
+    const tokenId = hashTokenDocId(params.uid, fcmToken);
+    const meta = detectTokenClientMeta();
+    const tokenDocRef = doc(db, 'device_tokens', tokenId);
+
+    const existingSnap = await getDocs(
+      query(collection(db, 'device_tokens'), where('ownerUid', '==', params.uid))
+    );
+    const existingSelf = existingSnap.docs.find((d) => d.id === tokenId);
+
+    if (existingSelf) {
+      await updateDoc(tokenDocRef, {
+        role: params.role,
+        isDemo: false,
+        token: fcmToken,
+        platform: meta.platform,
+        browser: meta.browser,
+        preferredLanguage: params.language,
+        enabled: true,
+        userAgentShort: meta.userAgentShort,
+        lastSeenAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await setDoc(tokenDocRef, {
+        ownerUid: params.uid,
+        role: params.role,
+        isDemo: false,
+        token: fcmToken,
+        platform: meta.platform,
+        browser: meta.browser,
+        preferredLanguage: params.language,
+        enabled: true,
+        userAgentShort: meta.userAgentShort,
+        lastSeenAt: serverTimestamp(),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+    return true;
+  } catch (err) {
+    console.warn('Silent push token sync skipped:', err);
+    return false;
+  }
+}
+
 export async function disablePushNotificationsForUser(uid: string): Promise<void> {
   try {
     const prefSnap = await getDocs(

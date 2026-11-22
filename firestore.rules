@@ -222,6 +222,8 @@ service cloud.firestore {
           'workLocationLabel', 'lat', 'lng', 'jobDate', 'startTime', 'duration',
           'workType', 'offeredWage', 'wageUnit', 'paymentTerms', 'contactPreference',
           'isWomenFriendly', 'isAccessible', 'biddingEnabled', 'photoAttachment',
+          'workPhotoUrls', 'orderKind', 'pickupLocationLabel', 'pickupLat', 'pickupLng',
+          'destinationLocationLabel', 'destinationLat', 'destinationLng', 'transportItemType',
           'photoAnalyzed', 'status', 'dealStatus', 'acceptedApplicationId',
           'acceptedWorkerUid', 'notifiedWorkerUids', 'approxLocationLabel',
           'initialRadiusKm', 'currentRadiusKm', 'radiusStageUpdatedAt',
@@ -252,6 +254,15 @@ service cloud.firestore {
         && data.isAccessible is bool
         && data.biddingEnabled is bool
         && (!('photoAttachment' in data) || (data.photoAttachment is string && data.photoAttachment.size() <= 100000))
+        && (!('workPhotoUrls' in data) || (data.workPhotoUrls is list && data.workPhotoUrls.size() <= 4 && (data.workPhotoUrls.size() == 0 || (data.workPhotoUrls[0] is string && data.workPhotoUrls[0].size() <= 85000))))
+        && (!('orderKind' in data) || data.orderKind in ['work', 'bike_transport'])
+        && (!('pickupLocationLabel' in data) || (data.pickupLocationLabel is string && data.pickupLocationLabel.size() <= 160))
+        && (!('pickupLat' in data) || (data.pickupLat is number && data.pickupLat >= -90 && data.pickupLat <= 90))
+        && (!('pickupLng' in data) || (data.pickupLng is number && data.pickupLng >= -180 && data.pickupLng <= 180))
+        && (!('destinationLocationLabel' in data) || (data.destinationLocationLabel is string && data.destinationLocationLabel.size() <= 160))
+        && (!('destinationLat' in data) || (data.destinationLat is number && data.destinationLat >= -90 && data.destinationLat <= 90))
+        && (!('destinationLng' in data) || (data.destinationLng is number && data.destinationLng >= -180 && data.destinationLng <= 180))
+        && (!('transportItemType' in data) || data.transportItemType in ['person', 'goods'])
         && (!('photoAnalyzed' in data) || data.photoAnalyzed is bool)
         && data.status in ['open', 'in_progress', 'completed', 'cancelled', 'flagged']
         && (!('dealStatus' in data) || isValidDealStatus(data.dealStatus))
@@ -277,7 +288,7 @@ service cloud.firestore {
           'jobId', 'jobTitle', 'employerUid', 'workerUid', 'workerRegistrationId',
           'workerName', 'workerPrimarySkill', 'workerPhotoDocId', 'proposedWage', 'note', 'status',
           'dealStatus', 'initiatedBy', 'jobCategory', 'jobDistrict', 'jobLocationLabel',
-          'jobDate', 'startTime', 'customerName', 'offerAmount', 'estimatedArrivalTime',
+          'jobDate', 'startTime', 'customerName', 'offerAmount', 'travelCharges', 'estimatedArrivalTime',
           'offerMessage', 'offerSubmittedAt', 'agreedPrice', 'dealConfirmedAt',
           'workStartedAt', 'completedAt', 'cancelledAt', 'cancelledByUid',
           'liveTrackingAuthorized', 'workerRating', 'employerFeedback',
@@ -303,6 +314,7 @@ service cloud.firestore {
         && (!('startTime' in data) || (data.startTime is string && data.startTime.size() <= 30))
         && (!('customerName' in data) || (data.customerName is string && data.customerName.size() <= 160))
         && (!('offerAmount' in data) || (data.offerAmount is number && data.offerAmount >= 0 && data.offerAmount <= 500000))
+        && (!('travelCharges' in data) || (data.travelCharges is number && data.travelCharges >= 0 && data.travelCharges <= 100000))
         && (!('estimatedArrivalTime' in data) || (data.estimatedArrivalTime is string && data.estimatedArrivalTime.size() <= 80))
         && (!('offerMessage' in data) || (data.offerMessage is string && data.offerMessage.size() <= 600))
         && (!('offerSubmittedAt' in data) || data.offerSubmittedAt is timestamp)
@@ -1205,8 +1217,10 @@ service cloud.firestore {
               'workLocationLabel', 'lat', 'lng', 'jobDate', 'startTime',
               'duration', 'workType', 'offeredWage', 'wageUnit',
               'paymentTerms', 'contactPreference', 'isWomenFriendly',
-              'isAccessible', 'biddingEnabled', 'photoAttachment', 'photoAnalyzed',
-              'status', 'dealStatus', 'acceptedApplicationId', 'acceptedWorkerUid',
+              'isAccessible', 'biddingEnabled', 'photoAttachment',
+              'workPhotoUrls', 'orderKind', 'pickupLocationLabel', 'pickupLat', 'pickupLng',
+              'destinationLocationLabel', 'destinationLat', 'destinationLng', 'transportItemType',
+              'photoAnalyzed', 'status', 'dealStatus', 'acceptedApplicationId', 'acceptedWorkerUid',
               'notifiedWorkerUids', 'approxLocationLabel', 'initialRadiusKm',
               'currentRadiusKm', 'radiusStageUpdatedAt', 'updatedAt'
             ])
@@ -1272,7 +1286,7 @@ service cloud.firestore {
             !(existing().status == 'work_completed' || ('dealStatus' in existing() && existing().dealStatus in ['WORK_COMPLETED', 'CANCELLED']))
             && isOwner(existing().workerUid)
             && incoming().diff(existing()).affectedKeys().hasOnly([
-              'status', 'dealStatus', 'proposedWage', 'offerAmount', 'estimatedArrivalTime',
+              'status', 'dealStatus', 'proposedWage', 'offerAmount', 'travelCharges', 'estimatedArrivalTime',
               'offerMessage', 'offerSubmittedAt', 'note', 'liveTrackingAuthorized',
               'dealConfirmedAt', 'workStartedAt', 'completedAt', 'cancelledAt',
               'cancelledByUid', 'updatedAt'

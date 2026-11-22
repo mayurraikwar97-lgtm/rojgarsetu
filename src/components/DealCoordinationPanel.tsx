@@ -25,15 +25,16 @@ function tr(lang: Language, en: string, hi: string, mr: string): string {
   return lang === 'hi' ? hi : lang === 'mr' ? mr : en;
 }
 
-export function getDealStatusBadgeStyle(status: DealStatus | JobApplication): string {
-  const stage =
-    typeof status === 'string'
-      ? toVisibleDealStage({ dealStatus: status, status })
-      : toVisibleDealStage(status);
+export function getDealStatusBadgeStyle(
+  status: DealStatus | JobApplication,
+  hasSharedLocation = false
+): string {
+  const stage = toVisibleDealStage(status, hasSharedLocation);
   switch (stage) {
-    case 'WORK_CONFIRMED':
-    case 'WORK_IN_PROGRESS':
+    case 'OFFER_ACCEPTED':
       return 'bg-emerald-100 text-emerald-900 border-emerald-300';
+    case 'LOCATION_SHARED':
+      return 'bg-teal-100 text-teal-900 border-teal-300';
     case 'WORK_COMPLETED':
       return 'bg-[#0B3B75] text-white border-[#0B3B75]';
     case 'OFFER_SENT':
@@ -52,6 +53,7 @@ interface DealCoordinationPanelProps {
   viewerRole: 'customer' | 'worker';
   viewerName: string;
   defaultExpanded?: boolean;
+  forceChatOpenKey?: number;
 }
 
 export const DealCoordinationPanel: React.FC<DealCoordinationPanelProps> = ({
@@ -61,11 +63,13 @@ export const DealCoordinationPanel: React.FC<DealCoordinationPanelProps> = ({
   viewerRole,
   viewerName,
   defaultExpanded = false,
+  forceChatOpenKey = 0,
 }) => {
   const { lang } = useLanguage();
+  const [hasSharedLocation, setHasSharedLocation] = useState(false);
   const effectiveStatus = getEffectiveDealStatus(application);
-  const visibleStage = toVisibleDealStage(application);
-  const visibleStatusLabel = getVisibleDealStatusLabel(effectiveStatus, lang);
+  const visibleStage = toVisibleDealStage(application, hasSharedLocation);
+  const visibleStatusLabel = getVisibleDealStatusLabel(visibleStage, lang, hasSharedLocation);
   const isAcceptedOrActive =
     effectiveStatus === 'OFFER_ACCEPTED' ||
     effectiveStatus === 'DEAL_CONFIRMED' ||
@@ -79,6 +83,10 @@ export const DealCoordinationPanel: React.FC<DealCoordinationPanelProps> = ({
   useEffect(() => {
     if (isAcceptedOrActive) setExpanded(true);
   }, [isAcceptedOrActive]);
+
+  useEffect(() => {
+    if (forceChatOpenKey > 0) setExpanded(true);
+  }, [forceChatOpenKey]);
 
   useEffect(() => {
     if (!expanded) return;
@@ -114,7 +122,8 @@ export const DealCoordinationPanel: React.FC<DealCoordinationPanelProps> = ({
         <div className="flex flex-wrap items-center gap-2">
           <span
             className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded border text-[11px] font-bold ${getDealStatusBadgeStyle(
-              effectiveStatus
+              application,
+              hasSharedLocation
             )}`}
           >
             <ShieldCheck className="w-3.5 h-3.5" />
@@ -124,7 +133,11 @@ export const DealCoordinationPanel: React.FC<DealCoordinationPanelProps> = ({
             <span className="text-xs font-mono-tabular font-bold text-[#15803D]">
               {application.agreedPrice
                 ? `${tr(lang, 'Agreed', 'तय दर', 'निश्चित दर')}: ₹${application.agreedPrice.toLocaleString('en-IN')}`
-                : `${tr(lang, 'Offer', 'ऑफर', 'ऑफर')}: ₹${(application.offerAmount ?? application.proposedWage).toLocaleString('en-IN')}`}
+                : `${tr(lang, 'Offer', 'ऑफर', 'ऑफर')}: ₹${(application.offerAmount ?? application.proposedWage).toLocaleString('en-IN')}${
+                    application.travelCharges && application.travelCharges > 0
+                      ? ` + ₹${application.travelCharges.toLocaleString('en-IN')} travel`
+                      : ''
+                  }`}
             </span>
           )}
           {application.estimatedArrivalTime && (
@@ -147,7 +160,7 @@ export const DealCoordinationPanel: React.FC<DealCoordinationPanelProps> = ({
         </button>
       </div>
 
-      {/* Simplified 5-Step Deal Lifecycle Progress Bar */}
+      {/* Simplified Deal Lifecycle Progress Bar */}
       {isClosed ? (
         <div
           className={`text-[11px] font-semibold px-2.5 py-1 rounded border inline-flex items-center gap-1.5 ${
@@ -160,7 +173,7 @@ export const DealCoordinationPanel: React.FC<DealCoordinationPanelProps> = ({
         <div className="grid grid-cols-5 gap-1.5 pt-0.5">
           {VISIBLE_DEAL_STAGE_ORDER.map((stage, idx) => {
             const done = stepIndex >= idx;
-            const stageLabel = getVisibleDealStatusLabel(stage, lang);
+            const stageLabel = getVisibleDealStatusLabel(stage, lang, hasSharedLocation);
             return (
               <div key={stage} className="space-y-1">
                 <div
@@ -191,6 +204,7 @@ export const DealCoordinationPanel: React.FC<DealCoordinationPanelProps> = ({
             viewerUid={viewerUid}
             viewerRole={viewerRole}
             viewerName={viewerName}
+            onLocationStatusChange={setHasSharedLocation}
           />
 
           {/* Two-Way Real-Time Chat Thread */}

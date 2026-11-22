@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { BellRing, Briefcase, CheckCircle2, MapPin, PlusCircle, Search, Users, Volume2, VolumeX } from 'lucide-react';
+import { BellRing, Briefcase, Camera, CheckCircle2, LocateFixed, MapPin, PlusCircle, Search, Users, Volume2, VolumeX } from 'lucide-react';
 import { EMPLOYMENT_CATEGORIES } from '../data/categories';
 import { getDistrictCoordinates, INDIA_STATES_DISTRICTS } from '../data/indiaLocations';
 import { useAuth } from '../contexts/AuthContext';
@@ -10,6 +10,7 @@ import {
   notifyMatchingWorkersInApp,
   submitWorkerOffer,
 } from '../lib/firestoreService';
+import { detectBestGpsLocation } from '../lib/locationService';
 import {
   buildApproxLocationLabel,
   buildSmartJobVoiceScript,
@@ -17,6 +18,7 @@ import {
   getPublicJobLocationText,
   SERVICE_RADIUS_STAGES,
 } from '../lib/smartVoiceJobAlert';
+import { MAX_WORK_PHOTOS, uploadCustomerWorkPhoto } from '../lib/workPhotoService';
 import { speakJobAlert, stopVoiceAlert, unlockAudioOnUserGesture } from '../lib/voiceAlertEngine';
 import type {
   JobPosting,
@@ -618,12 +620,14 @@ interface PostJobViewProps {
   onNavigate: (route: PageRoute) => void;
 }
 
+const NORMAL_WORK_CATEGORIES = EMPLOYMENT_CATEGORIES.filter((c) => c.group !== 'transport');
+
 export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNavigate }) => {
   const { lang, t } = useLanguage();
   const { user, employerProfile, signInWithGoogle } = useAuth();
 
   const [title, setTitle] = useState('');
-  const [category, setCategory] = useState(EMPLOYMENT_CATEGORIES[0].en);
+  const [category, setCategory] = useState(NORMAL_WORK_CATEGORIES[0].en);
   const [description, setDescription] = useState('');
   const [workersRequired, setWorkersRequired] = useState(1);
   const [skillsInput, setSkillsInput] = useState('Masonry, Site Support');
@@ -631,6 +635,10 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
   const [districtName, setDistrictName] = useState(employerProfile?.district || 'Raipur');
   const [cityOrVillage, setCityOrVillage] = useState('');
   const [workLocationLabel, setWorkLocationLabel] = useState('');
+  const [pinnedCoords, setPinnedCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [gpsBusy, setGpsBusy] = useState(false);
+  const [workPhotoUrls, setWorkPhotoUrls] = useState<string[]>([]);
+  const [photoUploading, setPhotoUploading] = useState(false);
   const [jobDate, setJobDate] = useState('');
   const [startTime, setStartTime] = useState('09:00');
   const [duration, setDuration] = useState('15 days');
@@ -651,13 +659,52 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
 
   const stateObj = INDIA_STATES_DISTRICTS.find((s) => s.name === stateName);
 
+  const handleShareJobGps = async () => {
+    setGpsBusy(true);
+    setErrorMsg('');
+    try {
+      const geo = await detectBestGpsLocation(lang);
+      setPinnedCoords({ lat: geo.lat, lng: geo.lng });
+      if (geo.state && INDIA_STATES_DISTRICTS.some((s) => s.name === geo.state)) {
+        setStateName(geo.state);
+      }
+      if (geo.district) setDistrictName(geo.district);
+      if (geo.cityOrVillage) setCityOrVillage(geo.cityOrVillage);
+      if (geo.formattedAddress) setWorkLocationLabel(geo.formattedAddress.slice(0, 160));
+    } catch {
+      setErrorMsg('Unable to detect GPS location. Please enter city/village manually.');
+    } finally {
+      setGpsBusy(false);
+    }
+  };
+
+  const handleUploadJobPhotos = async (files: FileList | null) => {
+    if (!files || files.length === 0 || !user) return;
+    const slots = MAX_WORK_PHOTOS - workPhotoUrls.length;
+    if (slots <= 0) return;
+    setPhotoUploading(true);
+    setErrorMsg('');
+    try {
+      const urls: string[] = [];
+      for (const file of Array.from(files).slice(0, slots)) {
+        const res = await uploadCustomerWorkPhoto({ file, ownerUid: user.uid, folder: 'work' });
+        urls.push(res.url);
+      }
+      setWorkPhotoUrls((prev) => [...prev, ...urls].slice(0, MAX_WORK_PHOTOS));
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to upload work photo.');
+    } finally {
+      setPhotoUploading(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
     setPushDispatchNotice('');
     if (!user || !employerProfile) return;
 
-    const coords = getDistrictCoordinates(stateName, districtName);
+    const coords = pinnedCoords || getDistrictCoordinates(stateName, districtName);
     const reqSkills = skillsInput
       .split(',')
       .map((s) => s.trim())
@@ -700,9 +747,12 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
         isWomenFriendly,
         isAccessible,
         biddingEnabled,
+        orderKind: 'work' as const,
+        ...(workPhotoUrls.length > 0 ? { workPhotoUrls: workPhotoUrls.slice(0, MAX_WORK_PHOTOS) } : {}),
       };
       const id = await createJobPosting(jobPayload);
       setCreatedJobId(id);
+      setWorkPhotoUrls([]);
 
       let inAppNotified = 0;
       if (workers.length > 0) {
@@ -827,7 +877,7 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
                   onChange={(e) => setCategory(e.target.value)}
                   className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
                 >
-                  {EMPLOYMENT_CATEGORIES.map((c) => (
+                  {NORMAL_WORK_CATEGORIES.map((c) => (
                     <option key={c.id} value={c.en}>
                       {lang === 'hi' ? c.hi : lang === 'mr' ? c.mr : c.en}
                     </option>
@@ -940,6 +990,71 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
                   className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
                 />
               </div>
+            </div>
+
+            {/* Work Photos Upload (1 or more) + SHARE JOB LOCATION */}
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md border border-[#0B3B75] bg-white text-[#0B3B75] text-xs font-bold hover:bg-blue-50 cursor-pointer">
+                  <Camera className="w-4 h-4 text-[#E06D1B]" />
+                  <span>
+                    {photoUploading
+                      ? 'Uploading photo...'
+                      : `Upload Work Photos (${workPhotoUrls.length}/${MAX_WORK_PHOTOS})`}
+                  </span>
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    multiple
+                    disabled={photoUploading || workPhotoUrls.length >= MAX_WORK_PHOTOS}
+                    onChange={(e) => {
+                      void handleUploadJobPhotos(e.target.files);
+                      e.target.value = '';
+                    }}
+                    className="hidden"
+                  />
+                </label>
+
+                <button
+                  type="button"
+                  disabled={gpsBusy}
+                  onClick={handleShareJobGps}
+                  className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md bg-[#15803D] text-white text-xs font-bold hover:bg-emerald-800 cursor-pointer disabled:opacity-60"
+                >
+                  <LocateFixed className="w-4 h-4" />
+                  <span>{gpsBusy ? 'Detecting GPS...' : 'SHARE JOB LOCATION'}</span>
+                </button>
+              </div>
+
+              {pinnedCoords && (
+                <p className="text-xs font-semibold text-[#15803D]">
+                  GPS pinned ({pinnedCoords.lat.toFixed(4)}, {pinnedCoords.lng.toFixed(4)}) — workers will see approximate distance &amp; area before quoting.
+                </p>
+              )}
+
+              {workPhotoUrls.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  {workPhotoUrls.map((url, idx) => (
+                    <div key={`postjob-photo-${idx}`} className="relative">
+                      <img
+                        src={url}
+                        alt={`Work photo ${idx + 1}`}
+                        className="w-16 h-16 rounded object-cover border border-slate-300"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setWorkPhotoUrls((prev) => prev.filter((_, i) => i !== idx))
+                        }
+                        aria-label="Remove photo"
+                        className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-700 text-white text-[10px] font-bold flex items-center justify-center cursor-pointer"
+                      >
+                        ×
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-5">

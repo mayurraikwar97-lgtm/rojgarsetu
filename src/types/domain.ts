@@ -60,6 +60,8 @@ export type DealNotificationEventType =
   | 'job_request_rejected'
   | 'customer_message'
   | 'worker_message'
+  | 'customer_location_shared'
+  | 'worker_location_shared'
   | 'deal_confirmed'
   | 'work_started'
   | 'work_completed'
@@ -195,6 +197,15 @@ export interface JobPosting {
   biddingEnabled: boolean;
   photoAttachment?: string;
   photoAnalyzed?: boolean;
+  workPhotoUrls?: string[];
+  orderKind?: 'work' | 'bike_transport';
+  pickupLocationLabel?: string;
+  pickupLat?: number;
+  pickupLng?: number;
+  destinationLocationLabel?: string;
+  destinationLat?: number;
+  destinationLng?: number;
+  transportItemType?: 'person' | 'goods';
   status: 'open' | 'in_progress' | 'completed' | 'cancelled' | 'flagged';
   dealStatus?: DealStatus;
   acceptedApplicationId?: string;
@@ -231,6 +242,7 @@ export interface JobApplication {
   startTime?: string;
   customerName?: string;
   offerAmount?: number;
+  travelCharges?: number;
   estimatedArrivalTime?: string;
   offerMessage?: string;
   offerSubmittedAt?: unknown;

@@ -3,6 +3,7 @@ import {
   AlertTriangle,
   Bike,
   BookmarkCheck,
+  Camera,
   Car,
   CheckCircle2,
   Crosshair,
@@ -14,7 +15,9 @@ import {
   PlusCircle,
   Search,
   Truck,
+  User,
   X,
+  Zap,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import {
@@ -25,6 +28,8 @@ import {
 import { getVehicleTypeLabel, VEHICLE_TYPE_CATALOG } from '../data/vehicleTypes';
 import { useLanguage } from '../i18n/LanguageContext';
 import {
+  callNotificationApi,
+  createInstantHireRequest,
   createVehicleBooking,
   recordCustomerOrderPreference,
   saveCustomerDefaultLocation,
@@ -34,10 +39,16 @@ import {
   searchLocations,
   type GeoSearchCandidate,
 } from '../lib/locationService';
+import {
+  BIKE_TRANSPORT_CATEGORY_NAME,
+  buildApproxLocationLabel,
+} from '../lib/smartVoiceJobAlert';
+import { MAX_WORK_PHOTOS, uploadCustomerWorkPhoto } from '../lib/workPhotoService';
 import type {
   AiHirePrefill,
   Language,
   PageRoute,
+  PublicWorkerProfile,
   VehicleListing,
   VehicleTripType,
   VehicleType,
@@ -46,6 +57,7 @@ import { LocationPinModal } from './LocationPinModal';
 
 interface LocalTransportViewProps {
   vehicles: VehicleListing[];
+  workers?: PublicWorkerProfile[];
   initialFilter?: VehicleType | 'passenger' | 'goods' | '';
   aiPrefill?: AiHirePrefill | null;
   onClearAiPrefill?: () => void;
@@ -77,6 +89,7 @@ function getVehicleIcon(type: VehicleType): React.ComponentType<{ className?: st
 
 export const LocalTransportView: React.FC<LocalTransportViewProps> = ({
   vehicles,
+  workers = [],
   initialFilter = '',
   aiPrefill = null,
   onClearAiPrefill,
@@ -130,6 +143,228 @@ export const LocalTransportView: React.FC<LocalTransportViewProps> = ({
   const [vehicleSubmitting, setVehicleSubmitting] = useState(false);
   const [vehicleError, setVehicleError] = useState('');
   const [vehicleBookingDone, setVehicleBookingDone] = useState<{ id: string; title: string } | null>(null);
+
+  // Dedicated Bike Hire / Rider / Transport Broadcast Order state
+  const [bikePickupText, setBikePickupText] = useState('');
+  const [bikePickupPin, setBikePickupPin] = useState<{ lat: number; lng: number; state?: string; district?: string; city?: string } | null>(null);
+  const [bikeDestText, setBikeDestText] = useState('');
+  const [bikeDestPin, setBikeDestPin] = useState<{ lat: number; lng: number } | null>(null);
+  const [bikeItemType, setBikeItemType] = useState<'person' | 'goods'>('person');
+  const [bikeBudget, setBikeBudget] = useState<number>(150);
+  const [bikeNotes, setBikeNotes] = useState('');
+  const [goodsPhotoUrls, setGoodsPhotoUrls] = useState<string[]>([]);
+  const [goodsPhotoUploading, setGoodsPhotoUploading] = useState(false);
+  const [bikeSubmitting, setBikeSubmitting] = useState(false);
+  const [bikeError, setBikeError] = useState('');
+  const [bikeSuccess, setBikeSuccess] = useState<{ title: string; notifiedCount: number } | null>(null);
+  const [pinModalTarget, setPinModalTarget] = useState<'filter' | 'pickup' | 'destination'>('filter');
+
+  const bikeTripDistanceKm = useMemo(() => {
+    if (!bikePickupPin || !bikeDestPin) return null;
+    return calculateDistanceKm(bikePickupPin.lat, bikePickupPin.lng, bikeDestPin.lat, bikeDestPin.lng);
+  }, [bikePickupPin, bikeDestPin]);
+
+  const handleBikePickupGps = async () => {
+    setBikeError('');
+    setGpsLoading(true);
+    try {
+      const geo = await detectBestGpsLocation(lang);
+      const label = geo.formattedAddress || `${geo.cityOrVillage}, ${geo.district}`;
+      setBikePickupText(label);
+      setBikePickupPin({
+        lat: geo.lat,
+        lng: geo.lng,
+        state: geo.state,
+        district: geo.district,
+        city: geo.cityOrVillage,
+      });
+    } catch {
+      setBikeError(
+        tr(lang, 'Could not read GPS. Type Pickup location or pin on map.', 'GPS उपलब्ध नहीं। पिकअप लिखें या नक्शे पर पिन करें।', 'GPS उपलब्ध नाही. पिकअप ठिकाण लिहा किंवा नकाशावर पिन करा.')
+      );
+    } finally {
+      setGpsLoading(false);
+    }
+  };
+
+  const handleGoodsPhotoUpload = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setBikeError('');
+    const slots = MAX_WORK_PHOTOS - goodsPhotoUrls.length;
+    if (slots <= 0) return;
+    setGoodsPhotoUploading(true);
+    try {
+      const urls: string[] = [];
+      for (const file of Array.from(files).slice(0, slots)) {
+        const res = await uploadCustomerWorkPhoto({
+          file,
+          ownerUid: user?.uid || 'guest',
+          folder: 'goods',
+        });
+        urls.push(res.url);
+      }
+      setGoodsPhotoUrls((prev) => [...prev, ...urls].slice(0, MAX_WORK_PHOTOS));
+    } catch (err) {
+      setBikeError(err instanceof Error ? err.message : 'Unable to upload goods photo.');
+    } finally {
+      setGoodsPhotoUploading(false);
+    }
+  };
+
+  const handleSubmitBikeTransportOrder = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBikeError('');
+    setBikeSuccess(null);
+
+    if (!user?.emailVerified) {
+      await signInWithGoogle();
+      return;
+    }
+
+    const cleanPickup = bikePickupText.trim();
+    const cleanDest = bikeDestText.trim();
+    if (cleanPickup.length < 2 || cleanDest.length < 2) {
+      setBikeError(
+        tr(
+          lang,
+          'Please enter both Pickup Location and Destination Location.',
+          'कृपया पिकअप और गंतव्य दोनों स्थान भरें।',
+          'कृपया पिकअप आणि गंतव्य दोन्ही ठिकाणे भरा.'
+        )
+      );
+      return;
+    }
+
+    const effState = bikePickupPin?.state || locationPin?.state || selectedState || employerProfile?.state || 'Maharashtra';
+    const effDistrict =
+      bikePickupPin?.district ||
+      locationPin?.district ||
+      selectedDistrict ||
+      employerProfile?.district ||
+      INDIA_STATES_DISTRICTS.find((s) => s.name === effState)?.districts[0]?.name ||
+      'Chandrapur';
+    const fallbackCoords = getDistrictCoordinates(effState, effDistrict);
+    const pLat = bikePickupPin?.lat ?? locationPin?.lat ?? fallbackCoords.lat;
+    const pLng = bikePickupPin?.lng ?? locationPin?.lng ?? fallbackCoords.lng;
+
+    // Resolve destination coordinates if user typed destination without pinning
+    let dLat = bikeDestPin?.lat;
+    let dLng = bikeDestPin?.lng;
+    if (dLat === undefined || dLng === undefined) {
+      try {
+        const hits = await searchLocations(cleanDest, lang);
+        if (hits[0]) {
+          dLat = hits[0].lat;
+          dLng = hits[0].lng;
+        }
+      } catch {
+        // optional
+      }
+    }
+
+    const safeLocality = (bikePickupPin?.city || locationPin?.cityOrVillage || effDistrict).slice(0, 100);
+    const approxLocationLabel = buildApproxLocationLabel({
+      cityOrVillage: safeLocality,
+      district: effDistrict,
+      state: effState,
+    });
+    const customerName = (
+      employerProfile?.businessName ||
+      user.displayName ||
+      user.email?.split('@')[0] ||
+      'ROJGAR SETU Customer'
+    )
+      .trim()
+      .slice(0, 160);
+
+    const itemTypeLabel = bikeItemType === 'goods' ? 'Goods Transport' : 'Person Ride';
+    const orderTitle = `Bike Hire (${itemTypeLabel}): ${cleanPickup.slice(0, 40)} → ${cleanDest.slice(0, 40)}`.slice(0, 140);
+    const orderDesc = [
+      `${itemTypeLabel} from ${cleanPickup} to ${cleanDest}.`,
+      bikeNotes.trim(),
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .slice(0, 2000);
+
+    setBikeSubmitting(true);
+    try {
+      const result = await createInstantHireRequest(
+        {
+          employerUid: user.uid,
+          employerName: customerName.length >= 2 ? customerName : 'Customer',
+          title: orderTitle,
+          category: BIKE_TRANSPORT_CATEGORY_NAME,
+          description: orderDesc.length >= 10 ? orderDesc : `${orderTitle} in ${effDistrict}, ${effState}.`,
+          workersRequired: 1,
+          requiredSkills: [BIKE_TRANSPORT_CATEGORY_NAME],
+          state: effState,
+          district: effDistrict,
+          cityOrVillage: safeLocality,
+          workLocationLabel: `${cleanPickup} → ${cleanDest}`.slice(0, 160),
+          approxLocationLabel: approxLocationLabel.slice(0, 160),
+          initialRadiusKm: 10,
+          currentRadiusKm: 10,
+          lat: pLat,
+          lng: pLng,
+          jobDate: new Date().toISOString().split('T')[0],
+          startTime: new Date().toTimeString().slice(0, 5),
+          duration: 'Single Trip',
+          workType: 'urgent',
+          offeredWage: Math.max(0, Number(bikeBudget) || 0),
+          wageUnit: 'contract',
+          paymentTerms: 'Direct UPI / Cash after drop',
+          contactPreference: 'phone_after_confirm',
+          isWomenFriendly: false,
+          isAccessible: false,
+          biddingEnabled: true,
+          orderKind: 'bike_transport',
+          pickupLocationLabel: cleanPickup.slice(0, 160),
+          pickupLat: pLat,
+          pickupLng: pLng,
+          destinationLocationLabel: cleanDest.slice(0, 160),
+          ...(typeof dLat === 'number' && typeof dLng === 'number'
+            ? { destinationLat: dLat, destinationLng: dLng }
+            : {}),
+          transportItemType: bikeItemType,
+          ...(bikeItemType === 'goods' && goodsPhotoUrls.length > 0
+            ? { workPhotoUrls: goodsPhotoUrls.slice(0, MAX_WORK_PHOTOS) }
+            : {}),
+        },
+        [],
+        orderDesc,
+        `bike_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`,
+        workers
+      );
+
+      await recordCustomerOrderPreference(user.uid, {
+        kind: 'transport',
+        categoryOrVehicleType: 'bike_taxi',
+        orderTitle,
+        state: effState,
+        district: effDistrict,
+        cityOrVillage: safeLocality,
+        lat: pLat,
+        lng: pLng,
+      });
+
+      void callNotificationApi('/api/notifications/send-matching-job', {
+        jobId: result.jobId,
+        stageRadiusKm: result.finalRadiusKm ?? 10,
+      }).catch(() => undefined);
+
+      setBikeSuccess({
+        title: orderTitle,
+        notifiedCount: result.notifiedCount,
+      });
+      setBikeNotes('');
+      setGoodsPhotoUrls([]);
+    } catch (err) {
+      setBikeError(err instanceof Error ? err.message : 'Unable to submit Bike Hire / Transport request.');
+    } finally {
+      setBikeSubmitting(false);
+    }
+  };
 
   useEffect(() => {
     if (initialFilter === 'passenger' || initialFilter === 'goods') {
@@ -636,7 +871,10 @@ export const LocalTransportView: React.FC<LocalTransportViewProps> = ({
 
               <button
                 type="button"
-                onClick={() => setShowPinModal(true)}
+                onClick={() => {
+                  setPinModalTarget('filter');
+                  setShowPinModal(true);
+                }}
                 className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-[#0B3B75] bg-white text-[#0B3B75] text-xs font-bold hover:bg-blue-50 whitespace-nowrap shrink-0 cursor-pointer"
               >
                 <MapPin className="w-3.5 h-3.5" />
@@ -911,6 +1149,266 @@ export const LocalTransportView: React.FC<LocalTransportViewProps> = ({
         </div>
       </div>
 
+      {/* Dedicated Bike Hire / Rider / Transport Request Section (Strictly Separate from Normal Work Orders) */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-5">
+        <form
+          onSubmit={handleSubmitBikeTransportOrder}
+          className="bg-white border-2 border-[#15803D] rounded-lg p-4 sm:p-5 shadow-xs space-y-4"
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <span className="text-[11px] font-bold uppercase tracking-wider text-[#15803D] inline-flex items-center gap-1">
+                <Bike className="w-3.5 h-3.5" />
+                {tr(
+                  lang,
+                  'SEPARATE BIKE HIRE & TRANSPORT REQUEST',
+                  'अलग बाइक हायर व ट्रांसपोर्ट ऑर्डर',
+                  'स्वतंत्र बाईक हायर आणि ट्रान्सपोर्ट ऑर्डर'
+                )}
+              </span>
+              <h2 className="font-display text-base sm:text-lg font-extrabold text-[#0B3B75]">
+                {tr(
+                  lang,
+                  'Request Bike Rider / Transport (Person or Goods)',
+                  'बाइक राइडर / ट्रांसपोर्ट ऑर्डर करें (व्यक्ति या सामान)',
+                  'बाईक रायडर / ट्रान्सपोर्ट मागवा (प्रवासी किंवा सामान)'
+                )}
+              </h2>
+              <p className="text-xs text-slate-600 mt-0.5">
+                {tr(
+                  lang,
+                  'Alerts go ONLY to registered Bike Riders & Transport operators. Receive offers, chat & share live location.',
+                  'सूचना केवल पंजीकृत बाइक राइडर व ट्रांसपोर्ट ऑपरेटरों को जाती है। ऑफर पाएं, चैट करें और लोकेशन साझा करें।',
+                  'सूचना फक्त नोंदणीकृत बाईक रायडर व ट्रान्सपोर्ट चालकांनाच जाते. ऑफर पहा, चॅट करा व लोकेशन शेअर करा.'
+                )}
+              </p>
+            </div>
+            {bikeTripDistanceKm !== null && (
+              <span className="px-3 py-1 rounded bg-emerald-100 text-emerald-900 text-xs font-extrabold font-mono-tabular">
+                {tr(lang, 'Trip Distance', 'दूरी', 'अंतर')}: ~{bikeTripDistanceKm.toFixed(1)} km
+              </span>
+            )}
+          </div>
+
+          {/* Person vs Goods Toggle */}
+          <div className="grid grid-cols-2 gap-2.5 max-w-md">
+            <button
+              type="button"
+              onClick={() => setBikeItemType('person')}
+              className={`min-h-[44px] inline-flex items-center justify-center gap-2 px-4 py-2 rounded-md border-2 text-xs sm:text-sm font-extrabold cursor-pointer transition-colors ${
+                bikeItemType === 'person'
+                  ? 'bg-[#0B3B75] border-[#0B3B75] text-white'
+                  : 'bg-slate-50 border-slate-300 text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              <User className="w-4 h-4" />
+              <span>{tr(lang, 'Person Ride', 'व्यक्ति (सवारी)', 'व्यक्ती (प्रवास)')}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setBikeItemType('goods')}
+              className={`min-h-[44px] inline-flex items-center justify-center gap-2 px-4 py-2 rounded-md border-2 text-xs sm:text-sm font-extrabold cursor-pointer transition-colors ${
+                bikeItemType === 'goods'
+                  ? 'bg-[#E06D1B] border-[#E06D1B] text-white'
+                  : 'bg-slate-50 border-slate-300 text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              <Package className="w-4 h-4" />
+              <span>{tr(lang, 'Goods Delivery', 'सामान भेजें', 'सामान वाहतूक')}</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-end">
+            <div className="md:col-span-4">
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                {tr(lang, 'Pickup Location *', 'पिकअप लोकेशन *', 'पिकअप ठिकाण *')}
+              </label>
+              <div className="flex gap-1.5">
+                <input
+                  type="text"
+                  required
+                  value={bikePickupText}
+                  onChange={(e) => setBikePickupText(e.target.value)}
+                  placeholder={tr(lang, 'e.g., Bus Stand, Civil Lines...', 'जैसे: बस स्टैंड, सिविल लाइंस...', 'उदा. बस स्टँड, सिव्हिल लाईन्स...')}
+                  className="flex-1 min-h-[44px] px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
+                />
+                <button
+                  type="button"
+                  onClick={handleBikePickupGps}
+                  disabled={gpsLoading}
+                  title="Use GPS for Pickup"
+                  className="min-h-[44px] px-2.5 rounded-md bg-[#15803D] text-white text-xs font-bold hover:bg-emerald-800 cursor-pointer shrink-0"
+                >
+                  <Crosshair className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPinModalTarget('pickup');
+                    setShowPinModal(true);
+                  }}
+                  title="Pin Pickup on Map"
+                  className="min-h-[44px] px-2.5 rounded-md border border-slate-300 bg-slate-50 text-[#0B3B75] text-xs font-bold hover:bg-slate-100 cursor-pointer shrink-0"
+                >
+                  <MapPin className="w-4 h-4" />
+                </button>
+              </div>
+            </div>
+
+            <div className="md:col-span-4">
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                {tr(lang, 'Destination Location *', 'गंतव्य लोकेशन *', 'गंतव्य ठिकाण *')}
+              </label>
+              <div className="flex gap-1.5">
+                <input
+                  type="text"
+                  required
+                  value={bikeDestText}
+                  onChange={(e) => setBikeDestText(e.target.value)}
+                  placeholder={tr(lang, 'e.g., Railway Station, Market...', 'जैसे: रेलवे स्टेशन, बाज़ार...', 'उदा. रेल्वे स्टेशन, बाजारपेठ...')}
+                  className="flex-1 min-h-[44px] px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPinModalTarget('destination');
+                    setShowPinModal(true);
+                  }}
+                  title="Pin Destination on Map"
+                  className="min-h-[44px] px-2.5 rounded-md border border-slate-300 bg-slate-50 text-[#0B3B75] text-xs font-bold hover:bg-slate-100 cursor-pointer shrink-0"
+                >
+                  <MapPin className="w-4 h-4 text-[#E06D1B]" />
+                </button>
+              </div>
+            </div>
+
+            <div className="md:col-span-2">
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                {tr(lang, 'Expected Fare (₹)', 'अनुमानित किराया (₹)', 'अंदाजे भाडे (₹)')}
+              </label>
+              <input
+                type="number"
+                min={0}
+                max={100000}
+                value={bikeBudget}
+                onChange={(e) => setBikeBudget(Number(e.target.value))}
+                className="w-full min-h-[44px] px-3 py-2 border border-slate-300 rounded-md text-sm font-mono-tabular bg-white"
+              />
+            </div>
+
+            <div className="md:col-span-2">
+              <button
+                type="submit"
+                disabled={bikeSubmitting || goodsPhotoUploading}
+                className="w-full min-h-[44px] inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-md bg-[#15803D] text-white text-xs sm:text-sm font-extrabold hover:bg-emerald-800 disabled:opacity-60 cursor-pointer"
+              >
+                <Zap className="w-4 h-4 shrink-0" />
+                <span>
+                  {bikeSubmitting
+                    ? tr(lang, 'Sending...', 'भेज रहे हैं...', 'पाठवत आहे...')
+                    : tr(lang, 'SEND REQUEST', 'रिक्वेस्ट भेजें', 'ऑर्डर पाठवा')}
+                </span>
+              </button>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
+            <div className={bikeItemType === 'goods' ? 'md:col-span-7' : 'md:col-span-12'}>
+              <input
+                type="text"
+                maxLength={240}
+                value={bikeNotes}
+                onChange={(e) => setBikeNotes(e.target.value)}
+                placeholder={
+                  bikeItemType === 'goods'
+                    ? tr(lang, 'Goods details (e.g., 2 rice bags, parcel box, approx weight)...', 'सामान विवरण (जैसे 2 बोरी, पार्सल बॉक्स, वजन)...', 'सामानाची माहिती (उदा. २ पोती, पार्सल बॉक्स, वजन)...')
+                    : tr(lang, 'Optional note (e.g., 1 passenger, urgent pickup now)...', 'वैकल्पिक नोट (जैसे 1 सवारी, तुरंत पिकअप)...', 'ऐच्छिक माहिती (उदा. १ प्रवासी, तात्काळ पिकअप)...')
+                }
+                className="w-full px-3 py-2 border border-slate-300 rounded-md text-xs sm:text-sm bg-slate-50 focus:bg-white"
+              />
+            </div>
+
+            {bikeItemType === 'goods' && (
+              <div className="md:col-span-5 flex flex-wrap items-center gap-2">
+                <label className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-[#E06D1B] bg-amber-50 text-[#C25E00] text-xs font-bold hover:bg-amber-100 cursor-pointer">
+                  <Camera className="w-4 h-4" />
+                  <span>
+                    {goodsPhotoUploading
+                      ? tr(lang, 'Uploading...', 'अपलोड...', 'अपलोड...')
+                      : tr(
+                          lang,
+                          `Upload Goods Photo (${goodsPhotoUrls.length}/${MAX_WORK_PHOTOS})`,
+                          `सामान की फोटो (${goodsPhotoUrls.length}/${MAX_WORK_PHOTOS})`,
+                          `सामानाचा फोटो (${goodsPhotoUrls.length}/${MAX_WORK_PHOTOS})`
+                        )}
+                  </span>
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                    multiple
+                    disabled={goodsPhotoUploading || goodsPhotoUrls.length >= MAX_WORK_PHOTOS}
+                    onChange={(e) => {
+                      void handleGoodsPhotoUpload(e.target.files);
+                      e.target.value = '';
+                    }}
+                    className="hidden"
+                  />
+                </label>
+
+                {goodsPhotoUrls.map((url, idx) => (
+                  <div key={`goods-${idx}`} className="relative">
+                    <img
+                      src={url}
+                      alt={`Goods ${idx + 1}`}
+                      className="w-11 h-11 rounded object-cover border border-slate-300"
+                    />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setGoodsPhotoUrls((prev) => prev.filter((_, i) => i !== idx))
+                      }
+                      aria-label="Remove goods photo"
+                      className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-700 text-white text-[10px] font-bold flex items-center justify-center cursor-pointer"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {bikeError && (
+            <p className="text-xs font-medium text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">
+              {bikeError}
+            </p>
+          )}
+
+          {bikeSuccess && (
+            <div className="p-3 rounded-md bg-emerald-50 border border-emerald-200 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex items-center gap-2 text-xs sm:text-sm font-semibold text-emerald-900">
+                <CheckCircle2 className="w-4 h-4 text-[#15803D] shrink-0" />
+                <span>
+                  {tr(
+                    lang,
+                    `Bike / Transport request sent! ${bikeSuccess.notifiedCount} registered rider(s) alerted. Check your dashboard for offers.`,
+                    `बाइक / ट्रांसपोर्ट अनुरोध भेजा गया! ${bikeSuccess.notifiedCount} राइडर को सूचना भेजी गई।`,
+                    `बाईक / ट्रान्सपोर्ट विनंती पाठवली! ${bikeSuccess.notifiedCount} रायडर्सना सूचना पाठवली.`
+                  )}
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={() => onNavigate('employer-dashboard')}
+                className="min-h-[40px] px-3 py-1.5 rounded bg-[#0B3B75] text-white text-xs font-bold hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                {tr(lang, 'View Rider Offers', 'राइडर ऑफर देखें', 'रायडर ऑफर पहा')}
+              </button>
+            </div>
+          )}
+        </form>
+      </div>
+
       {/* Results */}
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -1075,10 +1573,44 @@ export const LocalTransportView: React.FC<LocalTransportViewProps> = ({
       <LocationPinModal
         open={showPinModal}
         onClose={() => setShowPinModal(false)}
-        initialLat={referenceCoords?.lat ?? 19.9615}
-        initialLng={referenceCoords?.lng ?? 79.2961}
-        initialLabel={locationPin?.label || selectedDistrict || ''}
-        onConfirmLocation={(loc) =>
+        initialLat={
+          pinModalTarget === 'pickup' && bikePickupPin
+            ? bikePickupPin.lat
+            : pinModalTarget === 'destination' && bikeDestPin
+            ? bikeDestPin.lat
+            : referenceCoords?.lat ?? 19.9615
+        }
+        initialLng={
+          pinModalTarget === 'pickup' && bikePickupPin
+            ? bikePickupPin.lng
+            : pinModalTarget === 'destination' && bikeDestPin
+            ? bikeDestPin.lng
+            : referenceCoords?.lng ?? 79.2961
+        }
+        initialLabel={
+          pinModalTarget === 'pickup'
+            ? bikePickupText
+            : pinModalTarget === 'destination'
+            ? bikeDestText
+            : locationPin?.label || selectedDistrict || ''
+        }
+        onConfirmLocation={(loc) => {
+          if (pinModalTarget === 'pickup') {
+            setBikePickupText(loc.formattedAddress || `${loc.cityOrVillage}, ${loc.district}`);
+            setBikePickupPin({
+              lat: loc.lat,
+              lng: loc.lng,
+              state: loc.state,
+              district: loc.district,
+              city: loc.cityOrVillage,
+            });
+            return;
+          }
+          if (pinModalTarget === 'destination') {
+            setBikeDestText(loc.formattedAddress || `${loc.cityOrVillage}, ${loc.district}`);
+            setBikeDestPin({ lat: loc.lat, lng: loc.lng });
+            return;
+          }
           applyCandidateLocation(
             {
               lat: loc.lat,
@@ -1089,8 +1621,8 @@ export const LocalTransportView: React.FC<LocalTransportViewProps> = ({
               formattedAddress: loc.formattedAddress,
             },
             'map'
-          )
-        }
+          );
+        }}
       />
 
       {/* 1-Step Booking Modal */}
