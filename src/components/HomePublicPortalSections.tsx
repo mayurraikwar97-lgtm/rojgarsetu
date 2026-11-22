@@ -25,6 +25,7 @@ import {
 } from '../data/govtSchemes';
 import { useLanguage } from '../i18n/LanguageContext';
 import type { JobPosting, Language, PageRoute, PublicWorkerProfile } from '../types/domain';
+import { BrandSloganBanner } from './BrandSloganBanner';
 import { RojgarSetuLogo } from './RojgarSetuLogo';
 import gandhiPortrait from '../assets/images/gandhi_dignity_labour_1794635762419.jpg';
 
@@ -78,10 +79,16 @@ export const HomeIdentityHero: React.FC<HomeIdentityHeroProps> = ({
                 </div>
               </div>
 
-              <div className="space-y-2">
+              <div className="space-y-2.5">
                 <h1 className="font-display text-2xl sm:text-4xl lg:text-[2.6rem] font-extrabold text-[#0B3B75] leading-[1.15] tracking-tight text-balance">
-                  EVERY HAND DESERVES AN OPPORTUNITY.
+                  कामगार नाही, आपलीच माणसं!
                 </h1>
+                <p className="font-display text-base sm:text-lg font-extrabold text-[#E06D1B]">
+                  विश्वासाने काम द्या, सन्मानाने रोजगार द्या.
+                </p>
+                <p className="text-xs sm:text-sm font-bold text-[#15803D]">
+                  प्रत्येक हाताला काम, प्रत्येक श्रमाला सन्मान. · EVERY HAND DESERVES AN OPPORTUNITY.
+                </p>
                 <p className="text-sm sm:text-base text-slate-600 leading-relaxed max-w-2xl">
                   {tr(
                     lang,
@@ -223,6 +230,8 @@ export const HomePublicPortalSections: React.FC<HomePublicPortalSectionsProps> =
       {/* SECTION 6: WORKER REGISTRATION & EMPLOYER REGISTRATION */}
       <section className="py-10 bg-white border-b border-slate-200">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 space-y-6">
+          <BrandSloganBanner variant="promo" />
+
           <div>
             <p className="text-xs font-bold text-[#C25E00]">
               {tr(lang, 'Direct Registration', 'सीधा पंजीकरण', 'थेट नोंदणी')}

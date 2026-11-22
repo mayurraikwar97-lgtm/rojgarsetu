@@ -1,5 +1,10 @@
 import React from 'react';
 import { useLanguage } from '../i18n/LanguageContext';
+import {
+  BRAND_MESSAGE_MR,
+  BRAND_SLOGAN_MR,
+  BRAND_TAGLINE_MR,
+} from '../lib/customerPrivacy';
 import type { Language, PageRoute } from '../types/domain';
 import { RojgarSetuLogo } from './RojgarSetuLogo';
 
@@ -42,8 +47,14 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
                 </div>
               </div>
             </div>
+            <p className="font-display text-sm font-extrabold text-amber-300">
+              “{BRAND_SLOGAN_MR}”
+            </p>
+            <p className="text-xs font-bold text-white">
+              {BRAND_TAGLINE_MR}
+            </p>
             <p className="text-xs font-bold text-emerald-300">
-              EVERY HAND DESERVES AN OPPORTUNITY.
+              {BRAND_MESSAGE_MR}
             </p>
             <p className="text-xs text-blue-100/90 leading-relaxed">
               श्रम की गरिमा • स्वावलंबन • रोजगार

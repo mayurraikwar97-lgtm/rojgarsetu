@@ -120,6 +120,11 @@
         "district": { "type": "string", "minLength": 2, "maxLength": 80 },
         "requiredCategories": { "type": "array", "description": "Bounded list of up to 15 categories." },
         "verificationStatus": { "type": "string", "enum": ["pending", "verified", "suspended"] },
+        "gender": { "type": "string", "enum": ["male", "female", "other", "prefer_not_to_say"] },
+        "lastName": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "profileVisibility": { "type": "string", "enum": ["standard", "last_name_only", "private_strict"] },
+        "hidePhotoUntilConfirm": { "type": "boolean" },
+        "maskedCallingOnly": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -136,6 +141,10 @@
       "properties": {
         "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "contactPerson": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "firstName": { "type": "string", "maxLength": 60 },
+        "lastName": { "type": "string", "maxLength": 60 },
+        "gender": { "type": "string", "enum": ["male", "female", "other", "prefer_not_to_say"] },
+        "profileVisibility": { "type": "string", "enum": ["standard", "last_name_only", "private_strict"] },
         "mobile": { "type": "string", "minLength": 10, "maxLength": 20 },
         "mobileVerified": { "type": "boolean" },
         "verificationMethod": { "type": "string", "enum": ["sms_otp", "firebase_phone", "test_pin"] },
@@ -161,6 +170,9 @@
       "properties": {
         "employerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "employerName": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "customerGenderProtected": { "type": "boolean" },
+        "customerLastName": { "type": "string", "maxLength": 60 },
+        "hasExactAddressVault": { "type": "boolean" },
         "title": { "type": "string", "minLength": 3, "maxLength": 140 },
         "category": { "type": "string", "minLength": 2, "maxLength": 80 },
         "description": { "type": "string", "minLength": 10, "maxLength": 2000 },
@@ -242,6 +254,8 @@
         "jobDate": { "type": "string", "maxLength": 30 },
         "startTime": { "type": "string", "maxLength": 30 },
         "customerName": { "type": "string", "maxLength": 160 },
+        "customerGenderProtected": { "type": "boolean" },
+        "customerLastName": { "type": "string", "maxLength": 60 },
         "offerAmount": { "type": "number" },
         "travelCharges": { "type": "number" },
         "estimatedArrivalTime": { "type": "string", "maxLength": 80 },
@@ -1157,6 +1171,47 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["referrerUid", "referrerName", "rewardIds", "amountInr", "payoutMethod", "transactionReference", "status", "recordedByUid", "paidAt", "createdAt", "updatedAt"]
+    },
+    "OrderExactAddress": {
+      "title": "OrderExactAddress",
+      "description": "Protected exact service address vault readable ONLY by customer owner, authorized admin, or the assigned worker after order confirmation.",
+      "type": "object",
+      "properties": {
+        "jobId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "employerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "exactAddress": { "type": "string", "minLength": 4, "maxLength": 300 },
+        "landmark": { "type": "string", "maxLength": 160 },
+        "exactLat": { "type": "number" },
+        "exactLng": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["jobId", "employerUid", "exactAddress", "exactLat", "exactLng", "createdAt", "updatedAt"]
+    },
+    "MaskedCallSession": {
+      "title": "MaskedCallSession",
+      "description": "Privacy-safe in-app/masked calling bridge session strictly between confirmed order participants without exposing personal mobile numbers.",
+      "type": "object",
+      "properties": {
+        "applicationId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "jobId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "employerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "initiatedByUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "initiatedByRole": { "type": "string", "enum": ["customer", "worker"] },
+        "callerSafeName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "receiverSafeName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "maskedBridgeCode": { "type": "string", "minLength": 6, "maxLength": 40 },
+        "maskedVirtualNumber": { "type": "string", "minLength": 6, "maxLength": 40 },
+        "status": { "type": "string", "enum": ["ringing", "connected", "ended", "declined"] },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "applicationId", "jobId", "employerUid", "workerUid", "initiatedByUid",
+        "initiatedByRole", "callerSafeName", "receiverSafeName", "maskedBridgeCode",
+        "maskedVirtualNumber", "status", "createdAt", "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -1339,6 +1394,14 @@
     "/referralPayouts/{payoutId}": {
       "schema": { "$ref": "#/entities/ReferralPayoutRecord" },
       "description": "Admin-recorded manual referral reward payout transactions."
+    },
+    "/orderExactAddresses/{jobId}": {
+      "schema": { "$ref": "#/entities/OrderExactAddress" },
+      "description": "Exact customer service address vault unlocked strictly for the assigned worker after order confirmation, owner, and admin."
+    },
+    "/maskedCallSessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/MaskedCallSession" },
+      "description": "In-app masked calling bridge sessions between confirmed customer and assigned worker with zero personal mobile exposure."
     }
   }
 }

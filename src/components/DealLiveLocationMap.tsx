@@ -27,6 +27,7 @@ import {
   subscribeDealLocationShares,
   updateDealLiveLocation,
 } from '../lib/firestoreService';
+import { getSafeCustomerLabelForJobOrApp } from '../lib/customerPrivacy';
 import { useLanguage } from '../i18n/LanguageContext';
 import type { DealLocationShare, JobApplication, JobPosting, Language } from '../types/domain';
 
@@ -481,7 +482,13 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
         >
           <div className="font-bold text-[#0B3B75] flex items-center justify-between">
             <span>
-              {otherRole === 'worker' ? `Worker: ${application.workerName}` : `Customer: ${application.customerName || 'Customer'}`}
+              {otherRole === 'worker'
+                ? `Worker: ${application.workerName}`
+                : `Customer: ${getSafeCustomerLabelForJobOrApp({
+                    job,
+                    app: application,
+                    viewerRole,
+                  })}`}
             </span>
             <span className={otherShare?.sharingActive ? 'text-[#15803D]' : 'text-slate-400'}>
               {otherShare?.sharingActive ? '● LIVE' : 'WAITING'}
@@ -514,7 +521,10 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
                 <ParticipantPin key={s.id} share={s} />
               ))}
               {activeMarkers.length === 0 && job && Number.isFinite(job.lat) && Number.isFinite(job.lng) && (
-                <AdvancedMarker position={{ lat: job.lat, lng: job.lng }} title={job.workLocationLabel}>
+                <AdvancedMarker
+                  position={{ lat: job.lat, lng: job.lng }}
+                  title={job.approxLocationLabel || job.district}
+                >
                   <Pin background="#E06D1B" borderColor="#FFFFFF" glyphColor="#FFFFFF" />
                 </AdvancedMarker>
               )}

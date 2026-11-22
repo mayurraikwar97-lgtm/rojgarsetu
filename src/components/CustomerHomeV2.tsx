@@ -39,6 +39,11 @@ import {
   type SubServiceItem,
 } from '../data/serviceCatalogV2';
 import { useLanguage } from '../i18n/LanguageContext';
+import {
+  extractLastName,
+  getWorkerVisibleCustomerName,
+  isFemaleCustomerProtected,
+} from '../lib/customerPrivacy';
 import { getSixStepLabel, toSixStepDealStage } from '../lib/dealWorkflow';
 import {
   callNotificationApi,
@@ -46,6 +51,7 @@ import {
   expandJobSearchRadius,
   recordCustomerOrderPreference,
   saveCustomerDefaultLocation,
+  saveOrderExactAddress,
 } from '../lib/firestoreService';
 import { detectBestGpsLocation } from '../lib/locationService';
 import {
@@ -60,6 +66,7 @@ import type {
   PublicWorkerProfile,
   ServiceRadiusKm,
 } from '../types/domain';
+import { BrandSloganBanner } from './BrandSloganBanner';
 import { LocationPinModal } from './LocationPinModal';
 import { WorkPhotoUploader } from './WorkPhotoUploader';
 import { HomeIdentityHero, HomePublicPortalSections } from './HomePublicPortalSections';
@@ -123,7 +130,7 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
   onNavigate,
 }) => {
   const { lang } = useLanguage();
-  const { user, workerProfile, employerProfile, customerPreference, signInWithGoogle } = useAuth();
+  const { user, workerProfile, employerProfile, employerPrivate, customerPreference, signInWithGoogle } = useAuth();
 
   // Step machine: 'home' -> 'subservices' -> 'order_form' -> 'searching'
   const [step, setStep] = useState<'home' | 'subservices' | 'order_form' | 'searching'>('home');
@@ -152,6 +159,8 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
 
   // Order Form State
   const [workDescription, setWorkDescription] = useState('');
+  const [exactServiceAddress, setExactServiceAddress] = useState('');
+  const [addressLandmark, setAddressLandmark] = useState('');
   const [workPhotoUrls, setWorkPhotoUrls] = useState<string[]>([]);
   const [preferredTimeType, setPreferredTimeType] = useState<'now' | 'later'>('now');
   const [scheduledDate, setScheduledDate] = useState(() => new Date().toISOString().split('T')[0]);
@@ -294,14 +303,19 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
       return;
     }
 
-    const customerName = (
-      employerProfile?.businessName ||
-      user.displayName ||
-      user.email?.split('@')[0] ||
-      'Rojgar Setu Customer'
-    )
-      .trim()
-      .slice(0, 160);
+    const genderProtected = isFemaleCustomerProtected({
+      gender: employerProfile?.gender || employerPrivate?.gender,
+    });
+    const resolvedLastName =
+      employerProfile?.lastName ||
+      employerPrivate?.lastName ||
+      extractLastName(employerPrivate?.contactPerson || user.displayName || '');
+    const customerName = getWorkerVisibleCustomerName({
+      employerProfile,
+      employerPrivate,
+      fallbackName: user.displayName || user.email?.split('@')[0] || 'Customer',
+      viewerRole: 'worker',
+    }).slice(0, 160);
 
     const subLabelEn = selectedSubService.en;
     const catLabelEn = selectedCategory.en;
@@ -352,10 +366,22 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
 
     try {
       const idempotencyKey = `rs2_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const trimmedExactAddress = (
+        exactServiceAddress.trim() ||
+        employerPrivate?.businessAddress?.trim() ||
+        location.label
+      ).slice(0, 320);
+      const hasExactVault = trimmedExactAddress.length >= 4;
+
       const res = await createInstantHireRequest(
         {
           employerUid: user.uid,
           employerName: customerName.length >= 2 ? customerName : 'Customer',
+          customerGenderProtected: genderProtected,
+          ...(resolvedLastName && resolvedLastName !== 'Customer'
+            ? { customerLastName: resolvedLastName.slice(0, 60) }
+            : {}),
+          hasExactAddressVault: hasExactVault,
           title,
           category: selectedCategory.canonicalCategory,
           subService: subLabelEn.slice(0, 100),
@@ -366,7 +392,7 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
           state: effState,
           district: effDistrict,
           cityOrVillage: safeCity,
-          workLocationLabel: location.label.slice(0, 160),
+          workLocationLabel: approxLocationLabel.slice(0, 160),
           approxLocationLabel: approxLocationLabel.slice(0, 160),
           initialRadiusKm: 2,
           currentRadiusKm: 2,
@@ -391,6 +417,17 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
         idempotencyKey,
         workers
       );
+
+      if (hasExactVault && res.jobId) {
+        await saveOrderExactAddress({
+          jobId: res.jobId,
+          employerUid: user.uid,
+          exactAddress: trimmedExactAddress,
+          landmark: addressLandmark.trim().slice(0, 160),
+          exactLat: location.lat,
+          exactLng: location.lng,
+        }).catch(() => undefined);
+      }
 
       await recordCustomerOrderPreference(user.uid, {
         kind: 'hire',
@@ -453,6 +490,8 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
       });
 
       setWorkDescription('');
+      setExactServiceAddress('');
+      setAddressLandmark('');
       setWorkPhotoUrls([]);
     } catch (err) {
       setFormError(
@@ -632,6 +671,9 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
                 </button>
               </div>
             )}
+
+            {/* Prominent Marathi Brand Slogan Banner */}
+            <BrandSloganBanner variant="dashboard" />
 
             {/* Clean Greeting Headline */}
             <div className="space-y-1.5">
@@ -971,6 +1013,51 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
                     >
                       {tr(lang, 'Pin Map', 'मैप पिन', 'नकाशा पिन')}
                     </button>
+                  </div>
+                </div>
+
+                {/* Exact Service Address (Stored in Private Vault — Revealed ONLY after Order Confirmation to Assigned Worker) */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      {tr(
+                        lang,
+                        'Exact House / Street Address (Locked Until Confirmed)',
+                        'सटीक घर / गली पता (कन्फर्म होने तक गोपनीय)',
+                        'अचूक घर / गल्ली पत्ता (निश्चित होईपर्यंत गोपनीय)'
+                      )}
+                    </label>
+                    <input
+                      type="text"
+                      value={exactServiceAddress}
+                      onChange={(e) => setExactServiceAddress(e.target.value)}
+                      maxLength={300}
+                      placeholder={tr(
+                        lang,
+                        'House / Flat No., Street, Colony...',
+                        'मकान / फ्लैट नं., गली, कॉलोनी...',
+                        'घर / फ्लॅट क्र., गल्ली, कॉलनी...'
+                      )}
+                      className="w-full h-10 px-3 rounded-xl border border-slate-300 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B3B75]/25 focus:border-[#0B3B75]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      {tr(lang, 'Nearby Landmark (Optional)', 'पास की पहचान (वैकल्पिक)', 'जवळची खूण (ऐच्छिक)')}
+                    </label>
+                    <input
+                      type="text"
+                      value={addressLandmark}
+                      onChange={(e) => setAddressLandmark(e.target.value)}
+                      maxLength={140}
+                      placeholder={tr(
+                        lang,
+                        'e.g., Near Hanuman Mandir / Bus Stand',
+                        'जैसे: हनुमान मंदिर / बस स्टैंड के पास',
+                        'उदा. हनुमान मंदिराजवळ / बस स्टँडजवळ'
+                      )}
+                      className="w-full h-10 px-3 rounded-xl border border-slate-300 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B3B75]/25 focus:border-[#0B3B75]"
+                    />
                   </div>
                 </div>
               </div>

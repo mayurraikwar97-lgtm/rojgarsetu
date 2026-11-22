@@ -1,9 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertCircle, CheckCircle2 } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Lock, ShieldCheck } from 'lucide-react';
 import { EMPLOYMENT_CATEGORIES } from '../data/categories';
 import { INDIA_STATES_DISTRICTS } from '../data/indiaLocations';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../i18n/LanguageContext';
+import {
+  extractLastName,
+  getWorkerVisibleCustomerName,
+} from '../lib/customerPrivacy';
 import { formatUiError } from '../lib/firebase';
 import { saveEmployerRegistration } from '../lib/firestoreService';
 import {
@@ -11,7 +15,12 @@ import {
   deleteProfilePhotoRecord,
   uploadProfilePhotoRecord,
 } from '../lib/photoStorageService';
-import type { PageRoute, VerificationMethod } from '../types/domain';
+import type {
+  CustomerGender,
+  CustomerProfileVisibility,
+  PageRoute,
+  VerificationMethod,
+} from '../types/domain';
 import { NotificationOptInButton } from './NotificationOptInButton';
 import { OtpVerificationBox } from './OtpVerificationBox';
 import { ProfilePhotoUploader, type SelectedProfilePhoto } from './ProfilePhotoUploader';
@@ -30,6 +39,9 @@ export const EmployerRegistrationForm: React.FC<EmployerRegistrationFormProps> =
 
   const [businessName, setBusinessName] = useState('');
   const [contactPerson, setContactPerson] = useState('');
+  const [lastName, setLastName] = useState('');
+  const [gender, setGender] = useState<CustomerGender>('prefer_not_to_say');
+  const [profileVisibility, setProfileVisibility] = useState<CustomerProfileVisibility>('standard');
   const [mobile, setMobile] = useState('');
   const [mobileVerified, setMobileVerified] = useState(false);
   const [verificationMethod, setVerificationMethod] = useState<VerificationMethod | undefined>(undefined);
@@ -56,6 +68,20 @@ export const EmployerRegistrationForm: React.FC<EmployerRegistrationFormProps> =
     if (employerProfile && employerPrivate) {
       setBusinessName(employerProfile.businessName);
       setContactPerson(employerPrivate.contactPerson);
+      const savedGender = employerProfile.gender || employerPrivate.gender || 'prefer_not_to_say';
+      setGender(savedGender);
+      const savedLast =
+        employerProfile.lastName ||
+        employerPrivate.lastName ||
+        extractLastName(employerPrivate.contactPerson);
+      setLastName(savedLast === 'Customer' ? '' : savedLast);
+      setProfileVisibility(
+        savedGender === 'female'
+          ? employerProfile.profileVisibility === 'private_strict'
+            ? 'private_strict'
+            : 'last_name_only'
+          : employerProfile.profileVisibility || employerPrivate.profileVisibility || 'standard'
+      );
       setMobile(employerPrivate.mobile);
       setMobileVerified(employerPrivate.mobileVerified);
       setVerificationMethod(employerPrivate.verificationMethod);
@@ -72,7 +98,12 @@ export const EmployerRegistrationForm: React.FC<EmployerRegistrationFormProps> =
       setRequiredCategories(employerProfile.requiredCategories || []);
       setSavedId(employerProfile.registrationId);
     } else if (user) {
-      setContactPerson(user.displayName || '');
+      const display = user.displayName || '';
+      setContactPerson(display);
+      const derivedLast = extractLastName(display);
+      if (derivedLast && derivedLast !== 'Customer') {
+        setLastName(derivedLast);
+      }
       setEmail(user.email || '');
     }
   }, [employerProfile, employerPrivate, user]);
@@ -168,6 +199,15 @@ export const EmployerRegistrationForm: React.FC<EmployerRegistrationFormProps> =
         resolvedPhotoDocId = employerProfile ? '' : undefined;
       }
 
+      const cleanFull = contactPerson.trim().slice(0, 120);
+      const resolvedLastName =
+        lastName.trim().slice(0, 60) || extractLastName(cleanFull);
+      const resolvedFirstName = cleanFull.split(/\s+/)[0]?.slice(0, 60) || '';
+      const resolvedVisibility: CustomerProfileVisibility =
+        gender === 'female' && profileVisibility === 'standard'
+          ? 'last_name_only'
+          : profileVisibility;
+
       await saveEmployerRegistration(
         user.uid,
         Boolean(employerProfile),
@@ -181,10 +221,19 @@ export const EmployerRegistrationForm: React.FC<EmployerRegistrationFormProps> =
           district: districtName,
           requiredCategories: requiredCategories.slice(0, 15),
           verificationStatus: employerProfile?.verificationStatus || 'pending',
+          gender,
+          lastName: resolvedLastName === 'Customer' ? '' : resolvedLastName,
+          profileVisibility: resolvedVisibility,
+          hidePhotoUntilConfirm: gender === 'female' || resolvedVisibility === 'private_strict',
+          maskedCallingOnly: true,
         },
         {
           ownerUid: user.uid,
-          contactPerson: contactPerson.trim().slice(0, 120),
+          contactPerson: cleanFull,
+          firstName: resolvedFirstName,
+          lastName: resolvedLastName === 'Customer' ? '' : resolvedLastName,
+          gender,
+          profileVisibility: resolvedVisibility,
           mobile: mobile.trim(),
           mobileVerified,
           ...(verificationMethod ? { verificationMethod } : {}),
@@ -374,10 +423,132 @@ export const EmployerRegistrationForm: React.FC<EmployerRegistrationFormProps> =
               type="text"
               required
               value={contactPerson}
-              onChange={(e) => setContactPerson(e.target.value)}
+              onChange={(e) => {
+                const next = e.target.value;
+                setContactPerson(next);
+                if (!lastName.trim()) {
+                  const derived = extractLastName(next);
+                  if (derived && derived !== 'Customer') {
+                    setLastName(derived);
+                  }
+                }
+              }}
               className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
             />
           </div>
+        </div>
+
+        {/* Gender, Last Name & Privacy Protection Section */}
+        <div className="rounded-xl border border-slate-200 bg-slate-50/70 p-4 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wider text-[#0B3B75]">
+              <ShieldCheck className="w-4 h-4 text-[#15803D]" />
+              <span>
+                {lang === 'mr'
+                  ? 'ग्राहक गोपनीयता व महिला सुरक्षा कवच'
+                  : lang === 'hi'
+                  ? 'ग्राहक गोपनीयता व महिला सुरक्षा कवच'
+                  : 'Customer Privacy & Safety Protection'}
+              </span>
+            </div>
+            <div className="text-xs font-semibold text-slate-600">
+              {lang === 'mr'
+                ? 'कामगाराला दिसणारे नाव:'
+                : lang === 'hi'
+                ? 'कामगार को दिखने वाला नाम:'
+                : 'Worker sees:'}{' '}
+              <strong className="text-[#0B3B75]">
+                {getWorkerVisibleCustomerName({
+                  gender,
+                  profileVisibility:
+                    gender === 'female' && profileVisibility === 'standard'
+                      ? 'last_name_only'
+                      : profileVisibility,
+                  lastName: lastName.trim() || undefined,
+                  fullName: contactPerson,
+                  businessName,
+                  viewerRole: 'worker',
+                })}
+              </strong>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                {lang === 'mr' ? 'लिंग (Gender) *' : lang === 'hi' ? 'लिंग (Gender) *' : 'Gender *'}
+              </label>
+              <select
+                value={gender}
+                onChange={(e) => {
+                  const next = e.target.value as CustomerGender;
+                  setGender(next);
+                  if (next === 'female' && profileVisibility === 'standard') {
+                    setProfileVisibility('last_name_only');
+                  }
+                }}
+                className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
+              >
+                <option value="female">
+                  {lang === 'mr' ? 'महिला (फक्त आडनाव सुरक्षा)' : lang === 'hi' ? 'महिला (केवल उपनाम सुरक्षा)' : 'Female (Last Name Only Privacy)'}
+                </option>
+                <option value="male">{lang === 'mr' ? 'पुरुष' : lang === 'hi' ? 'पुरुष' : 'Male'}</option>
+                <option value="other">{lang === 'mr' ? 'इतर' : lang === 'hi' ? 'अन्य' : 'Other'}</option>
+                <option value="prefer_not_to_say">
+                  {lang === 'mr' ? 'सांगू इच्छित नाही' : lang === 'hi' ? 'बताना नहीं चाहते' : 'Prefer not to say'}
+                </option>
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                {lang === 'mr' ? 'आडनाव (Last Name)' : lang === 'hi' ? 'उपनाम (Last Name)' : 'Last Name / Surname'}
+              </label>
+              <input
+                type="text"
+                value={lastName}
+                onChange={(e) => setLastName(e.target.value)}
+                placeholder={lang === 'mr' ? 'उदा. देशमुख, कुलकर्णी' : lang === 'hi' ? 'जैसे: देशमुख, शर्मा' : 'e.g., Deshmukh, Sharma'}
+                className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
+              />
+            </div>
+
+            <div>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                {lang === 'mr' ? 'प्रोफाईल दृश्यता' : lang === 'hi' ? 'प्रोफ़ाइल दृश्यता' : 'Profile Visibility'}
+              </label>
+              <select
+                value={gender === 'female' && profileVisibility === 'standard' ? 'last_name_only' : profileVisibility}
+                onChange={(e) => setProfileVisibility(e.target.value as CustomerProfileVisibility)}
+                className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
+              >
+                <option value="last_name_only">
+                  {lang === 'mr' ? 'फक्त आडनाव (Last Name Only)' : lang === 'hi' ? 'केवल उपनाम (Last Name Only)' : 'Last Name Only'}
+                </option>
+                <option value="private_strict">
+                  {lang === 'mr' ? 'उच्च गोपनीयता (आडनाव + फोटो लपवा)' : lang === 'hi' ? 'उच्च गोपनीयता (उपनाम + फ़ोटो छुपाएँ)' : 'Strict Privacy (Last Name + Hide Photo)'}
+                </option>
+                {gender !== 'female' && (
+                  <option value="standard">
+                    {lang === 'mr' ? 'सामान्य (पूर्ण / व्यवसायाचे नाव)' : lang === 'hi' ? 'सामान्य (पूरा / व्यापार नाम)' : 'Standard (Display / Business Name)'}
+                  </option>
+                )}
+              </select>
+            </div>
+          </div>
+
+          {gender === 'female' && (
+            <div className="rounded-lg bg-emerald-50 border border-emerald-200 px-3.5 py-2.5 text-xs text-emerald-950 flex items-start gap-2">
+              <Lock className="w-4 h-4 text-[#15803D] shrink-0 mt-0.5" />
+              <span>
+                {lang === 'mr'
+                  ? 'महिला ग्राहक सुरक्षा कवच सक्रिय: कामगारांना फक्त तुमचे आडनाव दिसेल, वैयक्तिक मोबाईल नंबर लपवला जाईल (इन-ॲप मास्क्ड कॉल उपलब्ध), आणि अचूक पत्ता ऑर्डर निश्चित झाल्यावरच संबंधित कामगाराला दिसेल.'
+                  : lang === 'hi'
+                  ? 'महिला ग्राहक सुरक्षा कवच सक्रिय: कामगारों को केवल आपका उपनाम दिखेगा, व्यक्तिगत मोबाइल नंबर छुपा रहेगा (इन-ऐप मास्क्ड कॉल), और सटीक पता केवल ऑर्डर कन्फर्म होने पर संबंधित कामगार को ही दिखेगा।'
+                  : 'Female Customer Safety Shield Active: Workers only ever see your Last Name (never your full name), your personal mobile stays hidden with In-App Masked Calling, and your exact address is revealed only to the assigned worker after order confirmation.'}
+              </span>
+            </div>
+          )}
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">

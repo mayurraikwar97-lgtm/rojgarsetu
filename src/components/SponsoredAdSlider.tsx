@@ -10,6 +10,11 @@ import {
 } from 'lucide-react';
 import { useLanguage } from '../i18n/LanguageContext';
 import {
+  BRAND_MESSAGE_MR,
+  BRAND_SLOGAN_MR,
+  BRAND_TAGLINE_MR,
+} from '../lib/customerPrivacy';
+import {
   buildCallHref,
   buildWhatsAppAdHref,
   getMatchingActiveAds,
@@ -196,6 +201,9 @@ export const SponsoredAdSlider: React.FC<SponsoredAdSliderProps> = ({
                     'रोजगार सेतु पर अपनी स्थानीय दुकान, मटेरियल सप्लाई या सेवा का विज्ञापन करें।',
                     'रोजगार सेतूवर तुमच्या स्थानिक दुकान, साहित्य सप्लाय किंवा व्यवसायाची जाहिरात करा.'
                   )}
+            </p>
+            <p className="text-[11px] font-bold text-[#E06D1B] mt-0.5">
+              “{BRAND_SLOGAN_MR}” · <span className="text-[#15803D]">{BRAND_TAGLINE_MR}</span>
             </p>
           </div>
         </div>
@@ -457,6 +465,15 @@ export const SponsoredAdSlider: React.FC<SponsoredAdSliderProps> = ({
             )}
           </div>
         </div>
+      </div>
+
+      {/* Prominent Marathi Brand Slogan Strip on Sponsored Advertisements */}
+      <div className="px-3.5 py-1.5 bg-[#0B3B75] text-white flex flex-wrap items-center justify-between gap-x-3 gap-y-0.5 text-[11px]">
+        <span className="font-display font-extrabold text-amber-300">
+          “{BRAND_SLOGAN_MR}”
+        </span>
+        <span className="font-semibold text-blue-100">{BRAND_TAGLINE_MR}</span>
+        <span className="font-bold text-emerald-300 hidden md:inline">{BRAND_MESSAGE_MR}</span>
       </div>
     </aside>
   );

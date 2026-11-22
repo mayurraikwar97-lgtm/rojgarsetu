@@ -29,6 +29,7 @@ import {
   subscribeUserDeviceTokens,
   subscribeUserNotifications,
 } from '../lib/firestoreService';
+import { sanitizeNotificationTextForPrivacy } from '../lib/customerPrivacy';
 import { SERVICE_RADIUS_STAGES, buildSmartJobVoiceScript } from '../lib/smartVoiceJobAlert';
 import { getToneChannelConfig, getToneTypeForEvent } from '../lib/dealWorkflow';
 import {
@@ -953,8 +954,12 @@ export const UserNotificationCenter: React.FC<UserNotificationCenterProps> = ({
                         </span>
                       )}
                     </div>
-                    <div className="font-display text-sm font-bold text-[#0B3B75]">{n.title}</div>
-                    <p className="text-xs text-slate-600">{n.body}</p>
+                    <div className="font-display text-sm font-bold text-[#0B3B75]">
+                      {sanitizeNotificationTextForPrivacy(n.title)}
+                    </div>
+                    <p className="text-xs text-slate-600">
+                      {sanitizeNotificationTextForPrivacy(n.body)}
+                    </p>
                     {n.errorMessage && (
                       <p className="text-[11px] text-red-700">Error: {n.errorMessage}</p>
                     )}

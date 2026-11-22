@@ -5,9 +5,17 @@ import { getDistrictCoordinates, INDIA_STATES_DISTRICTS } from '../data/indiaLoc
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../i18n/LanguageContext';
 import {
+  extractLastName,
+  getApproximateCoordinates,
+  getSafeCustomerLabelForJobOrApp,
+  getWorkerVisibleCustomerName,
+  isFemaleCustomerProtected,
+} from '../lib/customerPrivacy';
+import {
   callNotificationApi,
   createJobPosting,
   notifyMatchingWorkersInApp,
+  saveOrderExactAddress,
   submitWorkerOffer,
 } from '../lib/firestoreService';
 import { detectBestGpsLocation } from '../lib/locationService';
@@ -339,7 +347,10 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
                                 }
                                 const script = buildSmartJobVoiceScript({
                                   lang: preferredLang,
-                                  customerName: job.employerName,
+                                  customerName: getSafeCustomerLabelForJobOrApp({
+                                    job,
+                                    viewerRole: 'worker',
+                                  }),
                                   category: job.category,
                                   jobTitle: job.title,
                                   jobDescription: job.title || job.description,
@@ -380,7 +391,12 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
                 </div>
 
                 <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-3">
-                  <span className="text-xs text-slate-500 font-medium">{job.employerName}</span>
+                  <span className="text-xs text-slate-500 font-medium">
+                    {getSafeCustomerLabelForJobOrApp({
+                      job,
+                      viewerRole: 'worker',
+                    })}
+                  </span>
 
                   {isApplied ? (
                     <span className="inline-flex items-center gap-1 text-xs font-semibold text-[#15803D]">
@@ -430,7 +446,11 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
               {applyingJob.title}
             </h3>
             <p className="text-xs text-slate-600">
-              {applyingJob.employerName} · Offered ₹{applyingJob.offeredWage} / {applyingJob.wageUnit}
+              {getSafeCustomerLabelForJobOrApp({
+                job: applyingJob,
+                viewerRole: 'worker',
+              })}{' '}
+              · Offered ₹{applyingJob.offeredWage} / {applyingJob.wageUnit}
             </p>
 
             <div>
@@ -643,7 +663,7 @@ const NORMAL_WORK_CATEGORIES = EMPLOYMENT_CATEGORIES.filter((c) => c.group !== '
 
 export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNavigate }) => {
   const { lang, t } = useLanguage();
-  const { user, employerProfile, signInWithGoogle } = useAuth();
+  const { user, employerProfile, employerPrivate, signInWithGoogle } = useAuth();
 
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState(NORMAL_WORK_CATEGORIES[0].en);
@@ -718,9 +738,35 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
         district: districtName,
         state: stateName,
       });
+      const approxCoords = getApproximateCoordinates(coords.lat, coords.lng);
+      const genderProtected = isFemaleCustomerProtected({
+        gender: employerProfile.gender || employerPrivate?.gender,
+      });
+      const resolvedLastName =
+        employerProfile.lastName ||
+        employerPrivate?.lastName ||
+        extractLastName(employerPrivate?.contactPerson || user.displayName || '');
+      const workerVisibleName = getWorkerVisibleCustomerName({
+        employerProfile,
+        employerPrivate,
+        fallbackName: user.displayName || 'Customer',
+        viewerRole: 'worker',
+      });
+      const trimmedExactAddress = (
+        workLocationLabel.trim() ||
+        employerPrivate?.businessAddress?.trim() ||
+        ''
+      ).slice(0, 320);
+      const hasExactVault = trimmedExactAddress.length >= 4;
+
       const jobPayload = {
         employerUid: user.uid,
-        employerName: employerProfile.businessName,
+        employerName: workerVisibleName,
+        customerGenderProtected: genderProtected,
+        ...(resolvedLastName && resolvedLastName !== 'Customer'
+          ? { customerLastName: resolvedLastName.slice(0, 60) }
+          : {}),
+        hasExactAddressVault: hasExactVault,
         title: title.trim().slice(0, 140),
         category,
         description: description.trim().slice(0, 2000),
@@ -729,12 +775,12 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
         state: stateName,
         district: districtName,
         cityOrVillage: cityOrVillage.trim().slice(0, 100),
-        workLocationLabel: workLocationLabel.trim().slice(0, 160),
+        workLocationLabel: approxLocationLabel.slice(0, 160),
         approxLocationLabel: approxLocationLabel.slice(0, 160),
         initialRadiusKm,
         currentRadiusKm: initialRadiusKm,
-        lat: coords.lat,
-        lng: coords.lng,
+        lat: approxCoords.lat,
+        lng: approxCoords.lng,
         jobDate,
         startTime,
         duration: duration.trim().slice(0, 60),
@@ -750,6 +796,15 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
         ...(workPhotoUrls.length > 0 ? { workPhotoUrls: workPhotoUrls.slice(0, MAX_WORK_PHOTOS) } : {}),
       };
       const id = await createJobPosting(jobPayload);
+      if (hasExactVault) {
+        await saveOrderExactAddress({
+          jobId: id,
+          employerUid: user.uid,
+          exactAddress: trimmedExactAddress,
+          exactLat: coords.lat,
+          exactLng: coords.lng,
+        }).catch(() => undefined);
+      }
       setCreatedJobId(id);
       setWorkPhotoUrls([]);
 

@@ -10,6 +10,7 @@ import {
   Plus,
   Radar,
   RefreshCw,
+  ShieldCheck,
   Star,
   UserCheck,
   X,
@@ -17,6 +18,10 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../i18n/LanguageContext';
+import {
+  getWorkerVisibleCustomerName,
+  isFemaleCustomerProtected,
+} from '../lib/customerPrivacy';
 import {
   getSixStepLabel,
   SIX_STEP_STAGE_ORDER,
@@ -46,6 +51,8 @@ import type {
   PageRoute,
   PublicWorkerProfile,
 } from '../types/domain';
+import { BrandSloganBanner } from './BrandSloganBanner';
+import { CustomerPrivacyControls } from './CustomerPrivacyControls';
 import { DealCoordinationPanel } from './DealCoordinationPanel';
 import { SecureAvatar } from './SecureAvatar';
 import { UserNotificationCenter } from './UserNotificationCenter';
@@ -93,6 +100,7 @@ export const CustomerOrdersV2: React.FC<CustomerOrdersV2Props> = ({
   const [errorMsg, setErrorMsg] = useState('');
   const [showArchivedHistory, setShowArchivedHistory] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
+  const [showPrivacyControls, setShowPrivacyControls] = useState(false);
 
   // Star Rating state per applicationId
   const [ratingDrafts, setRatingDrafts] = useState<Record<string, { stars: number; note: string }>>({});
@@ -109,14 +117,23 @@ export const CustomerOrdersV2: React.FC<CustomerOrdersV2Props> = ({
     return map;
   }, [workers]);
 
+  // Privacy-safe name shown to workers (Female customers & Last-Name-Only users strictly show Last Name only)
   const customerName = useMemo(() => {
-    return (
-      employerProfile?.businessName ||
-      user?.displayName ||
-      user?.email?.split('@')[0] ||
-      'Customer'
-    );
-  }, [employerProfile, user]);
+    return getWorkerVisibleCustomerName({
+      employerProfile,
+      employerPrivate,
+      fallbackName: user?.displayName || user?.email?.split('@')[0] || 'Customer',
+      viewerRole: 'worker',
+    });
+  }, [employerProfile, employerPrivate, user]);
+
+  const isFemaleProtected = useMemo(
+    () =>
+      isFemaleCustomerProtected({
+        gender: employerProfile?.gender || employerPrivate?.gender,
+      }),
+    [employerProfile?.gender, employerPrivate?.gender]
+  );
 
   // Customer's own jobs
   const myJobs = useMemo(() => {
@@ -172,12 +189,16 @@ export const CustomerOrdersV2: React.FC<CustomerOrdersV2Props> = ({
     setErrorMsg('');
     setFeedbackMsg('');
     try {
+      const allowPhotoGrant =
+        Boolean(employerPrivate?.photoDocId) &&
+        employerProfile?.profileVisibility !== 'private_strict' &&
+        !isFemaleProtected;
       await respondToWorkerOffer({
         app,
         decision: 'accepted',
         customerName,
-        jobLocationLabel: job.workLocationLabel || job.approxLocationLabel || job.district,
-        photoGrantContext: employerPrivate?.photoDocId
+        jobLocationLabel: job.approxLocationLabel || job.workLocationLabel || job.district,
+        photoGrantContext: allowPhotoGrant && employerPrivate?.photoDocId
           ? {
               customerUid: user.uid,
               workerUid: app.workerUid,
@@ -383,7 +404,19 @@ export const CustomerOrdersV2: React.FC<CustomerOrdersV2Props> = ({
             </p>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowPrivacyControls((v) => !v)}
+              className={`h-10 px-3 rounded-lg border text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer ${
+                showPrivacyControls || isFemaleProtected
+                  ? 'border-emerald-300 bg-emerald-50 text-[#15803D]'
+                  : 'border-slate-300 bg-white text-slate-700 hover:bg-slate-50'
+              }`}
+            >
+              <ShieldCheck className="w-3.5 h-3.5" />
+              <span>{tr(lang, 'Privacy & Visibility', 'गोपनीयता नियंत्रण', 'गोपनीयता नियंत्रण')}</span>
+            </button>
             <button
               type="button"
               onClick={() => setShowSettings((v) => !v)}
@@ -404,6 +437,10 @@ export const CustomerOrdersV2: React.FC<CustomerOrdersV2Props> = ({
       </div>
 
       <div className="max-w-5xl mx-auto px-4 sm:px-6 pt-5 space-y-6">
+        <BrandSloganBanner variant="dashboard" />
+
+        {showPrivacyControls && <CustomerPrivacyControls />}
+
         {feedbackMsg && (
           <div className="rounded-xl bg-emerald-50 border border-emerald-200 px-4 py-3 text-sm font-bold text-emerald-900 flex items-center justify-between gap-2">
             <span className="flex items-center gap-2">

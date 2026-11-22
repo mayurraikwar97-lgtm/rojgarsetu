@@ -40,6 +40,7 @@ import {
   updateWorkerAvailabilityStatus,
   updateWorkerPreferredRadius,
 } from '../lib/firestoreService';
+import { getSafeCustomerLabelForJobOrApp } from '../lib/customerPrivacy';
 import {
   SERVICE_RADIUS_STAGES,
   calculateValidDistanceKm,
@@ -54,6 +55,7 @@ import type {
   PageRoute,
   ServiceRadiusKm,
 } from '../types/domain';
+import { BrandSloganBanner } from './BrandSloganBanner';
 import { DealCoordinationPanel } from './DealCoordinationPanel';
 import { RojgarSetuLogo } from './RojgarSetuLogo';
 import { SecureAvatar } from './SecureAvatar';
@@ -563,6 +565,8 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
 
       {/* Main Worker Tab Content */}
       <div className="max-w-5xl mx-auto px-4 sm:px-6 pt-5 space-y-4">
+        <BrandSloganBanner variant="dashboard" />
+
         {actionFeedback && (
           <div className="rounded-xl bg-emerald-50 border border-emerald-200 px-4 py-3 text-sm font-bold text-emerald-900 flex items-center justify-between gap-2">
             <span className="flex items-center gap-2">
@@ -622,6 +626,14 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
                           {job.subService || job.title}
                         </h2>
                         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-600">
+                          <span className="font-bold text-[#0B3B75]">
+                            {tr(lang, 'Customer', 'ग्राहक', 'ग्राहक')}:{' '}
+                            {getSafeCustomerLabelForJobOrApp({
+                              job,
+                              app,
+                              viewerRole: 'worker',
+                            })}
+                          </span>
                           <span className="inline-flex items-center gap-1 font-semibold">
                             <MapPin className="w-3.5 h-3.5 text-[#E06D1B]" />
                             {getPublicJobLocationText(job, false)}
@@ -831,7 +843,13 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
                           {app.jobTitle}
                         </h2>
                         <div className="text-xs text-slate-600 flex flex-wrap items-center gap-2">
-                          <span className="font-semibold">{app.customerName || job?.employerName || 'Customer'}</span>
+                          <span className="font-semibold">
+                            {getSafeCustomerLabelForJobOrApp({
+                              job,
+                              app,
+                              viewerRole: 'worker',
+                            })}
+                          </span>
                           <span>·</span>
                           <span>
                             {job ? getPublicJobLocationText(job, isConfirmed) : app.jobLocationLabel || app.jobDistrict}
@@ -948,7 +966,11 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
                       <div className="space-y-1">
                         <div className="text-sm font-extrabold text-[#0B3B75]">{app.jobTitle}</div>
                         <div className="text-xs text-slate-500">
-                          {app.customerName || 'Customer'} · {app.jobLocationLabel || app.jobDistrict}
+                          {getSafeCustomerLabelForJobOrApp({
+                            app,
+                            viewerRole: 'worker',
+                          })}{' '}
+                          · {app.jobLocationLabel || app.jobDistrict}
                         </div>
                         {app.employerFeedback && (
                           <p className="text-xs text-slate-600 italic">“{app.employerFeedback}”</p>

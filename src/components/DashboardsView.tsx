@@ -30,6 +30,7 @@ import {
   X,
   Zap,
 } from 'lucide-react';
+import { BrandSloganBanner } from './BrandSloganBanner';
 import { RojgarSetuLogo } from './RojgarSetuLogo';
 import { SecureAvatar } from './SecureAvatar';
 import { UserNotificationCenter } from './UserNotificationCenter';
@@ -55,6 +56,7 @@ import {
 } from '../lib/photoStorageService';
 import {
   adminCreateAnnouncement,
+  adminFetchAllEmployerPrivate,
   adminToggleAnnouncement,
   adminUpdateEnquiryStatus,
   adminUpdateGrievanceStatus,
@@ -110,6 +112,7 @@ import type {
   AppNotificationRecord,
   AuditLog,
   DealMessage,
+  EmployerPrivateInfo,
   GrievanceReport,
   JobApplication,
   JobPosting,
@@ -3885,6 +3888,7 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
   const [enquiries, setEnquiries] = useState<PartnershipEnquiry[]>([]);
   const [grievances, setGrievances] = useState<GrievanceReport[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [employerPrivateMap, setEmployerPrivateMap] = useState<Record<string, EmployerPrivateInfo>>({});
   const [grievanceNotes, setGrievanceNotes] = useState<Record<string, string>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -3903,7 +3907,12 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
     const u2 = subscribeAdminEnquiries(setEnquiries);
     const u3 = subscribeAdminGrievances(setGrievances);
     const u4 = subscribeAdminAuditLogs(setAuditLogs);
+    let mounted = true;
+    void adminFetchAllEmployerPrivate().then((map) => {
+      if (mounted) setEmployerPrivateMap(map);
+    });
     return () => {
+      mounted = false;
       u1();
       u2();
       u3();
@@ -4000,6 +4009,8 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-8">
+      <BrandSloganBanner variant="dashboard" />
+
       <div className="bg-white border border-slate-200 rounded-lg p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <p className="text-xs font-semibold text-[#C25E00]">ABUJMAD FOUNDATION · Governance Console</p>
@@ -4278,15 +4289,38 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
 
       {tab === 'employers' && (
         <div className="bg-white border border-slate-200 rounded-lg p-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="font-display text-lg font-bold text-[#0B3B75]">Registered Employers</h2>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="font-display text-lg font-bold text-[#0B3B75]">
+                Registered Customers & Employers (Authorized Admin Complete View)
+              </h2>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Full name, gender, mobile, email & address are visible strictly to authorized Admin. Workers see only Last Name for Female / masked customers.
+              </p>
+            </div>
             <button
               type="button"
               onClick={() =>
                 downloadCsv(
-                  'rojgar-setu-employers.csv',
-                  ['Registration ID', 'Business Name', 'Type', 'State', 'District', 'Status'],
-                  employers.map((e) => [e.registrationId, e.businessName, e.businessType, e.state, e.district, e.verificationStatus])
+                  'rojgar-setu-customers-admin.csv',
+                  ['Registration ID', 'Business Name', 'Full Contact Name', 'Gender', 'Last Name', 'Visibility', 'Mobile', 'Email', 'Full Address', 'State', 'District', 'Status'],
+                  employers.map((e) => {
+                    const priv = employerPrivateMap[e.ownerUid];
+                    return [
+                      e.registrationId,
+                      e.businessName,
+                      priv?.contactPerson || '',
+                      e.gender || priv?.gender || '',
+                      e.lastName || priv?.lastName || '',
+                      e.profileVisibility || priv?.profileVisibility || 'standard',
+                      priv?.mobile || '',
+                      priv?.email || '',
+                      priv?.businessAddress || '',
+                      e.state,
+                      e.district,
+                      e.verificationStatus,
+                    ];
+                  })
                 )
               }
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
@@ -4303,30 +4337,74 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
                 <thead>
                   <tr className="border-b border-slate-200 text-xs text-slate-500">
                     <th className="py-2 pr-4">ID</th>
-                    <th className="py-2 pr-4">Business</th>
-                    <th className="py-2 pr-4">Industry</th>
-                    <th className="py-2 pr-4">District</th>
+                    <th className="py-2 pr-4">Customer / Business</th>
+                    <th className="py-2 pr-4">Privacy & Gender</th>
+                    <th className="py-2 pr-4">Authorized Contact & Address</th>
                     <th className="py-2 pr-4">Status</th>
                     <th className="py-2">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {employers.map((emp) => (
+                  {employers.map((emp) => {
+                    const priv = employerPrivateMap[emp.ownerUid];
+                    const resolvedGender = emp.gender || priv?.gender || 'prefer_not_to_say';
+                    const resolvedVisibility = emp.profileVisibility || priv?.profileVisibility || 'standard';
+                    return (
                     <tr key={emp.id}>
                       <td className="py-3 pr-4 font-mono-tabular text-xs">{emp.registrationId}</td>
                       <td className="py-3 pr-4 font-semibold text-[#0B3B75]">
                         <div className="flex items-center gap-2.5">
                           <SecureAvatar
-                            name={emp.businessName}
-                            photoDocId={buildCustomerPhotoDocId(emp.ownerUid)}
+                            name={priv?.contactPerson || emp.businessName}
+                            photoDocId={priv?.photoDocId || buildCustomerPhotoDocId(emp.ownerUid)}
                             sizeClass="w-8 h-8"
                             textSizeClass="text-[11px]"
                           />
-                          <span>{emp.businessName}</span>
+                          <div>
+                            <div className="font-bold text-[#0B3B75]">{priv?.contactPerson || emp.businessName}</div>
+                            <div className="text-[11px] font-normal text-slate-500">
+                              {emp.businessName} · {emp.industryCategory}
+                            </div>
+                          </div>
                         </div>
                       </td>
-                      <td className="py-3 pr-4 text-slate-600">{emp.industryCategory}</td>
-                      <td className="py-3 pr-4 text-slate-600">{emp.district}, {emp.state}</td>
+                      <td className="py-3 pr-4 text-xs space-y-1">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span
+                            className={`px-2 py-0.5 rounded font-bold uppercase text-[10px] ${
+                              resolvedGender === 'female'
+                                ? 'bg-emerald-50 text-[#15803D] border border-emerald-200'
+                                : 'bg-slate-100 text-slate-700'
+                            }`}
+                          >
+                            {resolvedGender === 'female' ? 'Female (Shielded)' : resolvedGender}
+                          </span>
+                          <span className="px-2 py-0.5 rounded bg-blue-50 text-[#0B3B75] font-semibold text-[10px]">
+                            {resolvedVisibility}
+                          </span>
+                        </div>
+                        {(emp.lastName || priv?.lastName) && (
+                          <div className="text-[11px] text-slate-600">
+                            Worker-visible surname: <strong>{emp.lastName || priv?.lastName}</strong>
+                          </div>
+                        )}
+                      </td>
+                      <td className="py-3 pr-4 text-xs text-slate-700 space-y-0.5 max-w-xs">
+                        {priv ? (
+                          <>
+                            <div className="font-mono-tabular font-semibold text-slate-900">
+                              {priv.mobile} {priv.mobileVerified ? '✓' : ''} · {priv.email}
+                            </div>
+                            <div className="text-[11px] text-slate-600 break-words">
+                              {priv.businessAddress}, {emp.district}, {emp.state}
+                            </div>
+                          </>
+                        ) : (
+                          <div className="text-slate-500">
+                            {emp.district}, {emp.state}
+                          </div>
+                        )}
+                      </td>
                       <td className="py-3 pr-4 font-semibold uppercase text-xs">{emp.verificationStatus}</td>
                       <td className="py-3 flex flex-wrap gap-2">
                         {emp.verificationStatus !== 'verified' && (
@@ -4372,7 +4450,8 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
                         )}
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

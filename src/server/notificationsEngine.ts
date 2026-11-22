@@ -23,6 +23,12 @@ import {
   getToneTypeForEvent,
   type NotificationToneType,
 } from '../lib/dealWorkflow.ts';
+import {
+  getSafeCustomerLabelForJobOrApp,
+  getWorkerVisibleCustomerName,
+  redactPrivateCustomerFields,
+  sanitizeNotificationTextForPrivacy,
+} from '../lib/customerPrivacy.ts';
 
 const BOOTSTRAPPED_ADMIN_EMAIL = 'mayurraikwar97@gmail.com';
 
@@ -610,7 +616,14 @@ function collectStageTargets(params: {
       district: String(job.district || ''),
       state: String(job.state || ''),
     });
-  const customerName = String(job.employerName || 'Customer').trim() || 'Customer';
+  const customerName = getSafeCustomerLabelForJobOrApp({
+    job: {
+      employerName: String(job.employerName || 'Customer').trim() || 'Customer',
+      customerGenderProtected: Boolean(job.customerGenderProtected),
+      customerLastName: typeof job.customerLastName === 'string' ? job.customerLastName : undefined,
+    },
+    viewerRole: 'worker',
+  });
 
   for (const wDoc of workersDocs) {
     const w = wDoc.data();
@@ -792,14 +805,19 @@ async function dispatchAndRecordTargets(params: {
     if (target.tokens.length === 0) {
       inAppOnlyCount += 1;
       try {
+        const safeTitle = sanitizeNotificationTextForPrivacy(target.title).slice(0, 160);
+        const safeBody = sanitizeNotificationTextForPrivacy(target.body).slice(0, 500);
         const payloadDoc = {
           recipientUid: target.uid,
           recipientRole: target.role,
           isDemo: target.isDemo,
           category: target.category,
-          title: target.title.slice(0, 160),
-          body: target.body.slice(0, 500),
-          ...buildOptionalVoicePayloadFields(target),
+          title: safeTitle,
+          body: safeBody,
+          ...buildOptionalVoicePayloadFields({
+            ...target,
+            voiceScript: target.voiceScript ? sanitizeNotificationTextForPrivacy(target.voiceScript) : undefined,
+          }),
           language: target.language,
           targetRoute: target.targetRoute,
           ...(target.targetJobId ? { targetJobId: target.targetJobId } : {}),
@@ -841,8 +859,9 @@ async function dispatchAndRecordTargets(params: {
     const soundActive = target.playSound !== false;
 
     try {
-      const notifTitle = target.title.slice(0, 140);
-      const notifBody = target.body.slice(0, 400);
+      const notifTitle = sanitizeNotificationTextForPrivacy(target.title).slice(0, 140);
+      const notifBody = sanitizeNotificationTextForPrivacy(target.body).slice(0, 400);
+      const safeVoice = sanitizeNotificationTextForPrivacy(target.voiceScript || '').slice(0, 680);
       const notifTag = `${toneCfg.channelId}_${safeDocId || target.dedupeKey || 'alert'}`.slice(0, 96);
       const sharedDataPayload: Record<string, string> = {
         title: notifTitle,
@@ -855,7 +874,7 @@ async function dispatchAndRecordTargets(params: {
         lang: target.language,
         toneType,
         eventType: target.eventType || '',
-        voiceScript: (target.voiceScript || '').slice(0, 680),
+        voiceScript: safeVoice,
         approxLocationLabel: (target.approxLocationLabel || '').slice(0, 155),
         distanceKm:
           typeof target.distanceKm === 'number' && Number.isFinite(target.distanceKm)
@@ -1538,22 +1557,46 @@ export async function handleSendCustomerEvent(params: {
       return { httpStatus: 200, payload: { ok: true, skipped: true, message: 'Recipient disabled notifications.' } };
     }
 
-    const lang = getLanguageOrDefault(pref?.preferredLanguage || activeTokenDocs[0]?.data()?.preferredLanguage);
-    const msg = buildLocalizedCustomerEventMessage({
-      lang,
-      eventType,
-      workerName,
-      jobTitle,
-      proposedWage,
-      eta,
-      locationLabel,
-      messageSnippet,
-    });
-
     const resolvedRole: DeliveryTarget['role'] =
       recipientRoleRaw === 'worker' || targetRoute === 'worker-dashboard' || targetRoute === 'find-work'
         ? 'worker'
         : 'employer';
+
+    let safeSenderDisplayName = workerName;
+    if (resolvedRole === 'worker' && jobId) {
+      const jobSnapForPrivacy = await runtime.db.collection('jobs').doc(jobId).get().catch(() => null);
+      if (jobSnapForPrivacy?.exists) {
+        const jData = jobSnapForPrivacy.data() as Record<string, unknown>;
+        const empUid = typeof jData.employerUid === 'string' ? jData.employerUid : '';
+        const empPubSnap = empUid
+          ? await runtime.db.collection('publicEmployers').doc(empUid).get().catch(() => null)
+          : null;
+        const empPub = empPubSnap?.exists ? (empPubSnap.data() as Record<string, unknown>) : undefined;
+        safeSenderDisplayName = getWorkerVisibleCustomerName({
+          gender: typeof empPub?.gender === 'string' ? empPub.gender : undefined,
+          customerGenderProtected: Boolean(jData.customerGenderProtected) || empPub?.gender === 'female',
+          profileVisibility: typeof empPub?.profileVisibility === 'string' ? empPub.profileVisibility : undefined,
+          lastName:
+            (typeof jData.customerLastName === 'string' && jData.customerLastName) ||
+            (typeof empPub?.lastName === 'string' && empPub.lastName) ||
+            undefined,
+          fullName: workerName || (typeof jData.employerName === 'string' ? jData.employerName : 'Customer'),
+          viewerRole: 'worker',
+        });
+      }
+    }
+
+    const lang = getLanguageOrDefault(pref?.preferredLanguage || activeTokenDocs[0]?.data()?.preferredLanguage);
+    const msg = buildLocalizedCustomerEventMessage({
+      lang,
+      eventType,
+      workerName: sanitizeNotificationTextForPrivacy(safeSenderDisplayName),
+      jobTitle: sanitizeNotificationTextForPrivacy(jobTitle),
+      proposedWage,
+      eta,
+      locationLabel: sanitizeNotificationTextForPrivacy(locationLabel),
+      messageSnippet: sanitizeNotificationTextForPrivacy(messageSnippet),
+    });
 
     const resolvedCategory: DeliveryTarget['category'] = eventType.includes('booking')
       ? 'bookingNotifications'
@@ -1593,7 +1636,7 @@ export async function handleSendCustomerEvent(params: {
       targets: [target],
       sentByUid: authUser.decoded.uid,
     });
-    return { httpStatus: 200, payload: result };
+    return { httpStatus: 200, payload: redactPrivateCustomerFields(result) };
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Customer notification failed';
     return { httpStatus: 500, payload: { ok: false, errorCode: 'SERVER_ERROR', message } };

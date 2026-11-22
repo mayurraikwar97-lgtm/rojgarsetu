@@ -36,6 +36,7 @@ import type {
   Language,
   PageRoute,
 } from '../types/domain';
+import { BrandSloganBanner } from './BrandSloganBanner';
 
 interface AdvertiserDashboardViewProps {
   onNavigate: (route: PageRoute) => void;
@@ -312,6 +313,8 @@ export const AdvertiserDashboardView: React.FC<AdvertiserDashboardViewProps> = (
 
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 sm:py-10 space-y-8 pb-24">
+      <BrandSloganBanner variant="promo" />
+
       {/* Header Banner */}
       <section className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-xs">
         <div className="h-1.5 w-full grid grid-cols-3">

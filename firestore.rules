@@ -173,7 +173,9 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'ownerUid', 'registrationId', 'businessName', 'businessType',
           'industryCategory', 'state', 'district', 'requiredCategories',
-          'verificationStatus', 'createdAt', 'updatedAt'
+          'verificationStatus', 'gender', 'lastName', 'profileVisibility',
+          'hidePhotoUntilConfirm', 'maskedCallingOnly',
+          'createdAt', 'updatedAt'
         ])
         && isValidId(data.ownerUid)
         && data.registrationId is string && data.registrationId.size() >= 5 && data.registrationId.size() <= 40
@@ -184,6 +186,11 @@ service cloud.firestore {
         && data.district is string && data.district.size() >= 2 && data.district.size() <= 80
         && data.requiredCategories is list && data.requiredCategories.size() >= 1 && data.requiredCategories.size() <= 15 && data.requiredCategories[0] is string
         && data.verificationStatus in ['pending', 'verified', 'suspended']
+        && (!('gender' in data) || data.gender in ['male', 'female', 'other', 'prefer_not_to_say'])
+        && (!('lastName' in data) || (data.lastName is string && data.lastName.size() >= 1 && data.lastName.size() <= 60))
+        && (!('profileVisibility' in data) || data.profileVisibility in ['standard', 'last_name_only', 'private_strict'])
+        && (!('hidePhotoUntilConfirm' in data) || data.hidePhotoUntilConfirm is bool)
+        && (!('maskedCallingOnly' in data) || data.maskedCallingOnly is bool)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -194,12 +201,17 @@ service cloud.firestore {
           'email', 'businessAddress', 'createdAt', 'updatedAt'
         ])
         && data.keys().hasOnly([
-          'ownerUid', 'contactPerson', 'mobile', 'mobileVerified', 'verificationMethod',
+          'ownerUid', 'contactPerson', 'firstName', 'lastName', 'gender', 'profileVisibility',
+          'mobile', 'mobileVerified', 'verificationMethod',
           'testPinHash', 'email', 'businessAddress', 'gstNumber', 'establishmentDetails',
           'workforceNotes', 'photoDocId', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.ownerUid)
         && data.contactPerson is string && data.contactPerson.size() >= 2 && data.contactPerson.size() <= 120
+        && (!('firstName' in data) || (data.firstName is string && data.firstName.size() <= 60))
+        && (!('lastName' in data) || (data.lastName is string && data.lastName.size() <= 60))
+        && (!('gender' in data) || data.gender in ['male', 'female', 'other', 'prefer_not_to_say'])
+        && (!('profileVisibility' in data) || data.profileVisibility in ['standard', 'last_name_only', 'private_strict'])
         && data.mobile is string && data.mobile.size() >= 10 && data.mobile.size() <= 20
         && data.mobileVerified is bool
         && (!('verificationMethod' in data) || data.verificationMethod in ['sms_otp', 'firebase_phone', 'test_pin'])
@@ -231,7 +243,8 @@ service cloud.firestore {
           'biddingEnabled', 'status', 'applicationsCount', 'createdAt', 'updatedAt'
         ])
         && data.keys().hasOnly([
-          'employerUid', 'employerName', 'title', 'category', 'description',
+          'employerUid', 'employerName', 'customerGenderProtected', 'customerLastName', 'hasExactAddressVault',
+          'title', 'category', 'description',
           'workersRequired', 'requiredSkills', 'state', 'district', 'cityOrVillage',
           'workLocationLabel', 'lat', 'lng', 'jobDate', 'startTime', 'duration',
           'workType', 'offeredWage', 'wageUnit', 'paymentTerms', 'contactPreference',
@@ -246,6 +259,9 @@ service cloud.firestore {
         ])
         && isValidId(data.employerUid)
         && data.employerName is string && data.employerName.size() >= 2 && data.employerName.size() <= 160
+        && (!('customerGenderProtected' in data) || data.customerGenderProtected is bool)
+        && (!('customerLastName' in data) || (data.customerLastName is string && data.customerLastName.size() <= 60))
+        && (!('hasExactAddressVault' in data) || data.hasExactAddressVault is bool)
         && data.title is string && data.title.size() >= 3 && data.title.size() <= 140
         && data.category is string && data.category.size() >= 2 && data.category.size() <= 80
         && data.description is string && data.description.size() >= 10 && data.description.size() <= 2000
@@ -306,7 +322,8 @@ service cloud.firestore {
           'jobId', 'jobTitle', 'employerUid', 'workerUid', 'workerRegistrationId',
           'workerName', 'workerPrimarySkill', 'workerPhotoDocId', 'proposedWage', 'note', 'status',
           'dealStatus', 'initiatedBy', 'jobCategory', 'jobDistrict', 'jobLocationLabel',
-          'jobDate', 'startTime', 'customerName', 'offerAmount', 'travelCharges', 'estimatedArrivalTime',
+          'jobDate', 'startTime', 'customerName', 'customerGenderProtected', 'customerLastName',
+          'offerAmount', 'travelCharges', 'estimatedArrivalTime',
           'offerMessage', 'offerSubmittedAt', 'agreedPrice', 'dealConfirmedAt',
           'onTheWayAt', 'arrivedAt', 'workStartedAt', 'completedAt', 'cancelledAt',
           'cancelledByUid', 'quoteRevisionRequested',
@@ -332,6 +349,8 @@ service cloud.firestore {
         && (!('jobDate' in data) || (data.jobDate is string && data.jobDate.size() <= 30))
         && (!('startTime' in data) || (data.startTime is string && data.startTime.size() <= 30))
         && (!('customerName' in data) || (data.customerName is string && data.customerName.size() <= 160))
+        && (!('customerGenderProtected' in data) || data.customerGenderProtected is bool)
+        && (!('customerLastName' in data) || (data.customerLastName is string && data.customerLastName.size() <= 60))
         && (!('offerAmount' in data) || (data.offerAmount is number && data.offerAmount >= 0 && data.offerAmount <= 500000))
         && (!('travelCharges' in data) || (data.travelCharges is number && data.travelCharges >= 0 && data.travelCharges <= 100000))
         && (!('estimatedArrivalTime' in data) || (data.estimatedArrivalTime is string && data.estimatedArrivalTime.size() <= 80))
@@ -1058,6 +1077,60 @@ service cloud.firestore {
         );
     }
 
+    function isValidOrderExactAddress(data) {
+      return data.keys().hasAll(['jobId', 'employerUid', 'exactAddress', 'exactLat', 'exactLng', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['jobId', 'employerUid', 'exactAddress', 'landmark', 'exactLat', 'exactLng', 'createdAt', 'updatedAt'])
+        && isValidId(data.jobId)
+        && isValidId(data.employerUid)
+        && data.exactAddress is string && data.exactAddress.size() >= 4 && data.exactAddress.size() <= 300
+        && (!('landmark' in data) || (data.landmark is string && data.landmark.size() <= 160))
+        && data.exactLat is number && data.exactLat >= -90 && data.exactLat <= 90
+        && data.exactLng is number && data.exactLng >= -180 && data.exactLng <= 180
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isConfirmedAssignedWorkerForJob(jobId) {
+      return isVerifiedUser()
+        && exists(/databases/$(database)/documents/jobs/$(jobId))
+        && get(/databases/$(database)/documents/jobs/$(jobId)).data.acceptedWorkerUid == request.auth.uid
+        && (
+          get(/databases/$(database)/documents/jobs/$(jobId)).data.status in ['in_progress', 'completed']
+          || (
+            'dealStatus' in get(/databases/$(database)/documents/jobs/$(jobId)).data
+            && get(/databases/$(database)/documents/jobs/$(jobId)).data.dealStatus in [
+              'OFFER_ACCEPTED', 'DEAL_CONFIRMED', 'WORKER_ON_THE_WAY', 'WORKER_ARRIVED', 'WORK_IN_PROGRESS', 'WORK_COMPLETED'
+            ]
+          )
+        );
+    }
+
+    function isValidMaskedCallSession(data) {
+      return data.keys().hasAll([
+          'applicationId', 'jobId', 'employerUid', 'workerUid', 'initiatedByUid',
+          'initiatedByRole', 'callerSafeName', 'receiverSafeName', 'maskedBridgeCode',
+          'maskedVirtualNumber', 'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'applicationId', 'jobId', 'employerUid', 'workerUid', 'initiatedByUid',
+          'initiatedByRole', 'callerSafeName', 'receiverSafeName', 'maskedBridgeCode',
+          'maskedVirtualNumber', 'status', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.applicationId)
+        && isValidId(data.jobId)
+        && isValidId(data.employerUid)
+        && isValidId(data.workerUid)
+        && isValidId(data.initiatedByUid)
+        && data.initiatedByRole in ['customer', 'worker']
+        && data.callerSafeName is string && data.callerSafeName.size() >= 1 && data.callerSafeName.size() <= 120
+        && data.receiverSafeName is string && data.receiverSafeName.size() >= 1 && data.receiverSafeName.size() <= 120
+        && data.maskedBridgeCode is string && data.maskedBridgeCode.size() >= 6 && data.maskedBridgeCode.size() <= 40
+        && data.maskedVirtualNumber is string && data.maskedVirtualNumber.size() >= 6 && data.maskedVirtualNumber.size() <= 40
+        && data.status in ['ringing', 'connected', 'ended', 'declined']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
     // Collection Rules
 
     match /users/{userId} {
@@ -1197,7 +1270,9 @@ service cloud.firestore {
             && existing().verificationStatus != 'suspended'
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'businessName', 'businessType', 'industryCategory',
-              'state', 'district', 'requiredCategories', 'updatedAt'
+              'state', 'district', 'requiredCategories',
+              'gender', 'lastName', 'profileVisibility',
+              'hidePhotoUntilConfirm', 'maskedCallingOnly', 'updatedAt'
             ])
           )
         );
@@ -1224,7 +1299,8 @@ service cloud.firestore {
             isOwner(existing().ownerUid)
             && incoming().mobileVerified == true
             && incoming().diff(existing()).affectedKeys().hasOnly([
-              'contactPerson', 'mobile', 'mobileVerified', 'verificationMethod', 'testPinHash',
+              'contactPerson', 'firstName', 'lastName', 'gender', 'profileVisibility',
+              'mobile', 'mobileVerified', 'verificationMethod', 'testPinHash',
               'email', 'businessAddress', 'gstNumber', 'establishmentDetails',
               'workforceNotes', 'photoDocId', 'updatedAt'
             ])
@@ -2636,6 +2712,90 @@ service cloud.firestore {
         && isValidTimestampOnUpdate()
         && incoming().referrerUid == existing().referrerUid;
       allow delete: if isValidId(payoutId) && isAdmin();
+    }
+
+    // ============================================================
+    // CUSTOMER PRIVACY VAULT & MASKED CALLING RULES
+    // ============================================================
+
+    match /orderExactAddresses/{jobId} {
+      allow get: if isValidId(jobId)
+        && isVerifiedUser()
+        && (
+          isAdmin()
+          || existing().employerUid == request.auth.uid
+          || isConfirmedAssignedWorkerForJob(jobId)
+        );
+      allow list: if isVerifiedUser()
+        && (isAdmin() || existing().employerUid == request.auth.uid);
+      allow create: if isValidId(jobId)
+        && isVerifiedUser()
+        && isValidOrderExactAddress(incoming())
+        && incoming().jobId == jobId
+        && isValidTimestampOnCreate()
+        && (isAdmin() || incoming().employerUid == request.auth.uid);
+      allow update: if isValidId(jobId)
+        && isVerifiedUser()
+        && isValidOrderExactAddress(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().jobId == existing().jobId
+        && incoming().employerUid == existing().employerUid
+        && (isAdmin() || isOwner(existing().employerUid));
+      allow delete: if isValidId(jobId)
+        && (isAdmin() || isOwner(existing().employerUid));
+    }
+
+    match /maskedCallSessions/{sessionId} {
+      allow get: if isValidId(sessionId)
+        && isVerifiedUser()
+        && (
+          isAdmin()
+          || existing().employerUid == request.auth.uid
+          || existing().workerUid == request.auth.uid
+        );
+      allow list: if isVerifiedUser()
+        && (
+          isAdmin()
+          || existing().employerUid == request.auth.uid
+          || existing().workerUid == request.auth.uid
+        );
+      allow create: if isValidId(sessionId)
+        && isVerifiedUser()
+        && isValidMaskedCallSession(incoming())
+        && isValidTimestampOnCreate()
+        && isActiveAcceptedDeal(incoming().applicationId)
+        && (
+          isAdmin()
+          || (
+            incoming().initiatedByUid == request.auth.uid
+            && (
+              (incoming().initiatedByRole == 'customer' && incoming().employerUid == request.auth.uid)
+              || (incoming().initiatedByRole == 'worker' && incoming().workerUid == request.auth.uid)
+            )
+            && get(/databases/$(database)/documents/applications/$(incoming().applicationId)).data.employerUid == incoming().employerUid
+            && get(/databases/$(database)/documents/applications/$(incoming().applicationId)).data.workerUid == incoming().workerUid
+          )
+        );
+      allow update: if isValidId(sessionId)
+        && isVerifiedUser()
+        && isValidMaskedCallSession(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().applicationId == existing().applicationId
+        && incoming().jobId == existing().jobId
+        && incoming().employerUid == existing().employerUid
+        && incoming().workerUid == existing().workerUid
+        && incoming().initiatedByUid == existing().initiatedByUid
+        && incoming().initiatedByRole == existing().initiatedByRole
+        && incoming().maskedBridgeCode == existing().maskedBridgeCode
+        && incoming().maskedVirtualNumber == existing().maskedVirtualNumber
+        && (
+          isAdmin()
+          || (
+            (existing().employerUid == request.auth.uid || existing().workerUid == request.auth.uid)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(sessionId) && isAdmin();
     }
   }
 }

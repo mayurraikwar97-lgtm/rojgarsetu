@@ -154,6 +154,9 @@ export interface WorkerPrivateInfo {
   updatedAt?: unknown;
 }
 
+export type CustomerGender = 'male' | 'female' | 'other' | 'prefer_not_to_say';
+export type CustomerProfileVisibility = 'standard' | 'last_name_only' | 'private_strict';
+
 export interface PublicEmployerProfile {
   id: string;
   ownerUid: string;
@@ -165,6 +168,11 @@ export interface PublicEmployerProfile {
   district: string;
   requiredCategories: string[];
   verificationStatus: VerificationStatus;
+  gender?: CustomerGender;
+  lastName?: string;
+  profileVisibility?: CustomerProfileVisibility;
+  hidePhotoUntilConfirm?: boolean;
+  maskedCallingOnly?: boolean;
   createdAt?: unknown;
   updatedAt?: unknown;
 }
@@ -172,6 +180,10 @@ export interface PublicEmployerProfile {
 export interface EmployerPrivateInfo {
   ownerUid: string;
   contactPerson: string;
+  firstName?: string;
+  lastName?: string;
+  gender?: CustomerGender;
+  profileVisibility?: CustomerProfileVisibility;
   mobile: string;
   mobileVerified: boolean;
   verificationMethod?: VerificationMethod;
@@ -186,10 +198,44 @@ export interface EmployerPrivateInfo {
   updatedAt?: unknown;
 }
 
+export interface OrderExactAddressRecord {
+  id?: string;
+  jobId: string;
+  employerUid: string;
+  exactAddress: string;
+  landmark?: string;
+  exactLat: number;
+  exactLng: number;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export type MaskedCallStatus = 'ringing' | 'connected' | 'ended' | 'declined';
+
+export interface MaskedCallSession {
+  id: string;
+  applicationId: string;
+  jobId: string;
+  employerUid: string;
+  workerUid: string;
+  initiatedByUid: string;
+  initiatedByRole: 'customer' | 'worker';
+  callerSafeName: string;
+  receiverSafeName: string;
+  maskedBridgeCode: string;
+  maskedVirtualNumber: string;
+  status: MaskedCallStatus;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
 export interface JobPosting {
   id: string;
   employerUid: string;
   employerName: string;
+  customerGenderProtected?: boolean;
+  customerLastName?: string;
+  hasExactAddressVault?: boolean;
   title: string;
   category: string;
   description: string;
@@ -261,6 +307,8 @@ export interface JobApplication {
   jobDate?: string;
   startTime?: string;
   customerName?: string;
+  customerGenderProtected?: boolean;
+  customerLastName?: string;
   offerAmount?: number;
   travelCharges?: number;
   estimatedArrivalTime?: string;

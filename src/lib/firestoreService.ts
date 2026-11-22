@@ -31,10 +31,18 @@ import {
   normalizeCategoryToken,
   normalizeRadiusKm,
 } from './smartVoiceJobAlert';
+import {
+  formatMaskedBridgeCode,
+  formatMaskedVirtualDisplay,
+  getApproximateCoordinates,
+  sanitizeNotificationTextForPrivacy,
+} from './customerPrivacy';
 import type {
   AppNotificationRecord,
   AuditLog,
+  CustomerGender,
   CustomerPreference,
+  CustomerProfileVisibility,
   DealLocationShare,
   DealMessage,
   DealNotificationEventType,
@@ -48,10 +56,13 @@ import type {
   JobApplication,
   JobPosting,
   Language,
+  MaskedCallSession,
+  MaskedCallStatus,
   NotificationCategoryKey,
   NotificationDeliveryLog,
   NotificationPreferences,
   NotificationToneType,
+  OrderExactAddressRecord,
   PartnershipEnquiry,
   PlatformAnnouncement,
   PublicEmployerProfile,
@@ -407,12 +418,24 @@ export async function saveEmployerRegistration(
         }
       }
 
-      const cleanPriv = { ...privateData, mobile: normalizedMobile };
+      const cleanPub: Record<string, unknown> = { ...publicData };
+      Object.keys(cleanPub).forEach((k) => {
+        if (cleanPub[k] === undefined || cleanPub[k] === '') {
+          delete cleanPub[k];
+        }
+      });
+
+      const cleanPriv: Record<string, unknown> = { ...privateData, mobile: normalizedMobile };
       if (!cleanPriv.photoDocId) delete cleanPriv.photoDocId;
+      Object.keys(cleanPriv).forEach((k) => {
+        if (cleanPriv[k] === undefined || cleanPriv[k] === '') {
+          delete cleanPriv[k];
+        }
+      });
 
       if (!pubSnap.exists()) {
         tx.set(pubRef, {
-          ...publicData,
+          ...cleanPub,
           verificationStatus: 'pending',
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
@@ -425,6 +448,15 @@ export async function saveEmployerRegistration(
           state: publicData.state,
           district: publicData.district,
           requiredCategories: publicData.requiredCategories,
+          ...(publicData.gender ? { gender: publicData.gender } : {}),
+          ...(publicData.lastName ? { lastName: publicData.lastName } : {}),
+          ...(publicData.profileVisibility ? { profileVisibility: publicData.profileVisibility } : {}),
+          ...(typeof publicData.hidePhotoUntilConfirm === 'boolean'
+            ? { hidePhotoUntilConfirm: publicData.hidePhotoUntilConfirm }
+            : {}),
+          ...(typeof publicData.maskedCallingOnly === 'boolean'
+            ? { maskedCallingOnly: publicData.maskedCallingOnly }
+            : {}),
           updatedAt: serverTimestamp(),
         });
       }
@@ -438,6 +470,10 @@ export async function saveEmployerRegistration(
       } else {
         tx.update(privRef, {
           contactPerson: cleanPriv.contactPerson,
+          ...(cleanPriv.firstName ? { firstName: cleanPriv.firstName } : {}),
+          ...(cleanPriv.lastName ? { lastName: cleanPriv.lastName } : {}),
+          ...(cleanPriv.gender ? { gender: cleanPriv.gender } : {}),
+          ...(cleanPriv.profileVisibility ? { profileVisibility: cleanPriv.profileVisibility } : {}),
           mobile: cleanPriv.mobile,
           mobileVerified: cleanPriv.mobileVerified,
           ...(cleanPriv.verificationMethod ? { verificationMethod: cleanPriv.verificationMethod } : {}),
@@ -976,12 +1012,18 @@ export async function createInstantHireRequest(
     });
   const initialStageKm = normalizeRadiusKm(jobPayload.initialRadiusKm ?? 2, 2);
 
+  const approxCoords = getApproximateCoordinates(jobPayload.lat, jobPayload.lng);
+
   // Create job document first so Firestore security rule `get(/databases/.../jobs/$(jobId))`
   // resolves cleanly when creating invited applications and notifications immediately afterward.
+  // PRIVACY: Public job documents store ONLY approximate location & rounded ~1 km coordinates.
   const jobId = await createJobPosting(
     {
       ...jobPayload,
+      workLocationLabel: approxLocLabel.slice(0, 160),
       approxLocationLabel: approxLocLabel.slice(0, 160),
+      lat: approxCoords.lat,
+      lng: approxCoords.lng,
       initialRadiusKm: initialStageKm,
       currentRadiusKm: normalizeRadiusKm(jobPayload.currentRadiusKm ?? initialStageKm, initialStageKm),
       dealStatus: selectedWorkers.length > 0 ? 'NOTIFIED' : 'REQUESTED',
@@ -994,8 +1036,8 @@ export async function createInstantHireRequest(
     return { jobId, invitedCount: selectedWorkers.length, notifiedCount: 0, finalRadiusKm: initialStageKm };
   }
 
-  const safeTitle = jobPayload.title.trim().slice(0, 140) || 'Instant Hire Request';
-  const safeNote = (inviteNote ?? '').trim().slice(0, 600);
+  const safeTitle = sanitizeNotificationTextForPrivacy(jobPayload.title.trim()).slice(0, 140) || 'Instant Hire Request';
+  const safeNote = sanitizeNotificationTextForPrivacy((inviteNote ?? '').trim()).slice(0, 600);
   const createdAppIds: Array<{ worker: PublicWorkerProfile; appId: string }> = [];
 
   if (selectedWorkers.length > 0) {
@@ -1009,6 +1051,10 @@ export async function createInstantHireRequest(
         jobTitle: safeTitle,
         employerUid: jobPayload.employerUid,
         customerName: (jobPayload.employerName.trim() || 'Customer').slice(0, 160),
+        ...(typeof jobPayload.customerGenderProtected === 'boolean'
+          ? { customerGenderProtected: jobPayload.customerGenderProtected }
+          : {}),
+        ...(jobPayload.customerLastName ? { customerLastName: jobPayload.customerLastName.slice(0, 60) } : {}),
         jobCategory: (jobPayload.category.trim() || 'General').slice(0, 80),
         jobDistrict: (jobPayload.district.trim() || 'India').slice(0, 80),
         jobLocationLabel: approxLocLabel.slice(0, 160),
@@ -3276,4 +3322,223 @@ export async function callNotificationApi<T = Record<string, unknown>>(
   const data = (await response.json().catch(() => ({}))) as T;
   return { status: response.status, data };
 }
+
+// ============================================================
+// CUSTOMER PRIVACY VAULT, VISIBILITY SETTINGS & MASKED CALLING
+// ============================================================
+
+export async function updateCustomerPrivacySettings(
+  uid: string,
+  settings: {
+    gender: CustomerGender;
+    lastName?: string;
+    profileVisibility: CustomerProfileVisibility;
+    hidePhotoUntilConfirm: boolean;
+    maskedCallingOnly: boolean;
+  }
+): Promise<void> {
+  const pubRef = doc(db, 'publicEmployers', uid);
+  const privRef = doc(db, 'employerPrivate', uid);
+  const enforcedVisibility: CustomerProfileVisibility =
+    settings.gender === 'female' && settings.profileVisibility === 'standard'
+      ? 'last_name_only'
+      : settings.profileVisibility;
+
+  try {
+    const pubPayload: Record<string, unknown> = {
+      gender: settings.gender,
+      profileVisibility: enforcedVisibility,
+      hidePhotoUntilConfirm: settings.gender === 'female' ? true : settings.hidePhotoUntilConfirm,
+      maskedCallingOnly: settings.gender === 'female' ? true : settings.maskedCallingOnly,
+      updatedAt: serverTimestamp(),
+    };
+    if (settings.lastName && settings.lastName.trim()) {
+      pubPayload.lastName = settings.lastName.trim().slice(0, 60);
+    }
+    await updateDoc(pubRef, pubPayload);
+
+    const privSnap = await getDoc(privRef).catch(() => null);
+    if (privSnap?.exists()) {
+      const privPayload: Record<string, unknown> = {
+        gender: settings.gender,
+        profileVisibility: enforcedVisibility,
+        updatedAt: serverTimestamp(),
+      };
+      if (settings.lastName && settings.lastName.trim()) {
+        privPayload.lastName = settings.lastName.trim().slice(0, 60);
+      }
+      await updateDoc(privRef, privPayload);
+    }
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, `publicEmployers/${uid}`);
+  }
+}
+
+export async function saveOrderExactAddress(params: {
+  jobId: string;
+  employerUid: string;
+  exactAddress: string;
+  landmark?: string;
+  exactLat: number;
+  exactLng: number;
+}): Promise<void> {
+  const cleanAddr = params.exactAddress.trim().slice(0, 300);
+  if (cleanAddr.length < 4) return;
+  const ref = doc(db, 'orderExactAddresses', params.jobId);
+  try {
+    await setDoc(ref, {
+      jobId: params.jobId,
+      employerUid: params.employerUid,
+      exactAddress: cleanAddr,
+      ...(params.landmark?.trim() ? { landmark: params.landmark.trim().slice(0, 160) } : {}),
+      exactLat: Number.isFinite(params.exactLat) ? params.exactLat : 20.59,
+      exactLng: Number.isFinite(params.exactLng) ? params.exactLng : 78.96,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.WRITE, `orderExactAddresses/${params.jobId}`);
+  }
+}
+
+export async function getOrderExactAddress(jobId: string): Promise<OrderExactAddressRecord | null> {
+  if (!jobId) return null;
+  try {
+    const snap = await getDoc(doc(db, 'orderExactAddresses', jobId));
+    if (!snap.exists()) return null;
+    return { id: snap.id, ...snap.data() } as OrderExactAddressRecord;
+  } catch {
+    // Expected permission denial for unassigned workers or unconfirmed orders
+    return null;
+  }
+}
+
+export async function initiateMaskedCallSession(params: {
+  application: JobApplication;
+  callerUid: string;
+  callerRole: 'customer' | 'worker';
+  callerSafeName: string;
+  receiverSafeName: string;
+}): Promise<MaskedCallSession> {
+  const { application, callerUid, callerRole, callerSafeName, receiverSafeName } = params;
+
+  // Attempt server-brokered masked call session first (returns redacted bridge metadata)
+  let serverBridgeCode = '';
+  let serverVirtualNum = '';
+  try {
+    const apiRes = await callNotificationApi<{
+      ok?: boolean;
+      sessionId?: string;
+      maskedBridgeCode?: string;
+      maskedVirtualNumber?: string;
+      relayMode?: string;
+    }>('/api/calls/masked-session', {
+      applicationId: application.id,
+    });
+    if (apiRes.status === 200 && apiRes.data?.ok) {
+      serverBridgeCode = apiRes.data.maskedBridgeCode || '';
+      serverVirtualNum = apiRes.data.maskedVirtualNumber || '';
+      if (apiRes.data.relayMode === 'server_masked_bridge' && apiRes.data.sessionId) {
+        return {
+          id: apiRes.data.sessionId,
+          applicationId: application.id,
+          jobId: application.jobId,
+          employerUid: application.employerUid,
+          workerUid: application.workerUid,
+          initiatedByUid: callerUid,
+          initiatedByRole: callerRole,
+          callerSafeName: callerSafeName.slice(0, 120),
+          receiverSafeName: receiverSafeName.slice(0, 120),
+          maskedBridgeCode: serverBridgeCode,
+          maskedVirtualNumber: serverVirtualNum,
+          status: 'ringing',
+        };
+      }
+    }
+  } catch {
+    // Fall back to direct Firestore maskedCallSessions guarded by isActiveAcceptedDeal security rule
+  }
+
+  const sessionId = sanitizeSafeId(`mcall_${application.id.slice(0, 32)}_${Date.now()}`);
+  const maskedBridgeCode = serverBridgeCode || formatMaskedBridgeCode(`${application.id}_${sessionId}`);
+  const maskedVirtualNumber = serverVirtualNum || formatMaskedVirtualDisplay(application.id);
+
+  const payload = {
+    applicationId: application.id,
+    jobId: application.jobId,
+    employerUid: application.employerUid,
+    workerUid: application.workerUid,
+    initiatedByUid: callerUid,
+    initiatedByRole: callerRole,
+    callerSafeName: callerSafeName.trim().slice(0, 120) || 'Participant',
+    receiverSafeName: receiverSafeName.trim().slice(0, 120) || 'Participant',
+    maskedBridgeCode,
+    maskedVirtualNumber,
+    status: 'ringing' as MaskedCallStatus,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  try {
+    await setDoc(doc(db, 'maskedCallSessions', sessionId), payload);
+    return {
+      id: sessionId,
+      ...payload,
+    };
+  } catch (err) {
+    handleFirestoreError(err, OperationType.CREATE, `maskedCallSessions/${sessionId}`);
+  }
+}
+
+export function subscribeDealMaskedCalls(
+  applicationId: string,
+  onData: (sessions: MaskedCallSession[]) => void
+): () => void {
+  const q = query(
+    collection(db, 'maskedCallSessions'),
+    where('applicationId', '==', applicationId)
+  );
+  return onSnapshot(
+    q,
+    (snap) => {
+      const items = snap.docs
+        .map((d) => ({ id: d.id, ...d.data() } as MaskedCallSession))
+        .sort((a, b) => {
+          const aMs = (a.createdAt as { toMillis?: () => number } | undefined)?.toMillis?.() || 0;
+          const bMs = (b.createdAt as { toMillis?: () => number } | undefined)?.toMillis?.() || 0;
+          return bMs - aMs;
+        });
+      onData(items);
+    },
+    () => onData([])
+  );
+}
+
+export async function updateMaskedCallStatus(
+  sessionId: string,
+  status: MaskedCallStatus
+): Promise<void> {
+  try {
+    await updateDoc(doc(db, 'maskedCallSessions', sessionId), {
+      status,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, `maskedCallSessions/${sessionId}`);
+  }
+}
+
+export async function adminFetchAllEmployerPrivate(): Promise<Record<string, EmployerPrivateInfo>> {
+  try {
+    const snap = await getDocs(collection(db, 'employerPrivate'));
+    const map: Record<string, EmployerPrivateInfo> = {};
+    snap.docs.forEach((d) => {
+      map[d.id] = d.data() as EmployerPrivateInfo;
+    });
+    return map;
+  } catch {
+    return {};
+  }
+}
+
 
