@@ -374,7 +374,13 @@ export const UserNotificationCenter: React.FC<UserNotificationCenterProps> = ({
       return;
     }
     const fallbackRoute: PageRoute = mode === 'worker' ? 'worker-dashboard' : 'employer-dashboard';
-    onNavigateToTarget(item.targetRoute || fallbackRoute, item.targetJobId);
+    const rawTarget = item.targetRoute || fallbackRoute;
+    const normalizedRoute: PageRoute =
+      item.targetJobId &&
+      (mode === 'worker' || item.recipientRole === 'worker' || rawTarget === 'find-work')
+        ? 'worker-dashboard'
+        : rawTarget;
+    onNavigateToTarget(normalizedRoute, item.targetJobId);
   };
 
   const handleDemoApply = async (e: React.FormEvent) => {

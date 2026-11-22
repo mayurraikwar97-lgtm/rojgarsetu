@@ -293,11 +293,25 @@ function buildLocalizedCustomerEventMessage(params: {
           title: `नवीन संदेश — ${safeJob}`,
           body: `${safeName}: ${messageSnippet || 'नवीन संदेश प्राप्त झाला आहे.'}`,
         };
-      case 'work_started':
+      case 'quote_revision_requested':
+        return {
+          title: `सुधारित दर विनंती: ${safeJob}`,
+          body: `${safeName} यांनी ${safeJob} साठी सुधारित दर विचारला आहे. ॲप उघडून नवीन दर पाठवा.`,
+        };
+      case 'worker_on_the_way':
+        return {
+          title: `कामगार येत आहे: ${safeJob}`,
+          body: `${safeName} तुमच्या लोकेशनकडे निघाले आहेत. नकाशावर लाइव्ह लोकेशन पहा.`,
+        };
       case 'worker_arrived':
         return {
+          title: `कामगार पोहोचला: ${safeJob}`,
+          body: `${safeName} कामाच्या ठिकाणी पोहोचले आहेत.`,
+        };
+      case 'work_started':
+        return {
           title: `काम सुरू झाले: ${safeJob}`,
-          body: `${safeName} कामाच्या ठिकाणी पोहोचले / काम सुरू केले आहे.`,
+          body: `${safeName} यांनी ${safeJob} काम सुरू केले आहे.`,
         };
       case 'work_completed':
       case 'job_completed':
@@ -370,11 +384,25 @@ function buildLocalizedCustomerEventMessage(params: {
           title: `नया संदेश — ${safeJob}`,
           body: `${safeName}: ${messageSnippet || 'नया संदेश प्राप्त हुआ है।'}`,
         };
-      case 'work_started':
+      case 'quote_revision_requested':
+        return {
+          title: `संशोधित दर अनुरोध: ${safeJob}`,
+          body: `${safeName} ने ${safeJob} के लिए नया दर पूछा है। ऐप खोलकर अपडेट करें।`,
+        };
+      case 'worker_on_the_way':
+        return {
+          title: `कामगार रास्ते में हैं: ${safeJob}`,
+          body: `${safeName} आपके स्थान की ओर निकल चुके हैं। नक्शे पर लाइव लोकेशन देखें।`,
+        };
       case 'worker_arrived':
         return {
+          title: `कामगार पहुँच गए: ${safeJob}`,
+          body: `${safeName} आपके कार्य स्थान पर पहुँच चुके हैं।`,
+        };
+      case 'work_started':
+        return {
           title: `काम शुरू हो गया: ${safeJob}`,
-          body: `${safeName} ने कार्य शुरू कर दिया है / स्थल पर पहुंच गए हैं।`,
+          body: `${safeName} ने ${safeJob} का काम शुरू कर दिया है।`,
         };
       case 'work_completed':
       case 'job_completed':
@@ -446,11 +474,25 @@ function buildLocalizedCustomerEventMessage(params: {
         title: `New Message — ${safeJob}`,
         body: `${safeName}: ${messageSnippet || 'Sent you a message in deal coordination.'}`,
       };
-    case 'work_started':
+    case 'quote_revision_requested':
+      return {
+        title: `Revised Quote Requested: ${safeJob}`,
+        body: `${safeName} asked for a revised price quote for ${safeJob}. Open the app to update your offer.`,
+      };
+    case 'worker_on_the_way':
+      return {
+        title: `Worker On The Way: ${safeJob}`,
+        body: `${safeName} is on the way to your location for ${safeJob}. Track live movement on the map.`,
+      };
     case 'worker_arrived':
       return {
+        title: `Worker Arrived: ${safeJob}`,
+        body: `${safeName} has arrived at your location for ${safeJob}.`,
+      };
+    case 'work_started':
+      return {
         title: `Work Started: ${safeJob}`,
-        body: `${safeName} has started work / arrived at the site for ${safeJob}.`,
+        body: `${safeName} has started work on ${safeJob}.`,
       };
     case 'work_completed':
     case 'job_completed':
@@ -1157,8 +1199,8 @@ export async function handleSendMatchingJob(params: {
     });
 
     const requestedRadius = normalizeRadiusKm(
-      params.body?.stageRadiusKm ?? job.currentRadiusKm ?? job.initialRadiusKm ?? 5,
-      5
+      params.body?.stageRadiusKm ?? job.currentRadiusKm ?? job.initialRadiusKm ?? 2,
+      2
     );
     const autoExpandIfEmpty = params.body?.autoExpandIfEmpty !== false;
 
@@ -1420,7 +1462,8 @@ export async function handleSendCustomerEvent(params: {
   const locationLabel = typeof params.body?.locationLabel === 'string' ? params.body.locationLabel.trim().slice(0, 140) : '';
   const messageSnippet = typeof params.body?.messageSnippet === 'string' ? params.body.messageSnippet.trim().slice(0, 180) : '';
   const requestedDedupeKey = typeof params.body?.dedupeKey === 'string' ? params.body.dedupeKey.trim().slice(0, 120) : '';
-  const targetRoute = typeof params.body?.targetRoute === 'string' ? params.body.targetRoute : 'employer-dashboard';
+  const rawTargetRoute = typeof params.body?.targetRoute === 'string' ? params.body.targetRoute : 'employer-dashboard';
+  const targetRoute = rawTargetRoute === 'find-work' ? 'worker-dashboard' : rawTargetRoute;
 
   if (!recipientUid) {
     return { httpStatus: 400, payload: { error: 'MISSING_RECIPIENT' } };

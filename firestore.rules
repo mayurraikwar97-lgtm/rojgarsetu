@@ -88,7 +88,9 @@ service cloud.firestore {
           'approxLat', 'approxLng', 'languagesKnown', 'gender', 'education',
           'verificationStatus', 'isWomenEnterprise', 'photoDocId',
           'preferredLanguage', 'preferredRadiusKm', 'voiceAlertsEnabled',
-          'completedJobsCount', 'ratingAvg', 'lastRatedApplicationId', 'createdAt', 'updatedAt'
+          'completedJobsCount', 'ratingAvg', 'lastRatedApplicationId',
+          'referralCode', 'referredByCode', 'referredByUid', 'referredByName',
+          'createdAt', 'updatedAt'
         ])
         && isValidId(data.ownerUid)
         && data.registrationId is string && data.registrationId.size() >= 5 && data.registrationId.size() <= 40
@@ -112,11 +114,15 @@ service cloud.firestore {
         && (!('isWomenEnterprise' in data) || data.isWomenEnterprise is bool)
         && (!('photoDocId' in data) || isValidId(data.photoDocId))
         && (!('preferredLanguage' in data) || data.preferredLanguage in ['en', 'hi', 'mr'])
-        && (!('preferredRadiusKm' in data) || data.preferredRadiusKm in [5, 10, 20, 30])
+        && (!('preferredRadiusKm' in data) || data.preferredRadiusKm in [2, 5, 10, 20, 30])
         && (!('voiceAlertsEnabled' in data) || data.voiceAlertsEnabled is bool)
         && data.completedJobsCount is number && data.completedJobsCount >= 0 && data.completedJobsCount <= 100000
         && data.ratingAvg is number && data.ratingAvg >= 0 && data.ratingAvg <= 5
         && (!('lastRatedApplicationId' in data) || isValidId(data.lastRatedApplicationId))
+        && (!('referralCode' in data) || (data.referralCode is string && data.referralCode.size() >= 4 && data.referralCode.size() <= 32 && data.referralCode.matches('^[A-Z0-9_\\-]+$')))
+        && (!('referredByCode' in data) || (data.referredByCode is string && data.referredByCode.size() >= 4 && data.referredByCode.size() <= 32 && data.referredByCode.matches('^[A-Z0-9_\\-]+$')))
+        && (!('referredByUid' in data) || isValidId(data.referredByUid))
+        && (!('referredByName' in data) || (data.referredByName is string && data.referredByName.size() >= 2 && data.referredByName.size() <= 120))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -131,7 +137,9 @@ service cloud.firestore {
           'ownerUid', 'fullName', 'mobile', 'mobileVerified', 'verificationMethod',
           'testPinHash', 'email', 'ageConfirmed', 'preferredWorkLocation',
           'liveLocationConsent', 'privacyConsent', 'idVerificationStatus',
-          'certificateNotes', 'photoUrl', 'photoDocId', 'createdAt', 'updatedAt'
+          'certificateNotes', 'photoUrl', 'photoDocId',
+          'referralCode', 'referredByCode', 'referredByUid', 'referredByName',
+          'createdAt', 'updatedAt'
         ])
         && isValidId(data.ownerUid)
         && data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 120
@@ -148,6 +156,10 @@ service cloud.firestore {
         && (!('certificateNotes' in data) || (data.certificateNotes is string && data.certificateNotes.size() <= 500))
         && (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 1000))
         && (!('photoDocId' in data) || isValidId(data.photoDocId))
+        && (!('referralCode' in data) || (data.referralCode is string && data.referralCode.size() >= 4 && data.referralCode.size() <= 32 && data.referralCode.matches('^[A-Z0-9_\\-]+$')))
+        && (!('referredByCode' in data) || (data.referredByCode is string && data.referredByCode.size() >= 4 && data.referredByCode.size() <= 32 && data.referredByCode.matches('^[A-Z0-9_\\-]+$')))
+        && (!('referredByUid' in data) || isValidId(data.referredByUid))
+        && (!('referredByName' in data) || (data.referredByName is string && data.referredByName.size() >= 2 && data.referredByName.size() <= 120))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -205,7 +217,8 @@ service cloud.firestore {
     function isValidDealStatus(s) {
       return s in [
         'REQUESTED', 'NOTIFIED', 'OFFER_RECEIVED', 'OFFER_ACCEPTED',
-        'DEAL_CONFIRMED', 'WORK_IN_PROGRESS', 'WORK_COMPLETED', 'CANCELLED', 'REJECTED'
+        'DEAL_CONFIRMED', 'WORKER_ON_THE_WAY', 'WORKER_ARRIVED',
+        'WORK_IN_PROGRESS', 'WORK_COMPLETED', 'CANCELLED', 'REJECTED'
       ];
     }
 
@@ -225,7 +238,8 @@ service cloud.firestore {
           'isWomenFriendly', 'isAccessible', 'biddingEnabled', 'photoAttachment',
           'workPhotoUrls', 'orderKind', 'pickupLocationLabel', 'pickupLat', 'pickupLng',
           'destinationLocationLabel', 'destinationLat', 'destinationLng', 'transportItemType',
-          'photoAnalyzed', 'status', 'dealStatus', 'acceptedApplicationId',
+          'photoAnalyzed', 'subService', 'preferredTimeType', 'startingPrice',
+          'status', 'dealStatus', 'acceptedApplicationId',
           'acceptedWorkerUid', 'notifiedWorkerUids', 'approxLocationLabel',
           'initialRadiusKm', 'currentRadiusKm', 'radiusStageUpdatedAt',
           'applicationsCount', 'createdAt', 'updatedAt'
@@ -265,14 +279,17 @@ service cloud.firestore {
         && (!('destinationLng' in data) || (data.destinationLng is number && data.destinationLng >= -180 && data.destinationLng <= 180))
         && (!('transportItemType' in data) || data.transportItemType in ['person', 'goods'])
         && (!('photoAnalyzed' in data) || data.photoAnalyzed is bool)
+        && (!('subService' in data) || (data.subService is string && data.subService.size() <= 100))
+        && (!('preferredTimeType' in data) || data.preferredTimeType in ['now', 'later'])
+        && (!('startingPrice' in data) || (data.startingPrice is number && data.startingPrice >= 0 && data.startingPrice <= 500000))
         && data.status in ['open', 'in_progress', 'completed', 'cancelled', 'flagged']
         && (!('dealStatus' in data) || isValidDealStatus(data.dealStatus))
         && (!('acceptedApplicationId' in data) || isValidId(data.acceptedApplicationId))
         && (!('acceptedWorkerUid' in data) || isValidId(data.acceptedWorkerUid))
         && (!('notifiedWorkerUids' in data) || (data.notifiedWorkerUids is list && data.notifiedWorkerUids.size() <= 100))
         && (!('approxLocationLabel' in data) || (data.approxLocationLabel is string && data.approxLocationLabel.size() <= 160))
-        && (!('initialRadiusKm' in data) || data.initialRadiusKm in [5, 10, 20, 30])
-        && (!('currentRadiusKm' in data) || data.currentRadiusKm in [5, 10, 20, 30])
+        && (!('initialRadiusKm' in data) || data.initialRadiusKm in [2, 5, 10, 20, 30])
+        && (!('currentRadiusKm' in data) || data.currentRadiusKm in [2, 5, 10, 20, 30])
         && (!('radiusStageUpdatedAt' in data) || data.radiusStageUpdatedAt is timestamp)
         && data.applicationsCount is number && data.applicationsCount >= 0 && data.applicationsCount <= 100000
         && data.createdAt is timestamp
@@ -291,7 +308,8 @@ service cloud.firestore {
           'dealStatus', 'initiatedBy', 'jobCategory', 'jobDistrict', 'jobLocationLabel',
           'jobDate', 'startTime', 'customerName', 'offerAmount', 'travelCharges', 'estimatedArrivalTime',
           'offerMessage', 'offerSubmittedAt', 'agreedPrice', 'dealConfirmedAt',
-          'workStartedAt', 'completedAt', 'cancelledAt', 'cancelledByUid',
+          'onTheWayAt', 'arrivedAt', 'workStartedAt', 'completedAt', 'cancelledAt',
+          'cancelledByUid', 'quoteRevisionRequested',
           'liveTrackingAuthorized', 'workerRating', 'employerFeedback',
           'createdAt', 'updatedAt'
         ])
@@ -321,10 +339,13 @@ service cloud.firestore {
         && (!('offerSubmittedAt' in data) || data.offerSubmittedAt is timestamp)
         && (!('agreedPrice' in data) || (data.agreedPrice is number && data.agreedPrice >= 0 && data.agreedPrice <= 500000))
         && (!('dealConfirmedAt' in data) || data.dealConfirmedAt is timestamp)
+        && (!('onTheWayAt' in data) || data.onTheWayAt is timestamp)
+        && (!('arrivedAt' in data) || data.arrivedAt is timestamp)
         && (!('workStartedAt' in data) || data.workStartedAt is timestamp)
         && (!('completedAt' in data) || data.completedAt is timestamp)
         && (!('cancelledAt' in data) || data.cancelledAt is timestamp)
         && (!('cancelledByUid' in data) || isValidId(data.cancelledByUid))
+        && (!('quoteRevisionRequested' in data) || data.quoteRevisionRequested is bool)
         && data.liveTrackingAuthorized is bool
         && (!('workerRating' in data) || (data.workerRating is number && data.workerRating >= 1 && data.workerRating <= 5))
         && (!('employerFeedback' in data) || (data.employerFeedback is string && data.employerFeedback.size() <= 500))
@@ -589,7 +610,7 @@ service cloud.firestore {
         && (!('toneDealConfirmedEnabled' in data) || data.toneDealConfirmedEnabled is bool)
         && (!('toneDealClosedEnabled' in data) || data.toneDealClosedEnabled is bool)
         && (!('preferredCategories' in data) || (data.preferredCategories is list && data.preferredCategories.size() <= 35 && (data.preferredCategories.size() == 0 || data.preferredCategories[0] is string)))
-        && (!('preferredRadiusKm' in data) || data.preferredRadiusKm in [5, 10, 20, 30])
+        && (!('preferredRadiusKm' in data) || data.preferredRadiusKm in [2, 5, 10, 20, 30])
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -1031,7 +1052,9 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/applications/$(appId)).data.status == 'accepted'
         && (
           !('dealStatus' in get(/databases/$(database)/documents/applications/$(appId)).data)
-          || get(/databases/$(database)/documents/applications/$(appId)).data.dealStatus in ['OFFER_ACCEPTED', 'DEAL_CONFIRMED', 'WORK_IN_PROGRESS']
+          || get(/databases/$(database)/documents/applications/$(appId)).data.dealStatus in [
+            'OFFER_ACCEPTED', 'DEAL_CONFIRMED', 'WORKER_ON_THE_WAY', 'WORKER_ARRIVED', 'WORK_IN_PROGRESS'
+          ]
         );
     }
 
@@ -1090,12 +1113,13 @@ service cloud.firestore {
           (
             isOwner(existing().ownerUid)
             && existing().verificationStatus != 'suspended'
+            && (!('referralCode' in existing()) || incoming().referralCode == existing().referralCode)
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'displayName', 'primarySkill', 'skills', 'experienceYears',
               'expectedWage', 'wageUnit', 'preferredWorkType', 'availabilityStatus',
               'state', 'district', 'cityOrVillage', 'approxLat', 'approxLng',
               'languagesKnown', 'gender', 'education', 'isWomenEnterprise', 'photoDocId',
-              'preferredLanguage', 'preferredRadiusKm', 'voiceAlertsEnabled', 'updatedAt'
+              'preferredLanguage', 'preferredRadiusKm', 'voiceAlertsEnabled', 'referralCode', 'updatedAt'
             ])
           ) ||
           (
@@ -1138,11 +1162,12 @@ service cloud.firestore {
           (
             isOwner(existing().ownerUid)
             && incoming().mobileVerified == true
+            && (!('referralCode' in existing()) || incoming().referralCode == existing().referralCode)
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'fullName', 'mobile', 'mobileVerified', 'verificationMethod', 'testPinHash',
               'email', 'ageConfirmed', 'preferredWorkLocation', 'liveLocationConsent',
               'privacyConsent', 'idVerificationStatus', 'certificateNotes', 'photoUrl',
-              'photoDocId', 'updatedAt'
+              'photoDocId', 'referralCode', 'updatedAt'
             ])
             && incoming().idVerificationStatus in ['not_submitted', 'voluntary_pending']
           )
@@ -1237,7 +1262,8 @@ service cloud.firestore {
               'isAccessible', 'biddingEnabled', 'photoAttachment',
               'workPhotoUrls', 'orderKind', 'pickupLocationLabel', 'pickupLat', 'pickupLng',
               'destinationLocationLabel', 'destinationLat', 'destinationLng', 'transportItemType',
-              'photoAnalyzed', 'status', 'dealStatus', 'acceptedApplicationId', 'acceptedWorkerUid',
+              'photoAnalyzed', 'subService', 'preferredTimeType', 'startingPrice',
+              'status', 'dealStatus', 'acceptedApplicationId', 'acceptedWorkerUid',
               'notifiedWorkerUids', 'approxLocationLabel', 'initialRadiusKm',
               'currentRadiusKm', 'radiusStageUpdatedAt', 'updatedAt'
             ])
@@ -1255,7 +1281,7 @@ service cloud.firestore {
             && !(existing().status in ['completed', 'cancelled'])
             && incoming().diff(existing()).affectedKeys().hasOnly(['dealStatus', 'status', 'updatedAt'])
             && isValidDealStatus(incoming().dealStatus)
-            && incoming().dealStatus in ['OFFER_ACCEPTED', 'DEAL_CONFIRMED', 'WORK_IN_PROGRESS', 'WORK_COMPLETED', 'CANCELLED']
+            && incoming().dealStatus in ['OFFER_ACCEPTED', 'DEAL_CONFIRMED', 'WORKER_ON_THE_WAY', 'WORKER_ARRIVED', 'WORK_IN_PROGRESS', 'WORK_COMPLETED', 'CANCELLED']
           ) ||
           (
             existing().status == 'open'
@@ -1305,13 +1331,13 @@ service cloud.firestore {
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'status', 'dealStatus', 'proposedWage', 'offerAmount', 'travelCharges', 'estimatedArrivalTime',
               'offerMessage', 'offerSubmittedAt', 'note', 'liveTrackingAuthorized',
-              'dealConfirmedAt', 'workStartedAt', 'completedAt', 'cancelledAt',
-              'cancelledByUid', 'updatedAt'
+              'dealConfirmedAt', 'onTheWayAt', 'arrivedAt', 'workStartedAt', 'completedAt', 'cancelledAt',
+              'cancelledByUid', 'quoteRevisionRequested', 'updatedAt'
             ])
             && incoming().status in ['applied', 'accepted', 'declined', 'work_completed']
             && (incoming().status != 'accepted' || existing().status in ['invited', 'accepted'])
             && (incoming().status != 'work_completed' || existing().status == 'accepted')
-            && (!incoming().liveTrackingAuthorized || incoming().status == 'accepted')
+            && (!incoming().liveTrackingAuthorized || existing().status == 'accepted' || existing().status == 'invited')
           ) ||
           (
             !(existing().status == 'work_completed' || ('dealStatus' in existing() && existing().dealStatus in ['WORK_COMPLETED', 'CANCELLED']))
@@ -1319,7 +1345,7 @@ service cloud.firestore {
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'status', 'dealStatus', 'agreedPrice', 'dealConfirmedAt',
               'liveTrackingAuthorized', 'completedAt', 'cancelledAt', 'cancelledByUid',
-              'workerRating', 'employerFeedback', 'updatedAt'
+              'quoteRevisionRequested', 'workerRating', 'employerFeedback', 'updatedAt'
             ])
             && incoming().status in ['invited', 'accepted', 'declined', 'work_completed']
             && (!('liveTrackingAuthorized' in incoming()) || !incoming().liveTrackingAuthorized || incoming().status == 'accepted')
@@ -1653,12 +1679,18 @@ service cloud.firestore {
       allow list: if isAdmin();
       allow create: if isValidId(settingId)
         && isAdmin()
-        && isValidDemoModeConfig(incoming())
+        && (
+          (settingId == 'demo_config' && isValidDemoModeConfig(incoming())) ||
+          (settingId == 'referral_config' && isValidReferralConfig(incoming()))
+        )
         && incoming().updatedByUid == request.auth.uid
         && isValidTimestampOnCreate();
       allow update: if isValidId(settingId)
         && isAdmin()
-        && isValidDemoModeConfig(incoming())
+        && (
+          (settingId == 'demo_config' && isValidDemoModeConfig(incoming())) ||
+          (settingId == 'referral_config' && isValidReferralConfig(incoming()))
+        )
         && incoming().updatedByUid == request.auth.uid
         && isValidTimestampOnUpdate();
       allow delete: if isValidId(settingId) && isAdmin();
@@ -1985,6 +2017,625 @@ service cloud.firestore {
       allow delete: if isValidId(shareId)
         && isVerifiedUser()
         && (isOwner(existing().ownerUid) || isAdmin());
+    }
+
+    // ============================================================
+    // ADVERTISEMENT & WORKER REFERRAL VALIDATION HELPERS
+    // ============================================================
+
+    function isValidReferralConfig(data) {
+      return data.keys().hasAll([
+          'paidRegistrationEnabled', 'registrationFeeInr', 'referralRewardInr',
+          'holdingDays', 'updatedByUid', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'paidRegistrationEnabled', 'registrationFeeInr', 'referralRewardInr',
+          'holdingDays', 'programNoticeEn', 'programNoticeHi', 'programNoticeMr',
+          'updatedByUid', 'createdAt', 'updatedAt'
+        ])
+        && data.paidRegistrationEnabled is bool
+        && data.registrationFeeInr is number && data.registrationFeeInr >= 0 && data.registrationFeeInr <= 50000
+        && data.referralRewardInr is number && data.referralRewardInr >= 0 && data.referralRewardInr <= 10000
+        && data.holdingDays is number && data.holdingDays >= 0 && data.holdingDays <= 90
+        && (!('programNoticeEn' in data) || (data.programNoticeEn is string && data.programNoticeEn.size() <= 400))
+        && (!('programNoticeHi' in data) || (data.programNoticeHi is string && data.programNoticeHi.size() <= 400))
+        && (!('programNoticeMr' in data) || (data.programNoticeMr is string && data.programNoticeMr.size() <= 400))
+        && isValidId(data.updatedByUid)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdvertiserProfile(data) {
+      return data.keys().hasAll([
+          'ownerUid', 'businessName', 'contactPerson', 'mobile', 'businessAddress',
+          'state', 'district', 'city', 'businessCategory', 'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid', 'businessName', 'contactPerson', 'mobile', 'whatsappNumber', 'email',
+          'businessAddress', 'state', 'district', 'city', 'businessCategory', 'websiteUrl',
+          'status', 'adminNotes', 'reviewedByUid', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerUid)
+        && data.businessName is string && data.businessName.size() >= 2 && data.businessName.size() <= 160
+        && data.contactPerson is string && data.contactPerson.size() >= 2 && data.contactPerson.size() <= 120
+        && data.mobile is string && data.mobile.size() >= 10 && data.mobile.size() <= 20
+        && (!('whatsappNumber' in data) || (data.whatsappNumber is string && data.whatsappNumber.size() <= 20))
+        && (!('email' in data) || (data.email is string && data.email.size() <= 200))
+        && data.businessAddress is string && data.businessAddress.size() >= 4 && data.businessAddress.size() <= 300
+        && data.state is string && data.state.size() >= 2 && data.state.size() <= 80
+        && data.district is string && data.district.size() >= 2 && data.district.size() <= 80
+        && data.city is string && data.city.size() >= 2 && data.city.size() <= 100
+        && data.businessCategory is string && data.businessCategory.size() >= 2 && data.businessCategory.size() <= 80
+        && (!('websiteUrl' in data) || (data.websiteUrl is string && data.websiteUrl.size() <= 300))
+        && data.status in ['pending', 'approved', 'rejected', 'suspended']
+        && (!('adminNotes' in data) || (data.adminNotes is string && data.adminNotes.size() <= 500))
+        && (!('reviewedByUid' in data) || isValidId(data.reviewedByUid))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdvertisement(data) {
+      return data.keys().hasAll([
+          'ownerUid', 'advertiserName', 'title', 'description', 'bannerImageUrl',
+          'targetCategories', 'targetStates', 'targetDistricts', 'targetCities',
+          'allLocations', 'contactAction', 'startDate', 'endDate', 'status',
+          'priority', 'dailyImpressionLimit', 'totalImpressionLimit', 'createdByAdmin',
+          'impressionsCount', 'uniqueViewsCount', 'clicksCount',
+          'callClicksCount', 'whatsappClicksCount', 'websiteClicksCount',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid', 'advertiserId', 'advertiserName', 'title', 'description', 'bannerImageUrl',
+          'targetCategories', 'targetStates', 'targetDistricts', 'targetCities', 'targetAreas',
+          'allLocations', 'contactAction', 'callNumber', 'whatsappNumber', 'websiteUrl', 'ctaLabel',
+          'startDate', 'endDate', 'preferredDurationDays', 'status', 'priority',
+          'dailyImpressionLimit', 'totalImpressionLimit', 'budgetInr', 'adminNotes',
+          'createdByAdmin', 'approvedByUid', 'impressionsCount', 'uniqueViewsCount',
+          'clicksCount', 'callClicksCount', 'whatsappClicksCount', 'websiteClicksCount',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerUid)
+        && (!('advertiserId' in data) || isValidId(data.advertiserId))
+        && data.advertiserName is string && data.advertiserName.size() >= 2 && data.advertiserName.size() <= 160
+        && data.title is string && data.title.size() >= 3 && data.title.size() <= 140
+        && data.description is string && data.description.size() >= 5 && data.description.size() <= 400
+        && data.bannerImageUrl is string && data.bannerImageUrl.size() >= 5 && data.bannerImageUrl.size() <= 110000
+        && data.targetCategories is list && data.targetCategories.size() >= 1 && data.targetCategories.size() <= 15 && data.targetCategories[0] is string
+        && data.targetStates is list && data.targetStates.size() <= 20 && (data.targetStates.size() == 0 || data.targetStates[0] is string)
+        && data.targetDistricts is list && data.targetDistricts.size() <= 30 && (data.targetDistricts.size() == 0 || data.targetDistricts[0] is string)
+        && data.targetCities is list && data.targetCities.size() <= 30 && (data.targetCities.size() == 0 || data.targetCities[0] is string)
+        && (!('targetAreas' in data) || (data.targetAreas is list && data.targetAreas.size() <= 30 && (data.targetAreas.size() == 0 || data.targetAreas[0] is string)))
+        && data.allLocations is bool
+        && data.contactAction in ['call', 'whatsapp', 'website']
+        && (!('callNumber' in data) || (data.callNumber is string && data.callNumber.size() <= 20))
+        && (!('whatsappNumber' in data) || (data.whatsappNumber is string && data.whatsappNumber.size() <= 20))
+        && (!('websiteUrl' in data) || (data.websiteUrl is string && data.websiteUrl.size() <= 300))
+        && (!('ctaLabel' in data) || (data.ctaLabel is string && data.ctaLabel.size() <= 40))
+        && data.startDate is string && data.startDate.size() >= 8 && data.startDate.size() <= 20
+        && data.endDate is string && data.endDate.size() >= 8 && data.endDate.size() <= 20
+        && (!('preferredDurationDays' in data) || (data.preferredDurationDays is number && data.preferredDurationDays >= 1 && data.preferredDurationDays <= 730))
+        && data.status in ['draft', 'pending', 'approved', 'active', 'paused', 'rejected', 'expired']
+        && data.priority is number && data.priority >= 1 && data.priority <= 10
+        && data.dailyImpressionLimit is number && data.dailyImpressionLimit >= 0 && data.dailyImpressionLimit <= 10000000
+        && data.totalImpressionLimit is number && data.totalImpressionLimit >= 0 && data.totalImpressionLimit <= 100000000
+        && (!('budgetInr' in data) || (data.budgetInr is number && data.budgetInr >= 0 && data.budgetInr <= 10000000))
+        && (!('adminNotes' in data) || (data.adminNotes is string && data.adminNotes.size() <= 500))
+        && data.createdByAdmin is bool
+        && (!('approvedByUid' in data) || isValidId(data.approvedByUid))
+        && data.impressionsCount is number && data.impressionsCount >= 0 && data.impressionsCount <= 100000000
+        && data.uniqueViewsCount is number && data.uniqueViewsCount >= 0 && data.uniqueViewsCount <= 100000000
+        && data.clicksCount is number && data.clicksCount >= 0 && data.clicksCount <= 100000000
+        && data.callClicksCount is number && data.callClicksCount >= 0 && data.callClicksCount <= 100000000
+        && data.whatsappClicksCount is number && data.whatsappClicksCount >= 0 && data.whatsappClicksCount <= 100000000
+        && data.websiteClicksCount is number && data.websiteClicksCount >= 0 && data.websiteClicksCount <= 100000000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdvertisementCategory(data) {
+      return data.keys().hasAll(['slug', 'nameEn', 'linkedServiceCategories', 'active', 'createdByUid', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['slug', 'nameEn', 'nameHi', 'nameMr', 'linkedServiceCategories', 'active', 'createdByUid', 'createdAt', 'updatedAt'])
+        && data.slug is string && data.slug.size() >= 2 && data.slug.size() <= 64 && data.slug.matches('^[a-z0-9_\\-]+$')
+        && data.nameEn is string && data.nameEn.size() >= 2 && data.nameEn.size() <= 100
+        && (!('nameHi' in data) || (data.nameHi is string && data.nameHi.size() <= 100))
+        && (!('nameMr' in data) || (data.nameMr is string && data.nameMr.size() <= 100))
+        && data.linkedServiceCategories is list && data.linkedServiceCategories.size() >= 1 && data.linkedServiceCategories.size() <= 15 && data.linkedServiceCategories[0] is string
+        && data.active is bool
+        && isValidId(data.createdByUid)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdvertisementCampaign(data) {
+      return data.keys().hasAll([
+          'advertiserUid', 'advertisementId', 'campaignName', 'budgetInr',
+          'paymentStatus', 'startDate', 'endDate', 'status', 'createdByUid', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'advertiserUid', 'advertisementId', 'campaignName', 'budgetInr',
+          'paymentStatus', 'startDate', 'endDate', 'status', 'notes', 'createdByUid', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.advertiserUid)
+        && isValidId(data.advertisementId)
+        && data.campaignName is string && data.campaignName.size() >= 2 && data.campaignName.size() <= 160
+        && data.budgetInr is number && data.budgetInr >= 0 && data.budgetInr <= 10000000
+        && data.paymentStatus in ['unpaid', 'paid', 'waived', 'refunded']
+        && data.startDate is string && data.startDate.size() >= 8 && data.startDate.size() <= 20
+        && data.endDate is string && data.endDate.size() >= 8 && data.endDate.size() <= 20
+        && data.status in ['scheduled', 'running', 'paused', 'completed', 'cancelled']
+        && (!('notes' in data) || (data.notes is string && data.notes.size() <= 500))
+        && isValidId(data.createdByUid)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdvertisementImpression(data) {
+      return data.keys().hasAll(['adId', 'advertiserUid', 'category', 'state', 'district', 'placement', 'sessionHash', 'createdAt'])
+        && data.keys().hasOnly(['adId', 'advertiserUid', 'category', 'state', 'district', 'placement', 'sessionHash', 'createdAt'])
+        && isValidId(data.adId)
+        && isValidId(data.advertiserUid)
+        && data.category is string && data.category.size() >= 1 && data.category.size() <= 80
+        && data.state is string && data.state.size() <= 80
+        && data.district is string && data.district.size() <= 80
+        && data.placement in ['homepage', 'category_selection', 'service_form', 'service_info']
+        && data.sessionHash is string && data.sessionHash.size() >= 6 && data.sessionHash.size() <= 64
+        && data.createdAt is timestamp;
+    }
+
+    function isValidAdvertisementClick(data) {
+      return data.keys().hasAll(['adId', 'advertiserUid', 'category', 'state', 'district', 'placement', 'actionType', 'sessionHash', 'createdAt'])
+        && data.keys().hasOnly(['adId', 'advertiserUid', 'category', 'state', 'district', 'placement', 'actionType', 'sessionHash', 'createdAt'])
+        && isValidId(data.adId)
+        && isValidId(data.advertiserUid)
+        && data.category is string && data.category.size() >= 1 && data.category.size() <= 80
+        && data.state is string && data.state.size() <= 80
+        && data.district is string && data.district.size() <= 80
+        && data.placement in ['homepage', 'category_selection', 'service_form', 'service_info']
+        && data.actionType in ['call', 'whatsapp', 'website']
+        && data.sessionHash is string && data.sessionHash.size() >= 6 && data.sessionHash.size() <= 64
+        && data.createdAt is timestamp;
+    }
+
+    function isValidReferralCodeIndex(data) {
+      return data.keys().hasAll(['referralCode', 'ownerUid', 'workerName', 'registrationId', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['referralCode', 'ownerUid', 'workerName', 'registrationId', 'createdAt', 'updatedAt'])
+        && data.referralCode is string && data.referralCode.size() >= 4 && data.referralCode.size() <= 32 && data.referralCode.matches('^[A-Z0-9_\\-]+$')
+        && isValidId(data.ownerUid)
+        && data.workerName is string && data.workerName.size() >= 2 && data.workerName.size() <= 120
+        && data.registrationId is string && data.registrationId.size() >= 5 && data.registrationId.size() <= 40
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWorkerReferral(data) {
+      return data.keys().hasAll([
+          'referrerUid', 'referrerName', 'referralCode', 'referredUid', 'referredWorkerName',
+          'referredRegistrationId', 'referredMobileHash', 'sourceChannel',
+          'registrationPaymentStatus', 'registrationFeePaidInr', 'rewardStatus',
+          'rewardAmountInr', 'locked', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'referrerUid', 'referrerName', 'referralCode', 'referredUid', 'referredWorkerName',
+          'referredRegistrationId', 'referredMobileHash', 'sourceChannel',
+          'registrationPaymentStatus', 'registrationFeePaidInr', 'rewardStatus',
+          'rewardAmountInr', 'paymentReference', 'fraudFlags', 'adminNotes', 'isSimulation',
+          'locked', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.referrerUid)
+        && data.referrerName is string && data.referrerName.size() >= 2 && data.referrerName.size() <= 120
+        && data.referralCode is string && data.referralCode.size() >= 4 && data.referralCode.size() <= 32 && data.referralCode.matches('^[A-Z0-9_\\-]+$')
+        && isValidId(data.referredUid)
+        && data.referrerUid != data.referredUid
+        && data.referredWorkerName is string && data.referredWorkerName.size() >= 2 && data.referredWorkerName.size() <= 120
+        && data.referredRegistrationId is string && data.referredRegistrationId.size() >= 5 && data.referredRegistrationId.size() <= 40
+        && data.referredMobileHash is string && data.referredMobileHash.size() >= 8 && data.referredMobileHash.size() <= 128
+        && data.sourceChannel in ['url_link', 'manual_code']
+        && data.registrationPaymentStatus in ['free_launch', 'payment_pending', 'paid_verified', 'payment_failed', 'refunded', 'cancelled']
+        && data.registrationFeePaidInr is number && data.registrationFeePaidInr >= 0 && data.registrationFeePaidInr <= 50000
+        && data.rewardStatus in ['free_not_eligible', 'pending_verification', 'approved', 'paid', 'rejected']
+        && data.rewardAmountInr is number && data.rewardAmountInr >= 0 && data.rewardAmountInr <= 10000
+        && (!('paymentReference' in data) || (data.paymentReference is string && data.paymentReference.size() <= 120))
+        && (!('fraudFlags' in data) || (data.fraudFlags is list && data.fraudFlags.size() <= 10 && (data.fraudFlags.size() == 0 || data.fraudFlags[0] is string)))
+        && (!('adminNotes' in data) || (data.adminNotes is string && data.adminNotes.size() <= 500))
+        && (!('isSimulation' in data) || data.isSimulation is bool)
+        && data.locked is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidReferralReward(data) {
+      return data.keys().hasAll([
+          'referralId', 'referrerUid', 'referrerName', 'referredUid', 'referredWorkerName',
+          'referralCode', 'registrationFeeInr', 'rewardAmountInr', 'status',
+          'eligibilityReason', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'referralId', 'referrerUid', 'referrerName', 'referredUid', 'referredWorkerName',
+          'referralCode', 'registrationFeeInr', 'rewardAmountInr', 'status',
+          'eligibilityReason', 'paymentReference', 'payoutId', 'reviewedByUid',
+          'adminNotes', 'isSimulation', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.referralId)
+        && isValidId(data.referrerUid)
+        && data.referrerName is string && data.referrerName.size() >= 2 && data.referrerName.size() <= 120
+        && isValidId(data.referredUid)
+        && data.referrerUid != data.referredUid
+        && data.referredWorkerName is string && data.referredWorkerName.size() >= 2 && data.referredWorkerName.size() <= 120
+        && data.referralCode is string && data.referralCode.size() >= 4 && data.referralCode.size() <= 32
+        && data.registrationFeeInr is number && data.registrationFeeInr >= 0 && data.registrationFeeInr <= 50000
+        && data.rewardAmountInr is number && data.rewardAmountInr >= 0 && data.rewardAmountInr <= 10000
+        && data.status in ['pending', 'approved', 'paid', 'rejected']
+        && data.eligibilityReason is string && data.eligibilityReason.size() >= 3 && data.eligibilityReason.size() <= 300
+        && (!('paymentReference' in data) || (data.paymentReference is string && data.paymentReference.size() <= 120))
+        && (!('payoutId' in data) || isValidId(data.payoutId))
+        && (!('reviewedByUid' in data) || isValidId(data.reviewedByUid))
+        && (!('adminNotes' in data) || (data.adminNotes is string && data.adminNotes.size() <= 500))
+        && (!('isSimulation' in data) || data.isSimulation is bool)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidReferralWallet(data) {
+      return data.keys().hasAll([
+          'ownerUid', 'referralCode', 'totalReferrals', 'verifiedPaidReferrals',
+          'pendingBalanceInr', 'approvedBalanceInr', 'paidBalanceInr', 'totalEarnedInr',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid', 'referralCode', 'totalReferrals', 'verifiedPaidReferrals',
+          'pendingBalanceInr', 'approvedBalanceInr', 'paidBalanceInr', 'totalEarnedInr',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerUid)
+        && data.referralCode is string && data.referralCode.size() >= 4 && data.referralCode.size() <= 32
+        && data.totalReferrals is number && data.totalReferrals >= 0 && data.totalReferrals <= 100000
+        && data.verifiedPaidReferrals is number && data.verifiedPaidReferrals >= 0 && data.verifiedPaidReferrals <= 100000
+        && data.pendingBalanceInr is number && data.pendingBalanceInr >= 0 && data.pendingBalanceInr <= 10000000
+        && data.approvedBalanceInr is number && data.approvedBalanceInr >= 0 && data.approvedBalanceInr <= 10000000
+        && data.paidBalanceInr is number && data.paidBalanceInr >= 0 && data.paidBalanceInr <= 10000000
+        && data.totalEarnedInr is number && data.totalEarnedInr >= 0 && data.totalEarnedInr <= 10000000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidReferralPayout(data) {
+      return data.keys().hasAll([
+          'referrerUid', 'referrerName', 'rewardIds', 'amountInr', 'payoutMethod',
+          'transactionReference', 'status', 'recordedByUid', 'paidAt', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'referrerUid', 'referrerName', 'rewardIds', 'amountInr', 'payoutMethod',
+          'transactionReference', 'status', 'notes', 'recordedByUid', 'paidAt', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.referrerUid)
+        && data.referrerName is string && data.referrerName.size() >= 2 && data.referrerName.size() <= 120
+        && data.rewardIds is list && data.rewardIds.size() >= 1 && data.rewardIds.size() <= 50 && data.rewardIds[0] is string
+        && data.amountInr is number && data.amountInr > 0 && data.amountInr <= 1000000
+        && data.payoutMethod in ['upi', 'bank_transfer', 'cash_voucher']
+        && data.transactionReference is string && data.transactionReference.size() >= 3 && data.transactionReference.size() <= 120
+        && data.status in ['recorded_paid', 'reversed']
+        && (!('notes' in data) || (data.notes is string && data.notes.size() <= 500))
+        && isValidId(data.recordedByUid)
+        && data.paidAt is string && data.paidAt.size() >= 8 && data.paidAt.size() <= 40
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // ============================================================
+    // ADVERTISEMENT COLLECTION RULES
+    // ============================================================
+
+    match /advertisers/{advertiserId} {
+      allow get: if isValidId(advertiserId)
+        && isVerifiedUser()
+        && (isOwner(existing().ownerUid) || isAdmin());
+      allow list: if isVerifiedUser()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow create: if isValidId(advertiserId)
+        && isVerifiedUser()
+        && isValidAdvertiserProfile(incoming())
+        && isValidTimestampOnCreate()
+        && (
+          isAdmin() ||
+          (
+            isOwner(advertiserId)
+            && incoming().ownerUid == request.auth.uid
+            && incoming().status == 'pending'
+          )
+        );
+      allow update: if isValidId(advertiserId)
+        && isVerifiedUser()
+        && isValidAdvertiserProfile(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && (
+          isAdmin() ||
+          (
+            isOwner(existing().ownerUid)
+            && existing().status != 'suspended'
+            && incoming().status == existing().status
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'businessName', 'contactPerson', 'mobile', 'whatsappNumber', 'email',
+              'businessAddress', 'state', 'district', 'city', 'businessCategory',
+              'websiteUrl', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isValidId(advertiserId) && isAdmin();
+    }
+
+    match /advertisements/{adId} {
+      allow get: if isValidId(adId) && (
+        existing().status == 'active'
+        || (isVerifiedUser() && (existing().ownerUid == request.auth.uid || isAdmin()))
+      );
+      allow list: if existing().status == 'active'
+        || (isVerifiedUser() && (existing().ownerUid == request.auth.uid || isAdmin()));
+      allow create: if isValidId(adId)
+        && isVerifiedUser()
+        && isValidAdvertisement(incoming())
+        && isValidTimestampOnCreate()
+        && (
+          isAdmin() ||
+          (
+            incoming().ownerUid == request.auth.uid
+            && incoming().createdByAdmin == false
+            && incoming().status in ['draft', 'pending']
+            && incoming().priority == 5
+            && incoming().impressionsCount == 0
+            && incoming().uniqueViewsCount == 0
+            && incoming().clicksCount == 0
+            && incoming().callClicksCount == 0
+            && incoming().whatsappClicksCount == 0
+            && incoming().websiteClicksCount == 0
+          )
+        );
+      allow update: if isValidId(adId)
+        && isValidAdvertisement(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && (
+          isAdmin()
+          || (
+            isVerifiedUser()
+            && isOwner(existing().ownerUid)
+            && existing().status in ['draft', 'pending', 'paused', 'rejected']
+            && incoming().status in ['draft', 'pending']
+            && incoming().createdByAdmin == existing().createdByAdmin
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'advertiserName', 'title', 'description', 'bannerImageUrl',
+              'targetCategories', 'targetStates', 'targetDistricts', 'targetCities', 'targetAreas',
+              'allLocations', 'contactAction', 'callNumber', 'whatsappNumber', 'websiteUrl', 'ctaLabel',
+              'startDate', 'endDate', 'preferredDurationDays', 'status', 'updatedAt'
+            ])
+          )
+          || (
+            // Anonymous or signed-in aggregate impression/click counter increment ONLY on active ads (max +1 per event)
+            existing().status == 'active'
+            && incoming().status == 'active'
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'impressionsCount', 'uniqueViewsCount', 'clicksCount',
+              'callClicksCount', 'whatsappClicksCount', 'websiteClicksCount', 'updatedAt'
+            ])
+            && incoming().impressionsCount >= existing().impressionsCount
+            && incoming().impressionsCount <= existing().impressionsCount + 1
+            && incoming().uniqueViewsCount >= existing().uniqueViewsCount
+            && incoming().uniqueViewsCount <= existing().uniqueViewsCount + 1
+            && incoming().clicksCount >= existing().clicksCount
+            && incoming().clicksCount <= existing().clicksCount + 1
+            && incoming().callClicksCount >= existing().callClicksCount
+            && incoming().callClicksCount <= existing().callClicksCount + 1
+            && incoming().whatsappClicksCount >= existing().whatsappClicksCount
+            && incoming().whatsappClicksCount <= existing().whatsappClicksCount + 1
+            && incoming().websiteClicksCount >= existing().websiteClicksCount
+            && incoming().websiteClicksCount <= existing().websiteClicksCount + 1
+          )
+        );
+      allow delete: if isValidId(adId) && isAdmin();
+    }
+
+    match /advertisementCategories/{categoryId} {
+      allow get: if isValidId(categoryId);
+      allow list: if true;
+      allow create: if isValidId(categoryId)
+        && isAdmin()
+        && isValidAdvertisementCategory(incoming())
+        && incoming().createdByUid == request.auth.uid
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(categoryId)
+        && isAdmin()
+        && isValidAdvertisementCategory(incoming())
+        && isValidTimestampOnUpdate();
+      allow delete: if isValidId(categoryId) && isAdmin();
+    }
+
+    match /advertisementCampaigns/{campaignId} {
+      allow get: if isValidId(campaignId)
+        && isVerifiedUser()
+        && (existing().advertiserUid == request.auth.uid || isAdmin());
+      allow list: if isVerifiedUser()
+        && (existing().advertiserUid == request.auth.uid || isAdmin());
+      allow create: if isValidId(campaignId)
+        && isAdmin()
+        && isValidAdvertisementCampaign(incoming())
+        && incoming().createdByUid == request.auth.uid
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(campaignId)
+        && isAdmin()
+        && isValidAdvertisementCampaign(incoming())
+        && isValidTimestampOnUpdate();
+      allow delete: if isValidId(campaignId) && isAdmin();
+    }
+
+    match /advertisementImpressions/{impressionId} {
+      allow get: if isValidId(impressionId)
+        && isVerifiedUser()
+        && (existing().advertiserUid == request.auth.uid || isAdmin());
+      allow list: if isVerifiedUser()
+        && (existing().advertiserUid == request.auth.uid || isAdmin());
+      allow create: if isValidId(impressionId)
+        && isValidAdvertisementImpression(incoming())
+        && incoming().createdAt == request.time
+        && exists(/databases/$(database)/documents/advertisements/$(incoming().adId))
+        && get(/databases/$(database)/documents/advertisements/$(incoming().adId)).data.status == 'active'
+        && get(/databases/$(database)/documents/advertisements/$(incoming().adId)).data.ownerUid == incoming().advertiserUid;
+      allow update: if false;
+      allow delete: if isValidId(impressionId) && isAdmin();
+    }
+
+    match /advertisementClicks/{clickId} {
+      allow get: if isValidId(clickId)
+        && isVerifiedUser()
+        && (existing().advertiserUid == request.auth.uid || isAdmin());
+      allow list: if isVerifiedUser()
+        && (existing().advertiserUid == request.auth.uid || isAdmin());
+      allow create: if isValidId(clickId)
+        && isValidAdvertisementClick(incoming())
+        && incoming().createdAt == request.time
+        && exists(/databases/$(database)/documents/advertisements/$(incoming().adId))
+        && get(/databases/$(database)/documents/advertisements/$(incoming().adId)).data.status == 'active'
+        && get(/databases/$(database)/documents/advertisements/$(incoming().adId)).data.ownerUid == incoming().advertiserUid;
+      allow update: if false;
+      allow delete: if isValidId(clickId) && isAdmin();
+    }
+
+    // ============================================================
+    // WORKER REFERRAL & REWARD COLLECTION RULES
+    // ============================================================
+
+    match /referralCodeIndex/{codeId} {
+      allow get: if isValidId(codeId);
+      allow list: if isAdmin();
+      allow create: if isValidId(codeId)
+        && isVerifiedUser()
+        && isValidReferralCodeIndex(incoming())
+        && incoming().referralCode == codeId
+        && !exists(/databases/$(database)/documents/referralCodeIndex/$(codeId))
+        && isValidTimestampOnCreate()
+        && (isAdmin() || incoming().ownerUid == request.auth.uid);
+      allow update: if isValidId(codeId)
+        && isAdmin()
+        && isValidReferralCodeIndex(incoming())
+        && isValidTimestampOnUpdate();
+      allow delete: if isValidId(codeId) && isAdmin();
+    }
+
+    match /workerReferrals/{referralId} {
+      allow get: if isValidId(referralId)
+        && isVerifiedUser()
+        && (
+          isAdmin()
+          || existing().referrerUid == request.auth.uid
+          || existing().referredUid == request.auth.uid
+        );
+      allow list: if isVerifiedUser()
+        && (
+          isAdmin()
+          || existing().referrerUid == request.auth.uid
+          || existing().referredUid == request.auth.uid
+        );
+      allow create: if isValidId(referralId)
+        && isVerifiedUser()
+        && isValidWorkerReferral(incoming())
+        && isValidTimestampOnCreate()
+        && (
+          isAdmin() ||
+          (
+            // One locked referral record per newly registered worker, doc ID == referredUid, no self-referral, ₹0 during free launch
+            referralId == request.auth.uid
+            && incoming().referredUid == request.auth.uid
+            && incoming().referrerUid != request.auth.uid
+            && incoming().locked == true
+            && incoming().registrationPaymentStatus == 'free_launch'
+            && incoming().registrationFeePaidInr == 0
+            && incoming().rewardStatus == 'free_not_eligible'
+            && incoming().rewardAmountInr == 0
+            && (!('isSimulation' in incoming()) || incoming().isSimulation == false)
+            && !exists(/databases/$(database)/documents/workerReferrals/$(referralId))
+            && exists(/databases/$(database)/documents/referralCodeIndex/$(incoming().referralCode))
+            && get(/databases/$(database)/documents/referralCodeIndex/$(incoming().referralCode)).data.ownerUid == incoming().referrerUid
+          )
+        );
+      // Only Admin can transition payment/reward status; referral ownership (referrerUid, referredUid, referralCode) is permanently locked
+      allow update: if isValidId(referralId)
+        && isAdmin()
+        && isValidWorkerReferral(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().referrerUid == existing().referrerUid
+        && incoming().referredUid == existing().referredUid
+        && incoming().referralCode == existing().referralCode;
+      allow delete: if isValidId(referralId) && isAdmin();
+    }
+
+    match /referralRewards/{rewardId} {
+      allow get: if isValidId(rewardId)
+        && isVerifiedUser()
+        && (isAdmin() || existing().referrerUid == request.auth.uid);
+      allow list: if isVerifiedUser()
+        && (isAdmin() || existing().referrerUid == request.auth.uid);
+      allow create: if isValidId(rewardId)
+        && isAdmin()
+        && isValidReferralReward(incoming())
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(rewardId)
+        && isAdmin()
+        && isValidReferralReward(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().referralId == existing().referralId
+        && incoming().referrerUid == existing().referrerUid
+        && incoming().referredUid == existing().referredUid;
+      allow delete: if isValidId(rewardId) && isAdmin();
+    }
+
+    match /referralWallets/{walletId} {
+      allow get: if isValidId(walletId)
+        && isVerifiedUser()
+        && (isAdmin() || isOwner(walletId));
+      allow list: if isVerifiedUser()
+        && (isAdmin() || existing().ownerUid == request.auth.uid);
+      allow create: if isValidId(walletId)
+        && isVerifiedUser()
+        && isValidReferralWallet(incoming())
+        && isValidTimestampOnCreate()
+        && (
+          isAdmin() ||
+          (
+            // Worker can initialize their own empty ₹0 wallet once
+            isOwner(walletId)
+            && incoming().ownerUid == request.auth.uid
+            && incoming().totalReferrals == 0
+            && incoming().verifiedPaidReferrals == 0
+            && incoming().pendingBalanceInr == 0
+            && incoming().approvedBalanceInr == 0
+            && incoming().paidBalanceInr == 0
+            && incoming().totalEarnedInr == 0
+          )
+        );
+      allow update: if isValidId(walletId)
+        && isAdmin()
+        && isValidReferralWallet(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid;
+      allow delete: if isValidId(walletId) && isAdmin();
+    }
+
+    match /referralPayouts/{payoutId} {
+      allow get: if isValidId(payoutId)
+        && isVerifiedUser()
+        && (isAdmin() || existing().referrerUid == request.auth.uid);
+      allow list: if isVerifiedUser()
+        && (isAdmin() || existing().referrerUid == request.auth.uid);
+      allow create: if isValidId(payoutId)
+        && isAdmin()
+        && isValidReferralPayout(incoming())
+        && incoming().recordedByUid == request.auth.uid
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(payoutId)
+        && isAdmin()
+        && isValidReferralPayout(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().referrerUid == existing().referrerUid;
+      allow delete: if isValidId(payoutId) && isAdmin();
     }
   }
 }

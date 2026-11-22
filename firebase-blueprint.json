@@ -53,11 +53,15 @@
         "isWomenEnterprise": { "type": "boolean" },
         "photoDocId": { "type": "string", "maxLength": 128 },
         "preferredLanguage": { "type": "string", "enum": ["en", "hi", "mr"] },
-        "preferredRadiusKm": { "type": "number", "enum": [5, 10, 20, 30] },
+        "preferredRadiusKm": { "type": "number", "enum": [2, 5, 10, 20, 30] },
         "voiceAlertsEnabled": { "type": "boolean" },
         "completedJobsCount": { "type": "number" },
         "ratingAvg": { "type": "number" },
         "lastRatedApplicationId": { "type": "string", "maxLength": 128 },
+        "referralCode": { "type": "string", "minLength": 4, "maxLength": 32, "pattern": "^[A-Z0-9_\\-]+$" },
+        "referredByCode": { "type": "string", "minLength": 4, "maxLength": 32, "pattern": "^[A-Z0-9_\\-]+$" },
+        "referredByUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "referredByName": { "type": "string", "minLength": 2, "maxLength": 120 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -89,6 +93,10 @@
         "certificateNotes": { "type": "string", "maxLength": 500 },
         "photoUrl": { "type": "string", "maxLength": 1000 },
         "photoDocId": { "type": "string", "maxLength": 128 },
+        "referralCode": { "type": "string", "minLength": 4, "maxLength": 32, "pattern": "^[A-Z0-9_\\-]+$" },
+        "referredByCode": { "type": "string", "minLength": 4, "maxLength": 32, "pattern": "^[A-Z0-9_\\-]+$" },
+        "referredByUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "referredByName": { "type": "string", "minLength": 2, "maxLength": 120 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -186,14 +194,17 @@
         "destinationLng": { "type": "number" },
         "transportItemType": { "type": "string", "enum": ["person", "goods"] },
         "photoAnalyzed": { "type": "boolean" },
+        "subService": { "type": "string", "maxLength": 100 },
+        "preferredTimeType": { "type": "string", "enum": ["now", "later"] },
+        "startingPrice": { "type": "number" },
         "status": { "type": "string", "enum": ["open", "in_progress", "completed", "cancelled", "flagged"] },
-        "dealStatus": { "type": "string", "enum": ["REQUESTED", "NOTIFIED", "OFFER_RECEIVED", "OFFER_ACCEPTED", "DEAL_CONFIRMED", "WORK_IN_PROGRESS", "WORK_COMPLETED", "CANCELLED", "REJECTED"] },
+        "dealStatus": { "type": "string", "enum": ["REQUESTED", "NOTIFIED", "OFFER_RECEIVED", "OFFER_ACCEPTED", "DEAL_CONFIRMED", "WORKER_ON_THE_WAY", "WORKER_ARRIVED", "WORK_IN_PROGRESS", "WORK_COMPLETED", "CANCELLED", "REJECTED"] },
         "acceptedApplicationId": { "type": "string", "maxLength": 128 },
         "acceptedWorkerUid": { "type": "string", "maxLength": 128 },
         "notifiedWorkerUids": { "type": "array", "description": "Bounded list of up to 100 notified worker UIDs." },
         "approxLocationLabel": { "type": "string", "maxLength": 160 },
-        "initialRadiusKm": { "type": "number", "enum": [5, 10, 20, 30] },
-        "currentRadiusKm": { "type": "number", "enum": [5, 10, 20, 30] },
+        "initialRadiusKm": { "type": "number", "enum": [2, 5, 10, 20, 30] },
+        "currentRadiusKm": { "type": "number", "enum": [2, 5, 10, 20, 30] },
         "radiusStageUpdatedAt": { "type": "string", "format": "date-time" },
         "applicationsCount": { "type": "number" },
         "createdAt": { "type": "string", "format": "date-time" },
@@ -223,7 +234,7 @@
         "proposedWage": { "type": "number" },
         "note": { "type": "string", "maxLength": 600 },
         "status": { "type": "string", "enum": ["applied", "invited", "accepted", "declined", "work_completed"] },
-        "dealStatus": { "type": "string", "enum": ["REQUESTED", "NOTIFIED", "OFFER_RECEIVED", "OFFER_ACCEPTED", "DEAL_CONFIRMED", "WORK_IN_PROGRESS", "WORK_COMPLETED", "CANCELLED", "REJECTED"] },
+        "dealStatus": { "type": "string", "enum": ["REQUESTED", "NOTIFIED", "OFFER_RECEIVED", "OFFER_ACCEPTED", "DEAL_CONFIRMED", "WORKER_ON_THE_WAY", "WORKER_ARRIVED", "WORK_IN_PROGRESS", "WORK_COMPLETED", "CANCELLED", "REJECTED"] },
         "initiatedBy": { "type": "string", "enum": ["customer_invite", "customer_broadcast", "worker_apply"] },
         "jobCategory": { "type": "string", "maxLength": 80 },
         "jobDistrict": { "type": "string", "maxLength": 80 },
@@ -238,10 +249,13 @@
         "offerSubmittedAt": { "type": "string", "format": "date-time" },
         "agreedPrice": { "type": "number" },
         "dealConfirmedAt": { "type": "string", "format": "date-time" },
+        "onTheWayAt": { "type": "string", "format": "date-time" },
+        "arrivedAt": { "type": "string", "format": "date-time" },
         "workStartedAt": { "type": "string", "format": "date-time" },
         "completedAt": { "type": "string", "format": "date-time" },
         "cancelledAt": { "type": "string", "format": "date-time" },
         "cancelledByUid": { "type": "string", "maxLength": 128 },
+        "quoteRevisionRequested": { "type": "boolean" },
         "liveTrackingAuthorized": { "type": "boolean" },
         "workerRating": { "type": "number" },
         "employerFeedback": { "type": "string", "maxLength": 500 },
@@ -493,7 +507,7 @@
         "toneDealConfirmedEnabled": { "type": "boolean" },
         "toneDealClosedEnabled": { "type": "boolean" },
         "preferredCategories": { "type": "array", "description": "Worker-selected notification categories." },
-        "preferredRadiusKm": { "type": "number", "enum": [5, 10, 20, 30] },
+        "preferredRadiusKm": { "type": "number", "enum": [2, 5, 10, 20, 30] },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -516,7 +530,7 @@
         "category": { "type": "string", "enum": ["matchingJobs", "nearbyJobs", "applicationUpdates", "bookingNotifications", "announcements"] },
         "eventType": { "type": "string", "maxLength": 60 },
         "toneType": { "type": "string", "enum": ["new_job", "new_offer", "deal_accepted", "deal_completed", "deal_cancelled", "general"] },
-        "dealStatus": { "type": "string", "enum": ["REQUESTED", "NOTIFIED", "OFFER_RECEIVED", "OFFER_ACCEPTED", "DEAL_CONFIRMED", "WORK_IN_PROGRESS", "WORK_COMPLETED", "CANCELLED", "REJECTED"] },
+        "dealStatus": { "type": "string", "enum": ["REQUESTED", "NOTIFIED", "OFFER_RECEIVED", "OFFER_ACCEPTED", "DEAL_CONFIRMED", "WORKER_ON_THE_WAY", "WORKER_ARRIVED", "WORK_IN_PROGRESS", "WORK_COMPLETED", "CANCELLED", "REJECTED"] },
         "title": { "type": "string", "minLength": 2, "maxLength": 160 },
         "body": { "type": "string", "minLength": 2, "maxLength": 500 },
         "voiceScript": { "type": "string", "maxLength": 700 },
@@ -900,6 +914,249 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["applicationId", "jobId", "ownerUid", "authorizedUids", "role", "participantName", "lat", "lng", "accuracyMeters", "sharingActive", "source", "createdAt", "updatedAt"]
+    },
+    "AdvertiserProfile": {
+      "title": "AdvertiserProfile",
+      "description": "Local shop, supplier, architect, contractor, or service advertiser profile requiring admin approval before campaigns go live.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "businessName": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "contactPerson": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "mobile": { "type": "string", "minLength": 10, "maxLength": 20 },
+        "whatsappNumber": { "type": "string", "maxLength": 20 },
+        "email": { "type": "string", "maxLength": 200 },
+        "businessAddress": { "type": "string", "minLength": 4, "maxLength": 300 },
+        "state": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "district": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "city": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "businessCategory": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "websiteUrl": { "type": "string", "maxLength": 300 },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected", "suspended"] },
+        "adminNotes": { "type": "string", "maxLength": 500 },
+        "reviewedByUid": { "type": "string", "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "businessName", "contactPerson", "mobile", "businessAddress", "state", "district", "city", "businessCategory", "status", "createdAt", "updatedAt"]
+    },
+    "AdvertisementRecord": {
+      "title": "AdvertisementRecord",
+      "description": "Category-targeted and location-targeted sponsored advertisement displayed only after admin approval and while active within date limits.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "advertiserId": { "type": "string", "maxLength": 128 },
+        "advertiserName": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "title": { "type": "string", "minLength": 3, "maxLength": 140 },
+        "description": { "type": "string", "minLength": 5, "maxLength": 400 },
+        "bannerImageUrl": { "type": "string", "minLength": 5, "maxLength": 110000 },
+        "targetCategories": { "type": "array", "description": "Up to 15 service/advertisement category identifiers." },
+        "targetStates": { "type": "array", "description": "Up to 20 states." },
+        "targetDistricts": { "type": "array", "description": "Up to 30 districts." },
+        "targetCities": { "type": "array", "description": "Up to 30 cities." },
+        "targetAreas": { "type": "array", "description": "Up to 30 local areas." },
+        "allLocations": { "type": "boolean" },
+        "contactAction": { "type": "string", "enum": ["call", "whatsapp", "website"] },
+        "callNumber": { "type": "string", "maxLength": 20 },
+        "whatsappNumber": { "type": "string", "maxLength": 20 },
+        "websiteUrl": { "type": "string", "maxLength": 300 },
+        "ctaLabel": { "type": "string", "maxLength": 40 },
+        "startDate": { "type": "string", "minLength": 8, "maxLength": 20 },
+        "endDate": { "type": "string", "minLength": 8, "maxLength": 20 },
+        "preferredDurationDays": { "type": "number" },
+        "status": { "type": "string", "enum": ["draft", "pending", "approved", "active", "paused", "rejected", "expired"] },
+        "priority": { "type": "number" },
+        "dailyImpressionLimit": { "type": "number" },
+        "totalImpressionLimit": { "type": "number" },
+        "budgetInr": { "type": "number" },
+        "adminNotes": { "type": "string", "maxLength": 500 },
+        "createdByAdmin": { "type": "boolean" },
+        "approvedByUid": { "type": "string", "maxLength": 128 },
+        "impressionsCount": { "type": "number" },
+        "uniqueViewsCount": { "type": "number" },
+        "clicksCount": { "type": "number" },
+        "callClicksCount": { "type": "number" },
+        "whatsappClicksCount": { "type": "number" },
+        "websiteClicksCount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "advertiserName", "title", "description", "bannerImageUrl", "targetCategories", "targetStates", "targetDistricts", "targetCities", "allLocations", "contactAction", "startDate", "endDate", "status", "priority", "dailyImpressionLimit", "totalImpressionLimit", "createdByAdmin", "impressionsCount", "uniqueViewsCount", "clicksCount", "callClicksCount", "whatsappClicksCount", "websiteClicksCount", "createdAt", "updatedAt"]
+    },
+    "AdvertisementCategory": {
+      "title": "AdvertisementCategory",
+      "description": "Admin-managed advertisement category mapped to Rojgar Setu service categories.",
+      "type": "object",
+      "properties": {
+        "slug": { "type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[a-z0-9_\\-]+$" },
+        "nameEn": { "type": "string", "minLength": 2, "maxLength": 100 },
+        "nameHi": { "type": "string", "maxLength": 100 },
+        "nameMr": { "type": "string", "maxLength": 100 },
+        "linkedServiceCategories": { "type": "array", "description": "Up to 15 linked service categories." },
+        "active": { "type": "boolean" },
+        "createdByUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["slug", "nameEn", "linkedServiceCategories", "active", "createdByUid", "createdAt", "updatedAt"]
+    },
+    "AdvertisementCampaign": {
+      "title": "AdvertisementCampaign",
+      "description": "Admin-tracked campaign budget, dates, and billing metadata for an advertisement.",
+      "type": "object",
+      "properties": {
+        "advertiserUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "advertisementId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "campaignName": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "budgetInr": { "type": "number" },
+        "paymentStatus": { "type": "string", "enum": ["unpaid", "paid", "waived", "refunded"] },
+        "startDate": { "type": "string", "minLength": 8, "maxLength": 20 },
+        "endDate": { "type": "string", "minLength": 8, "maxLength": 20 },
+        "status": { "type": "string", "enum": ["scheduled", "running", "paused", "completed", "cancelled"] },
+        "notes": { "type": "string", "maxLength": 500 },
+        "createdByUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["advertiserUid", "advertisementId", "campaignName", "budgetInr", "paymentStatus", "startDate", "endDate", "status", "createdByUid", "createdAt", "updatedAt"]
+    },
+    "AdvertisementImpression": {
+      "title": "AdvertisementImpression",
+      "description": "Anonymous aggregate advertisement impression record with zero customer PII.",
+      "type": "object",
+      "properties": {
+        "adId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "advertiserUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "category": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "state": { "type": "string", "maxLength": 80 },
+        "district": { "type": "string", "maxLength": 80 },
+        "placement": { "type": "string", "enum": ["homepage", "category_selection", "service_form", "service_info"] },
+        "sessionHash": { "type": "string", "minLength": 6, "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["adId", "advertiserUid", "category", "state", "district", "placement", "sessionHash", "createdAt"]
+    },
+    "AdvertisementClick": {
+      "title": "AdvertisementClick",
+      "description": "Anonymous aggregate advertisement click record (call/whatsapp/website) with zero customer PII.",
+      "type": "object",
+      "properties": {
+        "adId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "advertiserUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "category": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "state": { "type": "string", "maxLength": 80 },
+        "district": { "type": "string", "maxLength": 80 },
+        "placement": { "type": "string", "enum": ["homepage", "category_selection", "service_form", "service_info"] },
+        "actionType": { "type": "string", "enum": ["call", "whatsapp", "website"] },
+        "sessionHash": { "type": "string", "minLength": 6, "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["adId", "advertiserUid", "category", "state", "district", "placement", "actionType", "sessionHash", "createdAt"]
+    },
+    "ReferralCodeIndexRecord": {
+      "title": "ReferralCodeIndexRecord",
+      "description": "Non-PII unique referral code lookup index mapping a worker's personal referral code to their UID and display name.",
+      "type": "object",
+      "properties": {
+        "referralCode": { "type": "string", "minLength": 4, "maxLength": 32, "pattern": "^[A-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workerName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "registrationId": { "type": "string", "minLength": 5, "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["referralCode", "ownerUid", "workerName", "registrationId", "createdAt", "updatedAt"]
+    },
+    "WorkerReferralRecord": {
+      "title": "WorkerReferralRecord",
+      "description": "Locked one-time referral attribution record linking a newly registered worker to their referring worker.",
+      "type": "object",
+      "properties": {
+        "referrerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "referrerName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "referralCode": { "type": "string", "minLength": 4, "maxLength": 32 },
+        "referredUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "referredWorkerName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "referredRegistrationId": { "type": "string", "minLength": 5, "maxLength": 40 },
+        "referredMobileHash": { "type": "string", "minLength": 8, "maxLength": 128 },
+        "sourceChannel": { "type": "string", "enum": ["url_link", "manual_code"] },
+        "registrationPaymentStatus": { "type": "string", "enum": ["free_launch", "payment_pending", "paid_verified", "payment_failed", "refunded", "cancelled"] },
+        "registrationFeePaidInr": { "type": "number" },
+        "rewardStatus": { "type": "string", "enum": ["free_not_eligible", "pending_verification", "approved", "paid", "rejected"] },
+        "rewardAmountInr": { "type": "number" },
+        "paymentReference": { "type": "string", "maxLength": 120 },
+        "fraudFlags": { "type": "array", "description": "Up to 10 fraud/review flags." },
+        "adminNotes": { "type": "string", "maxLength": 500 },
+        "isSimulation": { "type": "boolean" },
+        "locked": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["referrerUid", "referrerName", "referralCode", "referredUid", "referredWorkerName", "referredRegistrationId", "referredMobileHash", "sourceChannel", "registrationPaymentStatus", "registrationFeePaidInr", "rewardStatus", "rewardAmountInr", "locked", "createdAt", "updatedAt"]
+    },
+    "ReferralRewardRecord": {
+      "title": "ReferralRewardRecord",
+      "description": "Admin-verified referral reward ledger entry (₹50 only when future ₹250 paid registration is enabled and verified).",
+      "type": "object",
+      "properties": {
+        "referralId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "referrerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "referrerName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "referredUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "referredWorkerName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "referralCode": { "type": "string", "minLength": 4, "maxLength": 32 },
+        "registrationFeeInr": { "type": "number" },
+        "rewardAmountInr": { "type": "number" },
+        "status": { "type": "string", "enum": ["pending", "approved", "paid", "rejected"] },
+        "eligibilityReason": { "type": "string", "minLength": 3, "maxLength": 300 },
+        "paymentReference": { "type": "string", "maxLength": 120 },
+        "payoutId": { "type": "string", "maxLength": 128 },
+        "reviewedByUid": { "type": "string", "maxLength": 128 },
+        "adminNotes": { "type": "string", "maxLength": 500 },
+        "isSimulation": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["referralId", "referrerUid", "referrerName", "referredUid", "referredWorkerName", "referralCode", "registrationFeeInr", "rewardAmountInr", "status", "eligibilityReason", "createdAt", "updatedAt"]
+    },
+    "ReferralWallet": {
+      "title": "ReferralWallet",
+      "description": "Read-only for worker, admin-controlled referral reward wallet balances.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "referralCode": { "type": "string", "minLength": 4, "maxLength": 32 },
+        "totalReferrals": { "type": "number" },
+        "verifiedPaidReferrals": { "type": "number" },
+        "pendingBalanceInr": { "type": "number" },
+        "approvedBalanceInr": { "type": "number" },
+        "paidBalanceInr": { "type": "number" },
+        "totalEarnedInr": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["ownerUid", "referralCode", "totalReferrals", "verifiedPaidReferrals", "pendingBalanceInr", "approvedBalanceInr", "paidBalanceInr", "totalEarnedInr", "createdAt", "updatedAt"]
+    },
+    "ReferralPayoutRecord": {
+      "title": "ReferralPayoutRecord",
+      "description": "Admin-recorded manual payout transaction for approved worker referral rewards.",
+      "type": "object",
+      "properties": {
+        "referrerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "referrerName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "rewardIds": { "type": "array", "description": "Up to 50 paid reward record IDs." },
+        "amountInr": { "type": "number" },
+        "payoutMethod": { "type": "string", "enum": ["upi", "bank_transfer", "cash_voucher"] },
+        "transactionReference": { "type": "string", "minLength": 3, "maxLength": 120 },
+        "status": { "type": "string", "enum": ["recorded_paid", "reversed"] },
+        "notes": { "type": "string", "maxLength": 500 },
+        "recordedByUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "paidAt": { "type": "string", "minLength": 8, "maxLength": 40 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["referrerUid", "referrerName", "rewardIds", "amountInr", "payoutMethod", "transactionReference", "status", "recordedByUid", "paidAt", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -1038,6 +1295,50 @@
     "/dealLocationShares/{shareId}": {
       "schema": { "$ref": "#/entities/DealLocationShare" },
       "description": "Two-way live GPS coordinates shared only between customer and accepted worker while deal is active."
+    },
+    "/advertisers/{advertiserId}": {
+      "schema": { "$ref": "#/entities/AdvertiserProfile" },
+      "description": "Registered local businesses and service advertisers subject to admin approval."
+    },
+    "/advertisements/{adId}": {
+      "schema": { "$ref": "#/entities/AdvertisementRecord" },
+      "description": "Category-based and location-targeted sponsored advertisements."
+    },
+    "/advertisementCategories/{categoryId}": {
+      "schema": { "$ref": "#/entities/AdvertisementCategory" },
+      "description": "Admin-defined advertisement categories mapped to Rojgar Setu service trades."
+    },
+    "/advertisementCampaigns/{campaignId}": {
+      "schema": { "$ref": "#/entities/AdvertisementCampaign" },
+      "description": "Advertisement campaign schedules, budgets, and payment records."
+    },
+    "/advertisementImpressions/{impressionId}": {
+      "schema": { "$ref": "#/entities/AdvertisementImpression" },
+      "description": "Anonymous aggregate ad impression events containing zero customer PII."
+    },
+    "/advertisementClicks/{clickId}": {
+      "schema": { "$ref": "#/entities/AdvertisementClick" },
+      "description": "Anonymous aggregate ad click events (call/whatsapp/website) containing zero customer PII."
+    },
+    "/referralCodeIndex/{codeId}": {
+      "schema": { "$ref": "#/entities/ReferralCodeIndexRecord" },
+      "description": "Unique non-PII worker referral code registry."
+    },
+    "/workerReferrals/{referralId}": {
+      "schema": { "$ref": "#/entities/WorkerReferralRecord" },
+      "description": "Locked referral attribution records linking new workers to referring workers."
+    },
+    "/referralRewards/{rewardId}": {
+      "schema": { "$ref": "#/entities/ReferralRewardRecord" },
+      "description": "Admin-verified worker referral reward ledger records."
+    },
+    "/referralWallets/{walletId}": {
+      "schema": { "$ref": "#/entities/ReferralWallet" },
+      "description": "Worker referral reward wallet summary (admin-managed balances)."
+    },
+    "/referralPayouts/{payoutId}": {
+      "schema": { "$ref": "#/entities/ReferralPayoutRecord" },
+      "description": "Admin-recorded manual referral reward payout transactions."
     }
   }
 }

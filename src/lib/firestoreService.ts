@@ -670,7 +670,7 @@ export async function createJobPosting(
       district: payload.district,
       state: payload.state,
     });
-  const initialRadiusKm = normalizeRadiusKm(payload.initialRadiusKm ?? 5, 5);
+  const initialRadiusKm = normalizeRadiusKm(payload.initialRadiusKm ?? 2, 2);
   const currentRadiusKm = normalizeRadiusKm(payload.currentRadiusKm ?? initialRadiusKm, initialRadiusKm);
 
   try {
@@ -752,8 +752,8 @@ export async function broadcastSmartJobAlerts(params: {
 
   const seenUids = new Set(alreadyNotifiedUids.filter(Boolean));
   let activeRadius: ServiceRadiusKm = normalizeRadiusKm(
-    stageRadiusKm ?? job.currentRadiusKm ?? job.initialRadiusKm ?? 5,
-    5
+    stageRadiusKm ?? job.currentRadiusKm ?? job.initialRadiusKm ?? 2,
+    2
   );
 
   const evaluateAtStage = (radiusKm: ServiceRadiusKm) =>
@@ -908,7 +908,7 @@ export async function expandJobSearchRadius(params: {
     // Fallback to passed snapshot
   }
 
-  const prevRadius = normalizeRadiusKm(freshJob.currentRadiusKm ?? freshJob.initialRadiusKm ?? 5, 5);
+  const prevRadius = normalizeRadiusKm(freshJob.currentRadiusKm ?? freshJob.initialRadiusKm ?? 2, 2);
   const nextRadius = targetRadiusKm ?? getNextRadiusStage(prevRadius);
 
   const existingNotified = Array.isArray(freshJob.notifiedWorkerUids)
@@ -974,7 +974,7 @@ export async function createInstantHireRequest(
       district: jobPayload.district,
       state: jobPayload.state,
     });
-  const initialStageKm = normalizeRadiusKm(jobPayload.initialRadiusKm ?? 5, 5);
+  const initialStageKm = normalizeRadiusKm(jobPayload.initialRadiusKm ?? 2, 2);
 
   // Create job document first so Firestore security rule `get(/databases/.../jobs/$(jobId))`
   // resolves cleanly when creating invited applications and notifications immediately afterward.
@@ -1535,7 +1535,7 @@ export async function respondToWorkerOffer(params: {
         toneType: 'deal_accepted',
         dealStatus: 'DEAL_CONFIRMED',
         title: `Offer Accepted: ${app.workerName}`,
-        body: `Confirmed "${app.jobTitle}" with ${app.workerName} at ₹${agreedPrice}. Tap "SHARE MY LOCATION" so the worker can navigate to you.`,
+        body: `Confirmed "${app.jobTitle}" with ${app.workerName} at ₹${agreedPrice}. Tap "SHARE LOCATION" so the worker can navigate to you.`,
         metadataLabel: `Offer Accepted · ₹${agreedPrice}`,
         targetRoute: 'employer-dashboard',
         targetJobId: app.jobId,
@@ -1626,6 +1626,134 @@ export async function confirmDealByParticipant(params: {
   }
 }
 
+export async function requestRevisedQuote(params: {
+  app: JobApplication;
+  customerName: string;
+}): Promise<void> {
+  const { app, customerName } = params;
+  const path = `applications/${app.id}`;
+  try {
+    await updateDoc(doc(db, 'applications', app.id), {
+      quoteRevisionRequested: true,
+      updatedAt: serverTimestamp(),
+    });
+
+    await dispatchTwoWayDealNotification({
+      recipientUid: app.workerUid,
+      recipientRole: 'worker',
+      senderUid: app.employerUid,
+      senderName: customerName,
+      category: 'applicationUpdates',
+      eventType: 'quote_revision_requested',
+      toneType: 'new_offer',
+      dealStatus: 'OFFER_RECEIVED',
+      title: `Revised Price Requested: ${app.jobTitle}`,
+      body: `${customerName} asked for a revised price quote for "${app.jobTitle}". Open the order to update your offer.`,
+      metadataLabel: 'Revised quote requested',
+      targetRoute: 'worker-dashboard',
+      targetJobId: app.jobId,
+      targetApplicationId: app.id,
+      dedupeKey: sanitizeSafeId(`quote_rev_${app.id}_${Date.now()}`),
+      pushPayload: {
+        workerName: customerName,
+        jobTitle: app.jobTitle,
+      },
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
+export async function markWorkerOnTheWay(params: {
+  app: JobApplication;
+  workerName: string;
+}): Promise<void> {
+  const { app, workerName } = params;
+  const path = `applications/${app.id}`;
+  try {
+    await updateDoc(doc(db, 'applications', app.id), {
+      dealStatus: 'WORKER_ON_THE_WAY',
+      onTheWayAt: serverTimestamp(),
+      liveTrackingAuthorized: true,
+      updatedAt: serverTimestamp(),
+    });
+    await updateDoc(doc(db, 'jobs', app.jobId), {
+      dealStatus: 'WORKER_ON_THE_WAY',
+      status: 'in_progress',
+      updatedAt: serverTimestamp(),
+    }).catch(() => undefined);
+
+    await dispatchTwoWayDealNotification({
+      recipientUid: app.employerUid,
+      recipientRole: 'employer',
+      senderUid: app.workerUid,
+      senderName: workerName,
+      category: 'bookingNotifications',
+      eventType: 'worker_on_the_way',
+      toneType: 'deal_accepted',
+      dealStatus: 'WORKER_ON_THE_WAY',
+      title: `Worker On The Way: ${app.jobTitle}`,
+      body: `${workerName} is on the way to your location for "${app.jobTitle}".`,
+      metadataLabel: 'Worker On The Way',
+      targetRoute: 'employer-dashboard',
+      targetJobId: app.jobId,
+      targetApplicationId: app.id,
+      dedupeKey: sanitizeSafeId(`on_the_way_${app.id}_${Date.now()}`),
+      pushPayload: {
+        workerName,
+        jobTitle: app.jobTitle,
+      },
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
+export async function markWorkerArrived(params: {
+  app: JobApplication;
+  workerName: string;
+}): Promise<void> {
+  const { app, workerName } = params;
+  const path = `applications/${app.id}`;
+  try {
+    await updateDoc(doc(db, 'applications', app.id), {
+      dealStatus: 'WORKER_ARRIVED',
+      arrivedAt: serverTimestamp(),
+      liveTrackingAuthorized: true,
+      updatedAt: serverTimestamp(),
+    });
+    await updateDoc(doc(db, 'jobs', app.jobId), {
+      dealStatus: 'WORKER_ARRIVED',
+      status: 'in_progress',
+      updatedAt: serverTimestamp(),
+    }).catch(() => undefined);
+
+    await dispatchTwoWayDealNotification({
+      recipientUid: app.employerUid,
+      recipientRole: 'employer',
+      senderUid: app.workerUid,
+      senderName: workerName,
+      category: 'bookingNotifications',
+      eventType: 'worker_arrived',
+      toneType: 'deal_accepted',
+      dealStatus: 'WORKER_ARRIVED',
+      title: `Worker Arrived: ${app.jobTitle}`,
+      body: `${workerName} has arrived at your location for "${app.jobTitle}".`,
+      metadataLabel: 'Worker Arrived',
+      targetRoute: 'employer-dashboard',
+      targetJobId: app.jobId,
+      targetApplicationId: app.id,
+      dedupeKey: sanitizeSafeId(`arrived_${app.id}_${Date.now()}`),
+      pushPayload: {
+        workerName,
+        jobTitle: app.jobTitle,
+      },
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
 export async function startWorkByWorker(params: {
   app: JobApplication;
   workerName: string;
@@ -1654,9 +1782,9 @@ export async function startWorkByWorker(params: {
       eventType: 'work_started',
       toneType: 'deal_accepted',
       dealStatus: 'WORK_IN_PROGRESS',
-      title: `Work In Progress: ${app.jobTitle}`,
-      body: `${workerName} has arrived and started work on "${app.jobTitle}".`,
-      metadataLabel: 'Work In Progress',
+      title: `Work Started: ${app.jobTitle}`,
+      body: `${workerName} has started work on "${app.jobTitle}".`,
+      metadataLabel: 'Work Started',
       targetRoute: 'employer-dashboard',
       targetJobId: app.jobId,
       targetApplicationId: app.id,
@@ -2055,6 +2183,76 @@ export async function adminUpdateVerification(
     await batch.commit();
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, `${collectionName}/${docId}`);
+  }
+}
+
+export async function updateWorkerAvailabilityStatus(
+  workerUid: string,
+  availabilityStatus: 'available' | 'busy' | 'offline'
+): Promise<void> {
+  const path = `publicWorkers/${workerUid}`;
+  try {
+    await updateDoc(doc(db, 'publicWorkers', workerUid), {
+      availabilityStatus,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
+export async function updateWorkerPreferredRadius(
+  workerUid: string,
+  preferredRadiusKm: ServiceRadiusKm
+): Promise<void> {
+  const path = `publicWorkers/${workerUid}`;
+  try {
+    await updateDoc(doc(db, 'publicWorkers', workerUid), {
+      preferredRadiusKm,
+      updatedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
+export async function cancelOpenJobByCustomer(jobId: string): Promise<void> {
+  const path = `jobs/${jobId}`;
+  try {
+    await updateDoc(doc(db, 'jobs', jobId), {
+      status: 'cancelled',
+      dealStatus: 'CANCELLED',
+      updatedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
+export async function adminUpdateWorkerAvailability(
+  workerUid: string,
+  availabilityStatus: 'available' | 'busy' | 'offline',
+  adminUid: string,
+  adminEmail: string
+): Promise<void> {
+  const batch = writeBatch(db);
+  batch.update(doc(db, 'publicWorkers', workerUid), {
+    availabilityStatus,
+    updatedAt: serverTimestamp(),
+  });
+  batch.set(doc(collection(db, 'auditLogs')), {
+    adminUid,
+    adminEmail,
+    action: `set_worker_availability_${availabilityStatus}`,
+    targetCollection: 'publicWorkers',
+    targetId: workerUid,
+    details: `Updated worker ${workerUid} availability to ${availabilityStatus}`,
+    createdAt: serverTimestamp(),
+  });
+  try {
+    await batch.commit();
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, `publicWorkers/${workerUid}`);
   }
 }
 

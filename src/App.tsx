@@ -11,6 +11,7 @@ import {
   markNotificationRead,
   subscribeAllApplicationsAdmin,
   subscribeAnnouncements,
+  subscribeEmployerApplications,
   subscribeJobs,
   subscribeNotificationPreferences,
   subscribePublicEmployers,
@@ -29,6 +30,7 @@ import {
 import type {
   AiHirePrefill,
   AppNotificationRecord,
+  JobApplication,
   JobPosting,
   Language,
   NotificationPreferences,
@@ -41,21 +43,20 @@ import type {
   VehicleType,
 } from './types/domain';
 import { Header } from './components/Header';
+import { GovtSchemesView } from './components/GovtSchemesView';
 import { Footer } from './components/Footer';
+import { MobileBottomNav } from './components/MobileBottomNav';
 import { OfflineIndicator } from './components/PWAControls';
-import { HomeView } from './components/HomeView';
+import { CustomerHomeV2 } from './components/CustomerHomeV2';
+import { WorkerAppV2 } from './components/WorkerAppV2';
+import { CustomerOrdersV2 } from './components/CustomerOrdersV2';
 import { WorkerRegistrationForm } from './components/WorkerRegistrationForm';
 import { EmployerRegistrationForm } from './components/EmployerRegistrationForm';
 import { VehicleRegistrationForm } from './components/VehicleRegistrationForm';
 import { AIVoiceAssistantModal } from './components/AIVoiceAssistantModal';
-import { InstantHireView } from './components/InstantHireView';
 import { LocalTransportView } from './components/LocalTransportView';
-import { FindWorkersView, FindWorkView, PostJobView } from './components/JobBoardViews';
-import {
-  AdminDashboardView,
-  EmployerDashboardView,
-  WorkerDashboardView,
-} from './components/DashboardsView';
+import { FindWorkersView, PostJobView } from './components/JobBoardViews';
+import { AdminDashboardView } from './components/DashboardsView';
 import {
   AboutUsView,
   ContactView,
@@ -64,6 +65,8 @@ import {
   SkillsTrainingView,
   TrustSafetyView,
 } from './components/InstitutionalPages';
+import { AdvertiserDashboardView } from './components/AdvertiserDashboardView';
+import { captureReferralCodeFromUrl } from './lib/adsReferralService';
 
 const VALID_ROUTES: PageRoute[] = [
   'home',
@@ -72,6 +75,9 @@ const VALID_ROUTES: PageRoute[] = [
   'find-work',
   'find-workers',
   'skills-training',
+  'govt-schemes',
+  'for-unemployed',
+  'for-entrepreneurs',
   'register-worker',
   'register-employer',
   'register-vehicle',
@@ -85,6 +91,7 @@ const VALID_ROUTES: PageRoute[] = [
   'pricing',
   'trust-safety',
   'contact',
+  'advertise',
 ];
 
 function isValidRoute(value: string | undefined | null): value is PageRoute {
@@ -118,8 +125,9 @@ const AppShell: React.FC = () => {
   const [route, setRoute] = useState<PageRoute>('home');
   const [categoryFilter, setCategoryFilter] = useState('');
   const [highlightedJobId, setHighlightedJobId] = useState('');
-  const [highlightedDemoJobId, setHighlightedDemoJobId] = useState('');
+  const [, setHighlightedDemoJobId] = useState('');
   const [gmpQuotaExceeded, setGmpQuotaExceeded] = useState(false);
+  const [capturedRefCode, setCapturedRefCode] = useState<string>(() => captureReferralCodeFromUrl());
 
   const [notifPrefs, setNotifPrefs] = useState<NotificationPreferences | null>(null);
   const [voiceMuted, setVoiceMuted] = useState(false);
@@ -151,7 +159,8 @@ const AppShell: React.FC = () => {
   const [jobs, setJobs] = useState<JobPosting[]>([]);
   const [vehicles, setVehicles] = useState<VehicleListing[]>([]);
   const [announcements, setAnnouncements] = useState<PlatformAnnouncement[]>([]);
-  const [adminAppsCount, setAdminAppsCount] = useState(0);
+  const [, setAdminAppsCount] = useState(0);
+  const [customerApplications, setCustomerApplications] = useState<JobApplication[]>([]);
   const [notifications, setNotifications] = useState<AppNotificationRecord[]>([]);
   const seenNotifIdsRef = useRef<Set<string>>(new Set());
   const initialNotifLoadRef = useRef(true);
@@ -160,17 +169,72 @@ const AppShell: React.FC = () => {
   const [aiLocationHint, setAiLocationHint] = useState('');
   const [aiPrefill, setAiPrefill] = useState<AiHirePrefill | null>(null);
 
-  const navigate = useCallback((nextRoute: PageRoute, nextCategory?: string) => {
-    setRoute(nextRoute);
-    setCategoryFilter(nextCategory ?? '');
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-  }, []);
+  const navigate = useCallback(
+    (nextRoute: PageRoute, nextCategory?: string, options?: { skipScrollTop?: boolean }) => {
+      setRoute(nextRoute);
+      setCategoryFilter(nextCategory ?? '');
+      if (!options?.skipScrollTop) {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    },
+    []
+  );
+
+  const resolveNotificationTargetRoute = useCallback(
+    (params: {
+      rawRoute?: string | null;
+      jobId?: string;
+      demoJobId?: string;
+      recipientRole?: string;
+      eventType?: string;
+      category?: string;
+    }): PageRoute => {
+      const { rawRoute, jobId, demoJobId, recipientRole, eventType, category } = params;
+      if (demoJobId) return 'worker-dashboard';
+
+      const isCustomerEvent =
+        recipientRole === 'employer' ||
+        eventType === 'offer_received' ||
+        eventType === 'worker_offer_sent' ||
+        eventType === 'new_application' ||
+        eventType === 'worker_message' ||
+        eventType === 'worker_on_the_way' ||
+        eventType === 'work_started' ||
+        eventType === 'worker_arrived';
+
+      const isWorkerJobAlert =
+        recipientRole === 'worker' ||
+        rawRoute === 'find-work' ||
+        eventType === 'hiring_request_created' ||
+        eventType === 'offer_accepted' ||
+        eventType === 'customer_message' ||
+        eventType === 'location_shared' ||
+        category === 'matchingJobs' ||
+        category === 'nearbyJobs';
+
+      if (rawRoute === 'worker-dashboard' || rawRoute === 'employer-dashboard') {
+        return rawRoute;
+      }
+      if (jobId && isCustomerEvent) return 'employer-dashboard';
+      if (jobId && isWorkerJobAlert) return 'worker-dashboard';
+      if (rawRoute === 'find-work' && jobId) return 'worker-dashboard';
+      if (isValidRoute(rawRoute)) return rawRoute;
+      if (isCustomerEvent) return 'employer-dashboard';
+      if (jobId || isWorkerJobAlert) return 'worker-dashboard';
+      return 'home';
+    },
+    []
+  );
 
   const navigateToTarget = useCallback(
     (targetRoute: PageRoute, jobId?: string, demoJobId?: string) => {
       if (jobId) setHighlightedJobId(jobId);
       if (demoJobId) setHighlightedDemoJobId(demoJobId);
-      navigate(targetRoute);
+      const normalizedRoute =
+        targetRoute === 'find-work' && jobId ? 'worker-dashboard' : targetRoute;
+      navigate(normalizedRoute, undefined, {
+        skipScrollTop: Boolean(jobId || demoJobId),
+      });
     },
     [navigate]
   );
@@ -249,7 +313,7 @@ const AppShell: React.FC = () => {
     });
   }, [user?.uid, user?.emailVerified, isAdmin, workers.length, notifPrefs?.masterEnabled, notifPrefs?.preferredLanguage, lang]);
 
-  // Parse deep links from URL query parameters on boot (?route=worker-dashboard&jobId=...&speak=1&lang=mr)
+  // Parse deep links from URL query parameters on boot (?route=worker-dashboard&jobId=...&speak=1&lang=mr or /register?ref=CODE)
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
@@ -257,30 +321,41 @@ const AppShell: React.FC = () => {
     const jId = params.get('jobId') || '';
     const djId = params.get('demoJobId') || '';
     const cat = params.get('category') || '';
+    const refParam = (params.get('ref') || params.get('referral') || '').trim().toUpperCase();
+    const isRegisterPath = window.location.pathname.toLowerCase().replace(/\/+$/, '') === '/register';
     const speak = params.get('speak') === '1';
     const qLang = params.get('lang');
     const parsedLang: Language | undefined =
       qLang === 'mr' || qLang === 'hi' || qLang === 'en' ? qLang : undefined;
+
+    if (refParam && /^[A-Z0-9_-]{4,32}$/.test(refParam)) {
+      const saved = captureReferralCodeFromUrl();
+      setCapturedRefCode(saved || refParam);
+    }
 
     if (jId) setHighlightedJobId(jId);
     if (djId) setHighlightedDemoJobId(djId);
     if (speak && jId) {
       setBootSpeakRequest({ jobId: jId, lang: parsedLang });
     }
-    if (isValidRoute(r)) {
-      setRoute(r);
+    if (r || jId || djId) {
+      const resolvedBootRoute = resolveNotificationTargetRoute({
+        rawRoute: r,
+        jobId: jId || undefined,
+        demoJobId: djId || undefined,
+      });
+      setRoute(resolvedBootRoute);
       if (cat) setCategoryFilter(cat);
-    } else if (jId) {
-      setRoute('worker-dashboard');
-    } else if (djId) {
-      setRoute('worker-dashboard');
+    } else if (refParam || isRegisterPath) {
+      setRoute('register-worker');
     }
 
-    if (r || jId || djId || cat || speak || qLang) {
-      const cleanUrl = window.location.pathname + window.location.hash;
+    if (r || jId || djId || cat || speak || qLang || refParam || isRegisterPath) {
+      const cleanPath = isRegisterPath ? '/' : window.location.pathname;
+      const cleanUrl = cleanPath + window.location.hash;
       window.history.replaceState({}, document.title, cleanUrl);
     }
-  }, []);
+  }, [resolveNotificationTargetRoute]);
 
   // Auto-play TTS once matching job loads when opened via OS notification "Open & Listen"
   useEffect(() => {
@@ -336,13 +411,12 @@ const AppShell: React.FC = () => {
         speak?: boolean;
       } | null;
       if (data?.type === 'ROJGAR_SETU_DEEP_LINK') {
-        const nextRoute = isValidRoute(data.route)
-          ? data.route
-          : data.demoJobId
-          ? 'worker-dashboard'
-          : data.jobId
-          ? 'worker-dashboard'
-          : 'home';
+        const nextRoute = resolveNotificationTargetRoute({
+          rawRoute: data.route,
+          jobId: data.jobId,
+          demoJobId: data.demoJobId,
+          eventType: (data as { eventType?: string }).eventType,
+        });
         navigateToTarget(nextRoute, data.jobId, data.demoJobId);
         if (data.speak && (data.voiceScript || data.jobId)) {
           setBootSpeakRequest({
@@ -355,7 +429,7 @@ const AppShell: React.FC = () => {
     };
     navigator.serviceWorker.addEventListener('message', onMessage);
     return () => navigator.serviceWorker.removeEventListener('message', onMessage);
-  }, [navigateToTarget]);
+  }, [navigateToTarget, resolveNotificationTargetRoute]);
 
   // Listen to foreground FCM messages while user has app open
   useEffect(() => {
@@ -364,13 +438,12 @@ const AppShell: React.FC = () => {
     let active = true;
     void subscribeForegroundPush((payload) => {
       if (!active) return;
-      const targetRoute = isValidRoute(payload.route)
-        ? payload.route
-        : payload.demoJobId
-        ? 'worker-dashboard'
-        : payload.jobId
-        ? 'worker-dashboard'
-        : 'home';
+      const targetRoute = resolveNotificationTargetRoute({
+        rawRoute: payload.route,
+        jobId: payload.jobId,
+        demoJobId: payload.demoJobId,
+        eventType: payload.eventType,
+      });
       const spokenLang = payload.lang || notifPrefs?.preferredLanguage || lang;
       const resolvedTone = getToneTypeForEvent({
         toneType: payload.toneType,
@@ -407,7 +480,7 @@ const AppShell: React.FC = () => {
       active = false;
       unsub();
     };
-  }, [user?.uid, user?.emailVerified, notifPrefs?.preferredLanguage, lang, triggerSmartVoicePlayback]);
+  }, [user?.uid, user?.emailVerified, notifPrefs?.preferredLanguage, lang, triggerSmartVoicePlayback, resolveNotificationTargetRoute]);
 
   useEffect(() => {
     const onQuota = () => setGmpQuotaExceeded(true);
@@ -439,6 +512,15 @@ const AppShell: React.FC = () => {
     return () => u();
   }, [isAdmin]);
 
+  useEffect(() => {
+    if (!user?.uid) {
+      setCustomerApplications([]);
+      return;
+    }
+    const u = subscribeEmployerApplications(user.uid, setCustomerApplications);
+    return () => u();
+  }, [user?.uid]);
+
   // Global real-time in-app notification subscription + instant live toast & voice alert
   useEffect(() => {
     seenNotifIdsRef.current = new Set();
@@ -462,7 +544,14 @@ const AppShell: React.FC = () => {
         setForegroundPush({
           title: newestUnread.title,
           body: newestUnread.body,
-          route: isValidRoute(newestUnread.targetRoute) ? newestUnread.targetRoute : 'worker-dashboard',
+          route: resolveNotificationTargetRoute({
+            rawRoute: newestUnread.targetRoute,
+            jobId: newestUnread.targetJobId,
+            demoJobId: newestUnread.targetDemoJobId,
+            recipientRole: newestUnread.recipientRole,
+            eventType: newestUnread.eventType,
+            category: newestUnread.category,
+          }),
           jobId: newestUnread.targetJobId,
           demoJobId: newestUnread.targetDemoJobId,
           voiceScript: newestUnread.voiceScript,
@@ -497,7 +586,7 @@ const AppShell: React.FC = () => {
       }
     });
     return () => unsub();
-  }, [user?.uid, user?.emailVerified, notifPrefs, lang, voiceMuted, triggerSmartVoicePlayback]);
+  }, [user?.uid, user?.emailVerified, notifPrefs, lang, voiceMuted, triggerSmartVoicePlayback, resolveNotificationTargetRoute]);
 
   const unreadNotificationsCount = useMemo(
     () => notifications.filter((n) => !n.read).length,
@@ -509,16 +598,17 @@ const AppShell: React.FC = () => {
       if (!item.read) {
         void markNotificationRead(item.id).catch(() => undefined);
       }
-      const nextRoute: PageRoute = isValidRoute(item.targetRoute)
-        ? item.targetRoute
-        : item.targetDemoJobId
-        ? 'worker-dashboard'
-        : item.recipientRole === 'worker'
-        ? 'worker-dashboard'
-        : 'employer-dashboard';
+      const nextRoute = resolveNotificationTargetRoute({
+        rawRoute: item.targetRoute,
+        jobId: item.targetJobId,
+        demoJobId: item.targetDemoJobId,
+        recipientRole: item.recipientRole,
+        eventType: item.eventType,
+        category: item.category,
+      });
       navigateToTarget(nextRoute, item.targetJobId, item.targetDemoJobId);
     },
-    [navigateToTarget]
+    [navigateToTarget, resolveNotificationTargetRoute]
   );
 
   return (
@@ -691,31 +781,16 @@ const AppShell: React.FC = () => {
       />
 
       <main id="main-content" className="flex-1">
-        {(route === 'home' || route === 'demo-testing') && (
-          <HomeView
-            onNavigate={navigate}
-            onOpenAiAssistant={() => {
-              setAiLocationHint('');
-              setAiOpen(true);
-            }}
+        {(route === 'home' || route === 'hire' || route === 'demo-testing') && (
+          <CustomerHomeV2
             workers={workers}
-            employers={employers}
             jobs={jobs}
-            announcements={announcements}
-            totalApplicationsCount={adminAppsCount}
-          />
-        )}
-        {route === 'hire' && (
-          <InstantHireView
-            workers={workers}
-            initialCategory={categoryFilter}
-            aiPrefill={aiPrefill}
-            onClearAiPrefill={() => setAiPrefill(null)}
-            onOpenAiAssistant={(locHint) => {
-              setAiLocationHint(locHint || '');
-              setAiOpen(true);
+            customerApplications={customerApplications}
+            quickHireOnly={route === 'hire'}
+            onNavigate={(nextRoute, nextCat, targetJobId) => {
+              if (targetJobId) setHighlightedJobId(targetJobId);
+              navigate(nextRoute, nextCat);
             }}
-            onNavigate={navigate}
           />
         )}
         {route === 'transport' && (
@@ -732,31 +807,8 @@ const AppShell: React.FC = () => {
             onNavigate={navigate}
           />
         )}
-        {route === 'find-work' && (
-          <FindWorkView
-            jobs={jobs}
-            initialCategory={categoryFilter}
-            highlightedJobId={highlightedJobId}
-            onClearHighlightedJob={() => setHighlightedJobId('')}
-            onNavigate={(r) => navigate(r)}
-          />
-        )}
-        {route === 'find-workers' && (
-          <FindWorkersView workers={workers} onNavigate={(r) => navigate(r)} />
-        )}
-        {route === 'skills-training' && <SkillsTrainingView />}
-        {route === 'register-worker' && (
-          <WorkerRegistrationForm onNavigate={(r) => navigate(r)} />
-        )}
-        {route === 'register-employer' && (
-          <EmployerRegistrationForm onNavigate={(r) => navigate(r)} />
-        )}
-        {route === 'register-vehicle' && (
-          <VehicleRegistrationForm onNavigate={(r) => navigate(r)} />
-        )}
-        {route === 'post-job' && <PostJobView workers={workers} onNavigate={(r) => navigate(r)} />}
-        {route === 'worker-dashboard' && (
-          <WorkerDashboardView
+        {(route === 'worker-dashboard' || route === 'find-work') && (
+          <WorkerAppV2
             jobs={jobs}
             notifications={notifications}
             unreadNotificationsCount={unreadNotificationsCount}
@@ -764,12 +816,10 @@ const AppShell: React.FC = () => {
             onNavigateToTarget={navigateToTarget}
             highlightedJobId={highlightedJobId}
             onClearHighlightedJob={() => setHighlightedJobId('')}
-            highlightedDemoJobId={highlightedDemoJobId}
-            onClearHighlightedDemoJob={() => setHighlightedDemoJobId('')}
           />
         )}
         {route === 'employer-dashboard' && (
-          <EmployerDashboardView
+          <CustomerOrdersV2
             jobs={jobs}
             workers={workers}
             notifications={notifications}
@@ -779,6 +829,37 @@ const AppShell: React.FC = () => {
             highlightedJobId={highlightedJobId}
             onClearHighlightedJob={() => setHighlightedJobId('')}
           />
+        )}
+        {route === 'find-workers' && (
+          <FindWorkersView workers={workers} onNavigate={(r) => navigate(r)} />
+        )}
+        {route === 'skills-training' && (
+          <SkillsTrainingView onNavigate={(r, cat) => navigate(r, cat)} />
+        )}
+        {route === 'govt-schemes' && (
+          <GovtSchemesView initialAudience="all" onNavigate={(r, cat) => navigate(r, cat)} />
+        )}
+        {route === 'for-unemployed' && (
+          <GovtSchemesView initialAudience="unemployed" onNavigate={(r, cat) => navigate(r, cat)} />
+        )}
+        {route === 'for-entrepreneurs' && (
+          <GovtSchemesView initialAudience="entrepreneurs" onNavigate={(r, cat) => navigate(r, cat)} />
+        )}
+        {route === 'register-worker' && (
+          <WorkerRegistrationForm
+            initialReferralCode={capturedRefCode}
+            onNavigate={(r) => navigate(r)}
+          />
+        )}
+        {route === 'register-employer' && (
+          <EmployerRegistrationForm onNavigate={(r) => navigate(r)} />
+        )}
+        {route === 'register-vehicle' && (
+          <VehicleRegistrationForm onNavigate={(r) => navigate(r)} />
+        )}
+        {route === 'post-job' && <PostJobView workers={workers} onNavigate={(r) => navigate(r)} />}
+        {route === 'advertise' && (
+          <AdvertiserDashboardView onNavigate={(r) => navigate(r)} />
         )}
         {route === 'admin' && (
           <AdminDashboardView
@@ -797,6 +878,21 @@ const AppShell: React.FC = () => {
       </main>
 
       <Footer onNavigate={(r) => navigate(r)} />
+      <MobileBottomNav
+        currentRoute={route}
+        onNavigate={(r) => navigate(r)}
+        activeCustomerOrdersCount={
+          user
+            ? jobs.filter(
+                (j) =>
+                  j.employerUid === user.uid &&
+                  j.status !== 'completed' &&
+                  j.status !== 'cancelled'
+              ).length
+            : 0
+        }
+        activeWorkerAlertsCount={unreadNotificationsCount}
+      />
       <OfflineIndicator />
 
       <AIVoiceAssistantModal

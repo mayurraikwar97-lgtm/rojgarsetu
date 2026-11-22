@@ -62,13 +62,16 @@ messaging.onBackgroundMessage((payload) => {
   const toneType = data.toneType || 'general';
   const baseTag = data.dedupeKey || data.jobId || data.demoJobId || 'alert';
   const tag = `${getSwTagPrefix(toneType)}-${baseTag}`;
+  const normalizedRoute =
+    data.route === 'find-work' || (!data.route && data.jobId)
+      ? 'worker-dashboard'
+      : data.route || 'worker-dashboard';
   const clickUrl =
-    data.clickUrl ||
-    (data.jobId
-      ? `/?route=${encodeURIComponent(data.route || 'worker-dashboard')}&jobId=${encodeURIComponent(data.jobId)}`
-      : data.route
-      ? `/?route=${encodeURIComponent(data.route)}`
-      : '/?route=worker-dashboard');
+    data.clickUrl && !String(data.clickUrl).includes('route=find-work')
+      ? data.clickUrl
+      : data.jobId
+      ? `/?route=${encodeURIComponent(normalizedRoute)}&jobId=${encodeURIComponent(data.jobId)}`
+      : `/?route=${encodeURIComponent(normalizedRoute)}`;
   const isSilent = data.playSound === 'false';
   const openActionTitle = 'OPEN';
 
@@ -84,7 +87,7 @@ messaging.onBackgroundMessage((payload) => {
     actions: [{ action: 'open', title: openActionTitle }],
     data: {
       clickUrl,
-      route: data.route || 'worker-dashboard',
+      route: normalizedRoute,
       jobId: data.jobId || '',
       demoJobId: data.demoJobId || '',
       voiceScript: data.voiceScript || '',
@@ -112,7 +115,8 @@ function extractNotificationData(notification) {
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const data = extractNotificationData(event.notification);
-  const fallbackRoute = data.route || (data.jobId ? 'worker-dashboard' : 'worker-dashboard');
+  const rawRoute = data.route === 'find-work' ? 'worker-dashboard' : data.route || '';
+  const fallbackRoute = rawRoute || 'worker-dashboard';
   const fallbackUrl = data.jobId
     ? `/?route=${encodeURIComponent(fallbackRoute)}&jobId=${encodeURIComponent(data.jobId)}`
     : `/?route=${encodeURIComponent(fallbackRoute)}`;
@@ -125,8 +129,10 @@ self.addEventListener('notificationclick', (event) => {
       event.notification.data.FCM_MSG.fcmOptions.link) ||
     fallbackUrl;
   const targetUrlObj = new URL(rawUrl, self.location.origin);
-  if (data.route && !targetUrlObj.searchParams.has('route')) {
-    targetUrlObj.searchParams.set('route', String(data.route));
+  if (targetUrlObj.searchParams.get('route') === 'find-work') {
+    targetUrlObj.searchParams.set('route', 'worker-dashboard');
+  } else if (rawRoute && !targetUrlObj.searchParams.has('route')) {
+    targetUrlObj.searchParams.set('route', String(rawRoute));
   }
   if (data.jobId && !targetUrlObj.searchParams.has('jobId')) {
     targetUrlObj.searchParams.set('jobId', String(data.jobId));
@@ -146,7 +152,7 @@ self.addEventListener('notificationclick', (event) => {
           client.postMessage({
             type: 'ROJGAR_SETU_DEEP_LINK',
             clickUrl: targetUrl,
-            route: data.route || '',
+            route: rawRoute || targetUrlObj.searchParams.get('route') || '',
             jobId: data.jobId || '',
             demoJobId: data.demoJobId || '',
             voiceScript: data.voiceScript || '',

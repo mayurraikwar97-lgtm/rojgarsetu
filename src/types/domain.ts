@@ -9,6 +9,9 @@ export type PageRoute =
   | 'find-work'
   | 'find-workers'
   | 'skills-training'
+  | 'govt-schemes'
+  | 'for-unemployed'
+  | 'for-entrepreneurs'
   | 'register-worker'
   | 'register-employer'
   | 'register-vehicle'
@@ -21,7 +24,8 @@ export type PageRoute =
   | 'partnerships'
   | 'pricing'
   | 'trust-safety'
-  | 'contact';
+  | 'contact'
+  | 'advertise';
 
 export type VehicleType =
   | 'bike_taxi'
@@ -46,6 +50,8 @@ export type DealStatus =
   | 'OFFER_RECEIVED'
   | 'OFFER_ACCEPTED'
   | 'DEAL_CONFIRMED'
+  | 'WORKER_ON_THE_WAY'
+  | 'WORKER_ARRIVED'
   | 'WORK_IN_PROGRESS'
   | 'WORK_COMPLETED'
   | 'CANCELLED'
@@ -54,6 +60,7 @@ export type DealStatus =
 export type DealNotificationEventType =
   | 'hiring_request_created'
   | 'worker_offer_sent'
+  | 'quote_revision_requested'
   | 'offer_accepted'
   | 'offer_rejected'
   | 'job_request_accepted'
@@ -63,12 +70,13 @@ export type DealNotificationEventType =
   | 'customer_location_shared'
   | 'worker_location_shared'
   | 'deal_confirmed'
+  | 'worker_on_the_way'
+  | 'worker_arrived'
   | 'work_started'
   | 'work_completed'
   | 'deal_cancelled'
   | 'worker_quotation'
   | 'booking_accepted'
-  | 'worker_arrived'
   | 'job_completed'
   | 'booking_cancelled'
   | 'new_application';
@@ -83,7 +91,7 @@ export interface UserAccount {
   updatedAt?: unknown;
 }
 
-export type ServiceRadiusKm = 5 | 10 | 20 | 30;
+export type ServiceRadiusKm = 2 | 5 | 10 | 20 | 30;
 
 export interface PublicWorkerProfile {
   id: string;
@@ -114,6 +122,10 @@ export interface PublicWorkerProfile {
   completedJobsCount: number;
   ratingAvg: number;
   lastRatedApplicationId?: string;
+  referralCode?: string;
+  referredByCode?: string;
+  referredByUid?: string;
+  referredByName?: string;
   createdAt?: unknown;
   updatedAt?: unknown;
 }
@@ -134,6 +146,10 @@ export interface WorkerPrivateInfo {
   certificateNotes?: string;
   photoUrl?: string;
   photoDocId?: string;
+  referralCode?: string;
+  referredByCode?: string;
+  referredByUid?: string;
+  referredByName?: string;
   createdAt?: unknown;
   updatedAt?: unknown;
 }
@@ -207,6 +223,9 @@ export interface JobPosting {
   destinationLat?: number;
   destinationLng?: number;
   transportItemType?: 'person' | 'goods';
+  subService?: string;
+  preferredTimeType?: 'now' | 'later';
+  startingPrice?: number;
   status: 'open' | 'in_progress' | 'completed' | 'cancelled' | 'flagged';
   dealStatus?: DealStatus;
   acceptedApplicationId?: string;
@@ -249,10 +268,13 @@ export interface JobApplication {
   offerSubmittedAt?: unknown;
   agreedPrice?: number;
   dealConfirmedAt?: unknown;
+  onTheWayAt?: unknown;
+  arrivedAt?: unknown;
   workStartedAt?: unknown;
   completedAt?: unknown;
   cancelledAt?: unknown;
   cancelledByUid?: string;
+  quoteRevisionRequested?: boolean;
   liveTrackingAuthorized: boolean;
   workerRating?: number;
   employerFeedback?: string;
@@ -773,4 +795,259 @@ export interface DealLocationShare {
   createdAt?: unknown;
   updatedAt?: unknown;
 }
+
+// ============================================================
+// CATEGORY-BASED SPONSORED ADVERTISEMENT SYSTEM
+// ============================================================
+
+export type AdvertiserApprovalStatus = 'pending' | 'approved' | 'rejected' | 'suspended';
+
+export type AdvertisementStatus =
+  | 'draft'
+  | 'pending'
+  | 'approved'
+  | 'active'
+  | 'paused'
+  | 'rejected'
+  | 'expired';
+
+export type AdvertisementActionType = 'call' | 'whatsapp' | 'website';
+
+export type AdvertisementPlacement =
+  | 'homepage'
+  | 'category_selection'
+  | 'service_form'
+  | 'service_info';
+
+export interface AdvertiserProfile {
+  id: string;
+  ownerUid: string;
+  businessName: string;
+  contactPerson: string;
+  mobile: string;
+  whatsappNumber?: string;
+  email?: string;
+  businessAddress: string;
+  state: string;
+  district: string;
+  city: string;
+  businessCategory: string;
+  websiteUrl?: string;
+  status: AdvertiserApprovalStatus;
+  adminNotes?: string;
+  reviewedByUid?: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface AdvertisementCategory {
+  id: string;
+  slug: string;
+  nameEn: string;
+  nameHi?: string;
+  nameMr?: string;
+  linkedServiceCategories: string[];
+  active: boolean;
+  createdByUid: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface AdvertisementRecord {
+  id: string;
+  ownerUid: string;
+  advertiserId?: string;
+  advertiserName: string;
+  title: string;
+  description: string;
+  bannerImageUrl: string;
+  targetCategories: string[];
+  targetStates: string[];
+  targetDistricts: string[];
+  targetCities: string[];
+  targetAreas?: string[];
+  allLocations: boolean;
+  contactAction: AdvertisementActionType;
+  callNumber?: string;
+  whatsappNumber?: string;
+  websiteUrl?: string;
+  ctaLabel?: string;
+  startDate: string; // YYYY-MM-DD
+  endDate: string;   // YYYY-MM-DD
+  preferredDurationDays?: number;
+  status: AdvertisementStatus;
+  priority: number; // 1 (lowest) to 10 (highest)
+  dailyImpressionLimit: number;
+  totalImpressionLimit: number;
+  budgetInr?: number;
+  adminNotes?: string;
+  createdByAdmin: boolean;
+  approvedByUid?: string;
+  impressionsCount: number;
+  uniqueViewsCount: number;
+  clicksCount: number;
+  callClicksCount: number;
+  whatsappClicksCount: number;
+  websiteClicksCount: number;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface AdvertisementCampaign {
+  id: string;
+  advertiserUid: string;
+  advertisementId: string;
+  campaignName: string;
+  budgetInr: number;
+  paymentStatus: 'unpaid' | 'paid' | 'waived' | 'refunded';
+  startDate: string;
+  endDate: string;
+  status: 'scheduled' | 'running' | 'paused' | 'completed' | 'cancelled';
+  notes?: string;
+  createdByUid: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface AdvertisementImpression {
+  id: string;
+  adId: string;
+  advertiserUid: string;
+  category: string;
+  state: string;
+  district: string;
+  placement: AdvertisementPlacement;
+  sessionHash: string;
+  createdAt?: unknown;
+}
+
+export interface AdvertisementClick {
+  id: string;
+  adId: string;
+  advertiserUid: string;
+  category: string;
+  state: string;
+  district: string;
+  placement: AdvertisementPlacement;
+  actionType: AdvertisementActionType;
+  sessionHash: string;
+  createdAt?: unknown;
+}
+
+// ============================================================
+// WORKER REFERRAL & FUTURE-READY REWARD SYSTEM
+// ============================================================
+
+export interface PlatformReferralConfig {
+  paidRegistrationEnabled: boolean; // MUST remain false during free launch
+  registrationFeeInr: number;       // 250 when activated in future
+  referralRewardInr: number;        // 50 when paid registration verified
+  holdingDays: number;              // e.g. 7 days verification window
+  programNoticeEn?: string;
+  programNoticeHi?: string;
+  programNoticeMr?: string;
+  updatedByUid: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface ReferralCodeIndexRecord {
+  id: string; // Uppercase referral code
+  referralCode: string;
+  ownerUid: string;
+  workerName: string;
+  registrationId: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export type ReferralPaymentStatus =
+  | 'free_launch'
+  | 'payment_pending'
+  | 'paid_verified'
+  | 'payment_failed'
+  | 'refunded'
+  | 'cancelled';
+
+export type ReferralRewardStatus =
+  | 'free_not_eligible'
+  | 'pending_verification'
+  | 'approved'
+  | 'paid'
+  | 'rejected';
+
+export interface WorkerReferralRecord {
+  id: string; // equals referredUid to guarantee 1 locked referral owner per worker
+  referrerUid: string;
+  referrerName: string;
+  referralCode: string;
+  referredUid: string;
+  referredWorkerName: string;
+  referredRegistrationId: string;
+  referredMobileHash: string;
+  sourceChannel: 'url_link' | 'manual_code';
+  registrationPaymentStatus: ReferralPaymentStatus;
+  registrationFeePaidInr: number;
+  rewardStatus: ReferralRewardStatus;
+  rewardAmountInr: number;
+  paymentReference?: string;
+  fraudFlags?: string[];
+  adminNotes?: string;
+  isSimulation?: boolean;
+  locked: boolean;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface ReferralRewardRecord {
+  id: string;
+  referralId: string;
+  referrerUid: string;
+  referrerName: string;
+  referredUid: string;
+  referredWorkerName: string;
+  referralCode: string;
+  registrationFeeInr: number;
+  rewardAmountInr: number;
+  status: 'pending' | 'approved' | 'paid' | 'rejected';
+  eligibilityReason: string;
+  paymentReference?: string;
+  payoutId?: string;
+  reviewedByUid?: string;
+  adminNotes?: string;
+  isSimulation?: boolean;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface ReferralWallet {
+  id: string; // equals worker UID
+  ownerUid: string;
+  referralCode: string;
+  totalReferrals: number;
+  verifiedPaidReferrals: number;
+  pendingBalanceInr: number;
+  approvedBalanceInr: number;
+  paidBalanceInr: number;
+  totalEarnedInr: number;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface ReferralPayoutRecord {
+  id: string;
+  referrerUid: string;
+  referrerName: string;
+  rewardIds: string[];
+  amountInr: number;
+  payoutMethod: 'upi' | 'bank_transfer' | 'cash_voucher';
+  transactionReference: string;
+  status: 'recorded_paid' | 'reversed';
+  notes?: string;
+  recordedByUid: string;
+  paidAt: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
 

@@ -2,12 +2,13 @@ import { EMPLOYMENT_CATEGORIES } from '../data/categories.ts';
 import { calculateDistanceKm } from '../data/indiaLocations.ts';
 import type { Language, ServiceRadiusKm } from '../types/domain.ts';
 
-export const SERVICE_RADIUS_STAGES: readonly ServiceRadiusKm[] = [5, 10, 20, 30] as const;
+export const SERVICE_RADIUS_STAGES: readonly ServiceRadiusKm[] = [2, 5, 10, 20, 30] as const;
 
-export function normalizeRadiusKm(value: unknown, fallback: ServiceRadiusKm = 5): ServiceRadiusKm {
+export function normalizeRadiusKm(value: unknown, fallback: ServiceRadiusKm = 2): ServiceRadiusKm {
   const num = Number(value);
-  if (num === 5 || num === 10 || num === 20 || num === 30) return num;
-  if (num > 0 && num <= 5) return 5;
+  if (num === 2 || num === 5 || num === 10 || num === 20 || num === 30) return num;
+  if (num > 0 && num <= 2) return 2;
+  if (num > 2 && num <= 5) return 5;
   if (num > 5 && num <= 10) return 10;
   if (num > 10 && num <= 20) return 20;
   if (num > 20) return 30;
@@ -15,7 +16,7 @@ export function normalizeRadiusKm(value: unknown, fallback: ServiceRadiusKm = 5)
 }
 
 export function getNextRadiusStage(currentRadiusKm: unknown): ServiceRadiusKm | null {
-  const current = normalizeRadiusKm(currentRadiusKm, 5);
+  const current = normalizeRadiusKm(currentRadiusKm, 2);
   const idx = SERVICE_RADIUS_STAGES.indexOf(current);
   if (idx < 0 || idx >= SERVICE_RADIUS_STAGES.length - 1) return null;
   return SERVICE_RADIUS_STAGES[idx + 1];
@@ -117,7 +118,18 @@ export function normalizeCategoryToken(raw: string): string {
     return 'security_guard';
   }
   if (clean.includes('delivery') || clean.includes('डिलीवरी') || clean.includes('डिलिव्हरी')) return 'delivery_personnel';
-  if (clean.includes('mechanic') || clean.includes('technician') || clean.includes('मेकॅनिक') || clean.includes('मैकेनिक')) {
+  if (
+    clean.includes('ac repair') ||
+    clean.includes('air conditioner') ||
+    clean.includes('appliance') ||
+    clean.includes('fridge') ||
+    clean.includes('washing machine') ||
+    clean.includes('mechanic') ||
+    clean.includes('technician') ||
+    clean.includes('मेकॅनिक') ||
+    clean.includes('मैकेनिक') ||
+    clean.includes('उपकरण')
+  ) {
     return 'technician_mechanic';
   }
   if (clean.includes('housekeeping') || clean.includes('cleaning') || clean.includes('cleaner') || clean.includes('स्वच्छता') || clean.includes('हाउसकीपिंग')) {
@@ -501,7 +513,7 @@ export function evaluateWorkerEligibilityForJob(params: {
   }
 
   const workerMaxRadius = normalizeRadiusKm(pref?.preferredRadiusKm ?? worker.preferredRadiusKm ?? 30, 30);
-  const normalizedStage = normalizeRadiusKm(stageRadiusKm, 5);
+  const normalizedStage = normalizeRadiusKm(stageRadiusKm, 2);
   const effectiveRadius = Math.min(normalizedStage, workerMaxRadius);
 
   const sameCity =
@@ -516,8 +528,8 @@ export function evaluateWorkerEligibilityForJob(params: {
   if (distKm !== null) {
     if (
       distKm <= effectiveRadius ||
-      (sameCity && distKm <= 35) ||
-      (sameDistrict && normalizedStage >= 30 && workerMaxRadius >= 30 && distKm <= 120)
+      (sameCity && normalizedStage >= 5 && distKm <= Math.max(effectiveRadius, 12)) ||
+      (sameDistrict && normalizedStage >= 20 && workerMaxRadius >= 20 && distKm <= 120)
     ) {
       return {
         eligible: true,

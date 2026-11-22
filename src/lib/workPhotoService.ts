@@ -67,24 +67,35 @@ async function compressImageToBlobAndDataUrl(
   ctx.fillRect(0, 0, width, height);
   ctx.drawImage(img, 0, 0, width, height);
 
+  let curCanvas = canvas;
   let quality = 0.84;
-  let dataUrl = canvas.toDataURL('image/jpeg', quality);
-  while (dataUrl.length > maxDataUrlChars && quality > 0.36) {
-    quality -= 0.08;
-    dataUrl = canvas.toDataURL('image/jpeg', quality);
+  let dataUrl = curCanvas.toDataURL('image/jpeg', quality);
+
+  // Iteratively reduce quality and dimensions until safely under maxDataUrlChars (never truncate base64!)
+  for (let pass = 0; pass < 6 && dataUrl.length > maxDataUrlChars; pass++) {
+    while (dataUrl.length > maxDataUrlChars && quality > 0.34) {
+      quality = Math.max(0.32, Number((quality - 0.1).toFixed(2)));
+      dataUrl = curCanvas.toDataURL('image/jpeg', quality);
+    }
+    if (dataUrl.length <= maxDataUrlChars) break;
+    const nextW = Math.max(120, Math.round(curCanvas.width * 0.72));
+    const nextH = Math.max(120, Math.round(curCanvas.height * 0.72));
+    if (nextW === curCanvas.width && nextH === curCanvas.height) break;
+    const nextCanvas = document.createElement('canvas');
+    nextCanvas.width = nextW;
+    nextCanvas.height = nextH;
+    const nCtx = nextCanvas.getContext('2d');
+    if (!nCtx) break;
+    nCtx.fillStyle = '#FFFFFF';
+    nCtx.fillRect(0, 0, nextW, nextH);
+    nCtx.drawImage(curCanvas, 0, 0, nextW, nextH);
+    curCanvas = nextCanvas;
+    quality = 0.72;
+    dataUrl = curCanvas.toDataURL('image/jpeg', quality);
   }
 
   if (dataUrl.length > maxDataUrlChars) {
-    const smallCanvas = document.createElement('canvas');
-    smallCanvas.width = Math.max(120, Math.round(width * 0.65));
-    smallCanvas.height = Math.max(120, Math.round(height * 0.65));
-    const sCtx = smallCanvas.getContext('2d');
-    if (sCtx) {
-      sCtx.fillStyle = '#FFFFFF';
-      sCtx.fillRect(0, 0, smallCanvas.width, smallCanvas.height);
-      sCtx.drawImage(canvas, 0, 0, smallCanvas.width, smallCanvas.height);
-      dataUrl = smallCanvas.toDataURL('image/jpeg', 0.58);
-    }
+    throw new Error('Photo is still too large after compression. Please select a clearer or smaller photo.');
   }
 
   const blob = await new Promise<Blob>((resolve, reject) => {
@@ -101,10 +112,12 @@ async function compressImageToBlobAndDataUrl(
   return { blob, dataUrl };
 }
 
+let storageBucketUnavailable = false;
+
 /**
  * Uploads a customer work photo to Firebase Storage (`work_orders/{ownerUid}/{folder}_{ts}_{rand}.jpg`)
  * using resumable upload with real-time progress reporting (0–100%).
- * Falls back to a compact compressed data URL only if Firebase Storage bucket/CORS is unavailable,
+ * Falls back to a valid compressed data URL only if Firebase Storage bucket/CORS is unavailable,
  * so order creation is never blocked.
  */
 export async function uploadCustomerWorkPhoto(params: {
@@ -126,66 +139,63 @@ export async function uploadCustomerWorkPhoto(params: {
   const rand = Math.random().toString(36).slice(2, 8);
   const storagePath = `work_orders/${safeUid}/${folder}_${Date.now()}_${rand}.jpg`;
 
-  try {
-    const storageRef = ref(storage, storagePath);
-    const downloadUrl = await new Promise<string>((resolve, reject) => {
-      const uploadTask = uploadBytesResumable(storageRef, blob, {
-        contentType: 'image/jpeg',
-        cacheControl: 'public,max-age=86400',
+  if (!storageBucketUnavailable) {
+    try {
+      const storageRef = ref(storage, storagePath);
+      const downloadUrl = await new Promise<string>((resolve, reject) => {
+        const uploadTask = uploadBytesResumable(storageRef, blob, {
+          contentType: 'image/jpeg',
+          cacheControl: 'public,max-age=86400',
+        });
+
+        const timer = setTimeout(() => {
+          try {
+            uploadTask.cancel();
+          } catch {
+            // ignore cancel errors
+          }
+          reject(new Error('STORAGE_TIMEOUT'));
+        }, 4500);
+
+        uploadTask.on(
+          'state_changed',
+          (snapshot) => {
+            if (snapshot.totalBytes > 0) {
+              const pct = Math.round(25 + (snapshot.bytesTransferred / snapshot.totalBytes) * 70);
+              onProgress?.(Math.min(95, pct));
+            }
+          },
+          (err) => {
+            clearTimeout(timer);
+            reject(err);
+          },
+          () => {
+            clearTimeout(timer);
+            getDownloadURL(uploadTask.snapshot.ref)
+              .then((url) => resolve(url))
+              .catch(reject);
+          }
+        );
       });
 
-      const timer = setTimeout(() => {
-        try {
-          uploadTask.cancel();
-        } catch {
-          // ignore cancel errors
-        }
-        reject(new Error('STORAGE_TIMEOUT'));
-      }, 8500);
-
-      uploadTask.on(
-        'state_changed',
-        (snapshot) => {
-          if (snapshot.totalBytes > 0) {
-            const pct = Math.round(25 + (snapshot.bytesTransferred / snapshot.totalBytes) * 70);
-            onProgress?.(Math.min(95, pct));
-          }
-        },
-        (err) => {
-          clearTimeout(timer);
-          reject(err);
-        },
-        () => {
-          clearTimeout(timer);
-          getDownloadURL(uploadTask.snapshot.ref)
-            .then((url) => resolve(url))
-            .catch(reject);
-        }
-      );
-    });
-
-    if (downloadUrl && downloadUrl.startsWith('http')) {
-      onProgress?.(100);
-      return {
-        url: downloadUrl,
-        storageMode: 'firebase_storage',
-        name: file.name,
-      };
+      if (downloadUrl && downloadUrl.startsWith('http')) {
+        onProgress?.(100);
+        return {
+          url: downloadUrl,
+          storageMode: 'firebase_storage',
+          name: file.name,
+        };
+      }
+    } catch (err) {
+      storageBucketUnavailable = true;
+      console.warn('Firebase Storage upload unavailable, using compressed inline photo fallback:', err);
     }
-  } catch (err) {
-    console.warn('Firebase Storage upload unavailable, using compressed inline photo fallback:', err);
   }
 
-  // Fallback compact data URL guaranteed to stay under Firestore rules size cap
-  onProgress?.(85);
-  const compact =
-    dataUrl.length <= MAX_FALLBACK_DATA_URL_LENGTH
-      ? dataUrl
-      : (await compressImageToBlobAndDataUrl(file, 480, MAX_FALLBACK_DATA_URL_LENGTH)).dataUrl;
-
+  // Fallback compact valid JPEG data URL guaranteed to stay under Firestore rules size cap
   onProgress?.(100);
   return {
-    url: compact.slice(0, MAX_FALLBACK_DATA_URL_LENGTH),
+    url: dataUrl,
     storageMode: 'firestore_compressed',
     name: file.name,
   };
@@ -211,3 +221,87 @@ export function getJobPhotoUrls(job?: {
   }
   return list.slice(0, MAX_WORK_PHOTOS);
 }
+
+/**
+ * Uploads an advertisement banner image to Firebase Storage (`ad_banners/{ownerUid}/banner_{ts}_{rand}.jpg`)
+ * with progress reporting and a compressed JPEG data-URL fallback safely within Firestore limits.
+ */
+export async function uploadAdBannerImage(params: {
+  file: File;
+  ownerUid: string;
+  onProgress?: (percent: number) => void;
+}): Promise<UploadedWorkPhoto> {
+  const { file, ownerUid, onProgress } = params;
+  onProgress?.(10);
+  const { blob, dataUrl } = await compressImageToBlobAndDataUrl(
+    file,
+    1200,
+    92000 // Safe within Firestore ad banner rule cap (<= 110000 chars)
+  );
+  onProgress?.(30);
+
+  const safeUid = ownerUid.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || 'advertiser';
+  const rand = Math.random().toString(36).slice(2, 8);
+  const storagePath = `ad_banners/${safeUid}/banner_${Date.now()}_${rand}.jpg`;
+
+  if (!storageBucketUnavailable) {
+    try {
+      const storageRef = ref(storage, storagePath);
+      const downloadUrl = await new Promise<string>((resolve, reject) => {
+        const uploadTask = uploadBytesResumable(storageRef, blob, {
+          contentType: 'image/jpeg',
+          cacheControl: 'public,max-age=86400',
+        });
+
+        const timer = setTimeout(() => {
+          try {
+            uploadTask.cancel();
+          } catch {
+            // ignore
+          }
+          reject(new Error('STORAGE_TIMEOUT'));
+        }, 4500);
+
+        uploadTask.on(
+          'state_changed',
+          (snapshot) => {
+            if (snapshot.totalBytes > 0) {
+              const pct = Math.round(30 + (snapshot.bytesTransferred / snapshot.totalBytes) * 65);
+              onProgress?.(Math.min(95, pct));
+            }
+          },
+          (err) => {
+            clearTimeout(timer);
+            reject(err);
+          },
+          () => {
+            clearTimeout(timer);
+            getDownloadURL(uploadTask.snapshot.ref)
+              .then((url) => resolve(url))
+              .catch(reject);
+          }
+        );
+      });
+
+      if (downloadUrl && downloadUrl.startsWith('http')) {
+        onProgress?.(100);
+        return {
+          url: downloadUrl,
+          storageMode: 'firebase_storage',
+          name: file.name,
+        };
+      }
+    } catch (err) {
+      storageBucketUnavailable = true;
+      console.warn('Firebase Storage ad banner upload unavailable, using compressed fallback:', err);
+    }
+  }
+
+  onProgress?.(100);
+  return {
+    url: dataUrl,
+    storageMode: 'firestore_compressed',
+    name: file.name,
+  };
+}
+

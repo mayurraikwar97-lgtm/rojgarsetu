@@ -18,7 +18,7 @@ import {
   getPublicJobLocationText,
   SERVICE_RADIUS_STAGES,
 } from '../lib/smartVoiceJobAlert';
-import { MAX_WORK_PHOTOS } from '../lib/workPhotoService';
+import { getJobPhotoUrls, MAX_WORK_PHOTOS } from '../lib/workPhotoService';
 import { WorkPhotoUploader } from './WorkPhotoUploader';
 import { speakJobAlert, stopVoiceAlert, unlockAudioOnUserGesture } from '../lib/voiceAlertEngine';
 import type {
@@ -30,6 +30,7 @@ import type {
   WageUnit,
 } from '../types/domain';
 import { SecureAvatar } from './SecureAvatar';
+import { SponsoredAdSlider } from './SponsoredAdSlider';
 
 interface FindWorkViewProps {
   jobs: JobPosting[];
@@ -284,20 +285,27 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
 
                   <p className="text-sm text-slate-600 leading-relaxed">{job.description}</p>
 
-                  {job.photoAttachment && (
-                    <div className="flex items-center gap-3 p-2 rounded bg-slate-50 border border-slate-200">
-                      <img
-                        src={job.photoAttachment}
-                        alt={`Work site photo for ${job.title}`}
-                        className="w-14 h-14 rounded object-cover border border-slate-200 shrink-0"
-                      />
-                      <span className="text-[11px] font-medium text-slate-600">
-                        {job.photoAnalyzed
-                          ? 'Site photo attached (AI-analyzed)'
-                          : 'Site photo attached by customer (not AI-analyzed)'}
-                      </span>
-                    </div>
-                  )}
+                  {(() => {
+                    const cardPhotos = getJobPhotoUrls(job);
+                    if (cardPhotos.length === 0) return null;
+                    return (
+                      <div className="p-2.5 rounded bg-slate-50 border border-slate-200 space-y-1.5">
+                        <span className="block text-[11px] font-semibold text-[#0B3B75]">
+                          {`Uploaded Work Photos (${cardPhotos.length})`}
+                        </span>
+                        <div className="flex flex-wrap gap-2">
+                          {cardPhotos.map((url, idx) => (
+                            <img
+                              key={`${job.id}-photo-${idx}`}
+                              src={url}
+                              alt={`Work site photo ${idx + 1} for ${job.title}`}
+                              className="w-16 h-16 rounded object-cover border border-slate-300 shrink-0 bg-white"
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   <div className="text-xs text-slate-600 space-y-1 pt-1">
                     {(() => {
@@ -567,6 +575,16 @@ export const FindWorkersView: React.FC<FindWorkersViewProps> = ({ workers, onNav
           <option value="available">Available Immediately</option>
           <option value="busy">Currently Engaged</option>
         </select>
+      </div>
+
+      <div className="mb-8">
+        <SponsoredAdSlider
+          compact
+          category={search.trim() || 'all'}
+          state={stateFilter}
+          placement="service_info"
+          onNavigate={(r) => onNavigate(r)}
+        />
       </div>
 
       {filtered.length === 0 ? (
@@ -1163,10 +1181,14 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
             <div className="flex justify-end">
               <button
                 type="submit"
-                disabled={saving}
-                className="px-6 py-3 rounded-md bg-[#0B3B75] text-white text-sm font-bold hover:bg-slate-800 cursor-pointer"
+                disabled={saving || photoUploading}
+                className="px-6 py-3 rounded-md bg-[#0B3B75] text-white text-sm font-bold hover:bg-slate-800 disabled:opacity-60 cursor-pointer"
               >
-                {saving ? t.common.loading : t.jobs.publishBtn}
+                {photoUploading
+                  ? 'Uploading Work Photos...'
+                  : saving
+                  ? t.common.loading
+                  : t.jobs.publishBtn}
               </button>
             </div>
           </form>

@@ -2057,10 +2057,12 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
                 ) : (
                   <button
                     type="submit"
-                    disabled={submitting}
+                    disabled={submitting || photoUploading}
                     className="w-full py-3 px-4 rounded bg-[#E06D1B] text-white text-sm font-bold hover:bg-[#c55b10] disabled:opacity-60 transition-colors cursor-pointer"
                   >
-                    {submitting
+                    {photoUploading
+                      ? tr(lang, 'Uploading Work Photos...', 'फोटो अपलोड हो रहे हैं...', 'फोटो अपलोड होत आहेत...')
+                      : submitting
                       ? tr(lang, 'Sending Hire Request...', 'रिक्वेस्ट भेजी जा रही है...', 'विनंती पाठवत आहे...')
                       : tr(lang, 'Confirm & Send Instant Hire Request', 'कन्फर्म करें और तुरंत हायर रिक्वेस्ट भेजें', 'निश्चित करा आणि तात्काळ विनंती पाठवा')}
                   </button>

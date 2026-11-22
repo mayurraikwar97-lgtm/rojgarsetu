@@ -39,6 +39,7 @@ export const OrderChatBox: React.FC<OrderChatBoxProps> = ({
   const [messages, setMessages] = useState<DealMessage[]>([]);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
+  const [chatError, setChatError] = useState('');
 
   useEffect(() => {
     if (!jobId || !workerUid || !viewerUid) return;
@@ -56,7 +57,14 @@ export const OrderChatBox: React.FC<OrderChatBoxProps> = ({
     e.preventDefault();
     if (!draft.trim() || readOnly) return;
     setSending(true);
+    setChatError('');
     try {
+      const safeName =
+        viewerName.trim().length >= 2
+          ? viewerName.trim()
+          : viewerRole === 'customer'
+          ? 'Customer'
+          : 'Worker';
       await sendOrderMessage({
         jobId,
         jobTitle,
@@ -66,10 +74,21 @@ export const OrderChatBox: React.FC<OrderChatBoxProps> = ({
         dealStatus,
         senderUid: viewerUid,
         senderRole: viewerRole,
-        senderName: viewerName,
+        senderName: safeName,
         text: draft.trim(),
       });
       setDraft('');
+    } catch (err) {
+      setChatError(
+        err instanceof Error
+          ? err.message
+          : tr(
+              lang,
+              'Could not send message. Please try again.',
+              'संदेश नहीं भेजा जा सका। कृपया पुनः प्रयास करें।',
+              'संदेश पाठवता आला नाही. कृपया पुन्हा प्रयत्न करा.'
+            )
+      );
     } finally {
       setSending(false);
     }
@@ -132,6 +151,12 @@ export const OrderChatBox: React.FC<OrderChatBoxProps> = ({
             );
           })}
         </div>
+      )}
+
+      {chatError && (
+        <p className="text-[11px] font-medium text-red-700 bg-red-50 border border-red-200 rounded px-2.5 py-1.5">
+          {chatError}
+        </p>
       )}
 
       {!readOnly && (

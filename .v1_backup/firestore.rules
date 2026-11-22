@@ -1,0 +1,1990 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Core Primitives
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(uid) {
+      return isVerifiedUser() && request.auth.uid == uid;
+    }
+
+    function isAdmin() {
+      return isVerifiedUser() && (
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        request.auth.token.email == 'mayurraikwar97@gmail.com'
+      );
+    }
+
+    function isDemoModeEnabled() {
+      return exists(/databases/$(database)/documents/platform_settings/demo_config)
+        && get(/databases/$(database)/documents/platform_settings/demo_config).data.enabled == true;
+    }
+
+    function isValidTimestampOnCreate() {
+      return incoming().createdAt == request.time && incoming().updatedAt == request.time;
+    }
+
+    function isValidTimestampOnUpdate() {
+      return incoming().createdAt == existing().createdAt && incoming().updatedAt == request.time;
+    }
+
+    // Entity Validators
+    function isValidUserAccount(data) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'role', 'preferredLanguage', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'role', 'preferredLanguage', 'createdAt', 'updatedAt'])
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && data.role in ['worker', 'employer', 'admin']
+        && data.preferredLanguage in ['en', 'hi', 'mr']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAdminMember(data) {
+      return data.keys().hasAll(['uid', 'email', 'grantedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'grantedAt'])
+        && isValidId(data.uid)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && data.grantedAt is timestamp;
+    }
+
+    function isValidPublicWorker(data) {
+      return data.keys().hasAll([
+          'ownerUid', 'registrationId', 'displayName', 'primarySkill', 'skills',
+          'experienceYears', 'expectedWage', 'wageUnit', 'preferredWorkType',
+          'availabilityStatus', 'state', 'district', 'cityOrVillage',
+          'approxLat', 'approxLng', 'languagesKnown', 'verificationStatus',
+          'completedJobsCount', 'ratingAvg', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid', 'registrationId', 'displayName', 'primarySkill', 'skills',
+          'experienceYears', 'expectedWage', 'wageUnit', 'preferredWorkType',
+          'availabilityStatus', 'state', 'district', 'cityOrVillage',
+          'approxLat', 'approxLng', 'languagesKnown', 'gender', 'education',
+          'verificationStatus', 'isWomenEnterprise', 'photoDocId',
+          'preferredLanguage', 'preferredRadiusKm', 'voiceAlertsEnabled',
+          'completedJobsCount', 'ratingAvg', 'lastRatedApplicationId', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerUid)
+        && data.registrationId is string && data.registrationId.size() >= 5 && data.registrationId.size() <= 40
+        && data.displayName is string && data.displayName.size() >= 2 && data.displayName.size() <= 120
+        && data.primarySkill is string && data.primarySkill.size() >= 2 && data.primarySkill.size() <= 80
+        && data.skills is list && data.skills.size() >= 1 && data.skills.size() <= 15 && data.skills[0] is string
+        && data.experienceYears is number && data.experienceYears >= 0 && data.experienceYears <= 70
+        && data.expectedWage is number && data.expectedWage >= 0 && data.expectedWage <= 500000
+        && data.wageUnit in ['daily', 'monthly', 'hourly', 'contract']
+        && data.preferredWorkType in ['full_time', 'part_time', 'daily_wage', 'contract']
+        && data.availabilityStatus in ['available', 'busy', 'offline']
+        && data.state is string && data.state.size() >= 2 && data.state.size() <= 80
+        && data.district is string && data.district.size() >= 2 && data.district.size() <= 80
+        && data.cityOrVillage is string && data.cityOrVillage.size() >= 2 && data.cityOrVillage.size() <= 100
+        && data.approxLat is number && data.approxLat >= -90 && data.approxLat <= 90
+        && data.approxLng is number && data.approxLng >= -180 && data.approxLng <= 180
+        && data.languagesKnown is list && data.languagesKnown.size() >= 1 && data.languagesKnown.size() <= 10 && data.languagesKnown[0] is string
+        && (!('gender' in data) || data.gender in ['female', 'male', 'other', 'prefer_not_to_say'])
+        && (!('education' in data) || (data.education is string && data.education.size() <= 100))
+        && data.verificationStatus in ['pending', 'verified', 'suspended']
+        && (!('isWomenEnterprise' in data) || data.isWomenEnterprise is bool)
+        && (!('photoDocId' in data) || isValidId(data.photoDocId))
+        && (!('preferredLanguage' in data) || data.preferredLanguage in ['en', 'hi', 'mr'])
+        && (!('preferredRadiusKm' in data) || data.preferredRadiusKm in [5, 10, 20, 30])
+        && (!('voiceAlertsEnabled' in data) || data.voiceAlertsEnabled is bool)
+        && data.completedJobsCount is number && data.completedJobsCount >= 0 && data.completedJobsCount <= 100000
+        && data.ratingAvg is number && data.ratingAvg >= 0 && data.ratingAvg <= 5
+        && (!('lastRatedApplicationId' in data) || isValidId(data.lastRatedApplicationId))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWorkerPrivate(data) {
+      return data.keys().hasAll([
+          'ownerUid', 'fullName', 'mobile', 'mobileVerified', 'ageConfirmed',
+          'liveLocationConsent', 'privacyConsent', 'idVerificationStatus',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid', 'fullName', 'mobile', 'mobileVerified', 'verificationMethod',
+          'testPinHash', 'email', 'ageConfirmed', 'preferredWorkLocation',
+          'liveLocationConsent', 'privacyConsent', 'idVerificationStatus',
+          'certificateNotes', 'photoUrl', 'photoDocId', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerUid)
+        && data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 120
+        && data.mobile is string && data.mobile.size() >= 10 && data.mobile.size() <= 20
+        && data.mobileVerified is bool
+        && (!('verificationMethod' in data) || data.verificationMethod in ['sms_otp', 'firebase_phone', 'test_pin'])
+        && (!('testPinHash' in data) || (data.testPinHash is string && data.testPinHash.size() <= 128))
+        && (!('email' in data) || (data.email is string && data.email.size() <= 200))
+        && data.ageConfirmed is bool
+        && (!('preferredWorkLocation' in data) || (data.preferredWorkLocation is string && data.preferredWorkLocation.size() <= 160))
+        && data.liveLocationConsent is bool
+        && data.privacyConsent is bool
+        && data.idVerificationStatus in ['not_submitted', 'voluntary_pending', 'verified']
+        && (!('certificateNotes' in data) || (data.certificateNotes is string && data.certificateNotes.size() <= 500))
+        && (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 1000))
+        && (!('photoDocId' in data) || isValidId(data.photoDocId))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPublicEmployer(data) {
+      return data.keys().hasAll([
+          'ownerUid', 'registrationId', 'businessName', 'businessType',
+          'industryCategory', 'state', 'district', 'requiredCategories',
+          'verificationStatus', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid', 'registrationId', 'businessName', 'businessType',
+          'industryCategory', 'state', 'district', 'requiredCategories',
+          'verificationStatus', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerUid)
+        && data.registrationId is string && data.registrationId.size() >= 5 && data.registrationId.size() <= 40
+        && data.businessName is string && data.businessName.size() >= 2 && data.businessName.size() <= 160
+        && data.businessType is string && data.businessType.size() >= 2 && data.businessType.size() <= 80
+        && data.industryCategory is string && data.industryCategory.size() >= 2 && data.industryCategory.size() <= 80
+        && data.state is string && data.state.size() >= 2 && data.state.size() <= 80
+        && data.district is string && data.district.size() >= 2 && data.district.size() <= 80
+        && data.requiredCategories is list && data.requiredCategories.size() >= 1 && data.requiredCategories.size() <= 15 && data.requiredCategories[0] is string
+        && data.verificationStatus in ['pending', 'verified', 'suspended']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidEmployerPrivate(data) {
+      return data.keys().hasAll([
+          'ownerUid', 'contactPerson', 'mobile', 'mobileVerified',
+          'email', 'businessAddress', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid', 'contactPerson', 'mobile', 'mobileVerified', 'verificationMethod',
+          'testPinHash', 'email', 'businessAddress', 'gstNumber', 'establishmentDetails',
+          'workforceNotes', 'photoDocId', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerUid)
+        && data.contactPerson is string && data.contactPerson.size() >= 2 && data.contactPerson.size() <= 120
+        && data.mobile is string && data.mobile.size() >= 10 && data.mobile.size() <= 20
+        && data.mobileVerified is bool
+        && (!('verificationMethod' in data) || data.verificationMethod in ['sms_otp', 'firebase_phone', 'test_pin'])
+        && (!('testPinHash' in data) || (data.testPinHash is string && data.testPinHash.size() <= 128))
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && data.businessAddress is string && data.businessAddress.size() >= 4 && data.businessAddress.size() <= 300
+        && (!('gstNumber' in data) || (data.gstNumber is string && data.gstNumber.size() <= 30))
+        && (!('establishmentDetails' in data) || (data.establishmentDetails is string && data.establishmentDetails.size() <= 600))
+        && (!('workforceNotes' in data) || (data.workforceNotes is string && data.workforceNotes.size() <= 600))
+        && (!('photoDocId' in data) || isValidId(data.photoDocId))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDealStatus(s) {
+      return s in [
+        'REQUESTED', 'NOTIFIED', 'OFFER_RECEIVED', 'OFFER_ACCEPTED',
+        'DEAL_CONFIRMED', 'WORK_IN_PROGRESS', 'WORK_COMPLETED', 'CANCELLED', 'REJECTED'
+      ];
+    }
+
+    function isValidJob(data) {
+      return data.keys().hasAll([
+          'employerUid', 'employerName', 'title', 'category', 'description',
+          'workersRequired', 'requiredSkills', 'state', 'district', 'cityOrVillage',
+          'workLocationLabel', 'lat', 'lng', 'workType', 'offeredWage', 'wageUnit',
+          'paymentTerms', 'contactPreference', 'isWomenFriendly', 'isAccessible',
+          'biddingEnabled', 'status', 'applicationsCount', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'employerUid', 'employerName', 'title', 'category', 'description',
+          'workersRequired', 'requiredSkills', 'state', 'district', 'cityOrVillage',
+          'workLocationLabel', 'lat', 'lng', 'jobDate', 'startTime', 'duration',
+          'workType', 'offeredWage', 'wageUnit', 'paymentTerms', 'contactPreference',
+          'isWomenFriendly', 'isAccessible', 'biddingEnabled', 'photoAttachment',
+          'workPhotoUrls', 'orderKind', 'pickupLocationLabel', 'pickupLat', 'pickupLng',
+          'destinationLocationLabel', 'destinationLat', 'destinationLng', 'transportItemType',
+          'photoAnalyzed', 'status', 'dealStatus', 'acceptedApplicationId',
+          'acceptedWorkerUid', 'notifiedWorkerUids', 'approxLocationLabel',
+          'initialRadiusKm', 'currentRadiusKm', 'radiusStageUpdatedAt',
+          'applicationsCount', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.employerUid)
+        && data.employerName is string && data.employerName.size() >= 2 && data.employerName.size() <= 160
+        && data.title is string && data.title.size() >= 3 && data.title.size() <= 140
+        && data.category is string && data.category.size() >= 2 && data.category.size() <= 80
+        && data.description is string && data.description.size() >= 10 && data.description.size() <= 2000
+        && data.workersRequired is number && data.workersRequired >= 1 && data.workersRequired <= 5000
+        && data.requiredSkills is list && data.requiredSkills.size() >= 1 && data.requiredSkills.size() <= 15 && data.requiredSkills[0] is string
+        && data.state is string && data.state.size() >= 2 && data.state.size() <= 80
+        && data.district is string && data.district.size() >= 2 && data.district.size() <= 80
+        && data.cityOrVillage is string && data.cityOrVillage.size() >= 2 && data.cityOrVillage.size() <= 100
+        && data.workLocationLabel is string && data.workLocationLabel.size() >= 2 && data.workLocationLabel.size() <= 160
+        && data.lat is number && data.lat >= -90 && data.lat <= 90
+        && data.lng is number && data.lng >= -180 && data.lng <= 180
+        && (!('jobDate' in data) || (data.jobDate is string && data.jobDate.size() <= 30))
+        && (!('startTime' in data) || (data.startTime is string && data.startTime.size() <= 30))
+        && (!('duration' in data) || (data.duration is string && data.duration.size() <= 60))
+        && data.workType in ['full_time', 'part_time', 'daily_wage', 'contract', 'temporary', 'urgent', 'bulk']
+        && data.offeredWage is number && data.offeredWage >= 0 && data.offeredWage <= 500000
+        && data.wageUnit in ['daily', 'monthly', 'hourly', 'contract']
+        && data.paymentTerms is string && data.paymentTerms.size() <= 200
+        && data.contactPreference in ['platform_message', 'phone_after_confirm']
+        && data.isWomenFriendly is bool
+        && data.isAccessible is bool
+        && data.biddingEnabled is bool
+        && (!('photoAttachment' in data) || (data.photoAttachment is string && data.photoAttachment.size() <= 100000))
+        && (!('workPhotoUrls' in data) || (data.workPhotoUrls is list && data.workPhotoUrls.size() <= 6 && (data.workPhotoUrls.size() == 0 || (data.workPhotoUrls[0] is string && data.workPhotoUrls[0].size() <= 85000))))
+        && (!('orderKind' in data) || data.orderKind in ['work', 'bike_transport'])
+        && (!('pickupLocationLabel' in data) || (data.pickupLocationLabel is string && data.pickupLocationLabel.size() <= 160))
+        && (!('pickupLat' in data) || (data.pickupLat is number && data.pickupLat >= -90 && data.pickupLat <= 90))
+        && (!('pickupLng' in data) || (data.pickupLng is number && data.pickupLng >= -180 && data.pickupLng <= 180))
+        && (!('destinationLocationLabel' in data) || (data.destinationLocationLabel is string && data.destinationLocationLabel.size() <= 160))
+        && (!('destinationLat' in data) || (data.destinationLat is number && data.destinationLat >= -90 && data.destinationLat <= 90))
+        && (!('destinationLng' in data) || (data.destinationLng is number && data.destinationLng >= -180 && data.destinationLng <= 180))
+        && (!('transportItemType' in data) || data.transportItemType in ['person', 'goods'])
+        && (!('photoAnalyzed' in data) || data.photoAnalyzed is bool)
+        && data.status in ['open', 'in_progress', 'completed', 'cancelled', 'flagged']
+        && (!('dealStatus' in data) || isValidDealStatus(data.dealStatus))
+        && (!('acceptedApplicationId' in data) || isValidId(data.acceptedApplicationId))
+        && (!('acceptedWorkerUid' in data) || isValidId(data.acceptedWorkerUid))
+        && (!('notifiedWorkerUids' in data) || (data.notifiedWorkerUids is list && data.notifiedWorkerUids.size() <= 100))
+        && (!('approxLocationLabel' in data) || (data.approxLocationLabel is string && data.approxLocationLabel.size() <= 160))
+        && (!('initialRadiusKm' in data) || data.initialRadiusKm in [5, 10, 20, 30])
+        && (!('currentRadiusKm' in data) || data.currentRadiusKm in [5, 10, 20, 30])
+        && (!('radiusStageUpdatedAt' in data) || data.radiusStageUpdatedAt is timestamp)
+        && data.applicationsCount is number && data.applicationsCount >= 0 && data.applicationsCount <= 100000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidApplication(data) {
+      return data.keys().hasAll([
+          'jobId', 'jobTitle', 'employerUid', 'workerUid', 'workerRegistrationId',
+          'workerName', 'workerPrimarySkill', 'proposedWage', 'status',
+          'liveTrackingAuthorized', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'jobId', 'jobTitle', 'employerUid', 'workerUid', 'workerRegistrationId',
+          'workerName', 'workerPrimarySkill', 'workerPhotoDocId', 'proposedWage', 'note', 'status',
+          'dealStatus', 'initiatedBy', 'jobCategory', 'jobDistrict', 'jobLocationLabel',
+          'jobDate', 'startTime', 'customerName', 'offerAmount', 'travelCharges', 'estimatedArrivalTime',
+          'offerMessage', 'offerSubmittedAt', 'agreedPrice', 'dealConfirmedAt',
+          'workStartedAt', 'completedAt', 'cancelledAt', 'cancelledByUid',
+          'liveTrackingAuthorized', 'workerRating', 'employerFeedback',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.jobId)
+        && data.jobTitle is string && data.jobTitle.size() >= 2 && data.jobTitle.size() <= 140
+        && isValidId(data.employerUid)
+        && isValidId(data.workerUid)
+        && data.workerRegistrationId is string && data.workerRegistrationId.size() >= 5 && data.workerRegistrationId.size() <= 40
+        && data.workerName is string && data.workerName.size() >= 2 && data.workerName.size() <= 120
+        && data.workerPrimarySkill is string && data.workerPrimarySkill.size() >= 2 && data.workerPrimarySkill.size() <= 80
+        && (!('workerPhotoDocId' in data) || isValidId(data.workerPhotoDocId))
+        && data.proposedWage is number && data.proposedWage >= 0 && data.proposedWage <= 500000
+        && (!('note' in data) || (data.note is string && data.note.size() <= 600))
+        && data.status in ['applied', 'invited', 'accepted', 'declined', 'work_completed']
+        && (!('dealStatus' in data) || isValidDealStatus(data.dealStatus))
+        && (!('initiatedBy' in data) || data.initiatedBy in ['customer_invite', 'customer_broadcast', 'worker_apply'])
+        && (!('jobCategory' in data) || (data.jobCategory is string && data.jobCategory.size() <= 80))
+        && (!('jobDistrict' in data) || (data.jobDistrict is string && data.jobDistrict.size() <= 80))
+        && (!('jobLocationLabel' in data) || (data.jobLocationLabel is string && data.jobLocationLabel.size() <= 160))
+        && (!('jobDate' in data) || (data.jobDate is string && data.jobDate.size() <= 30))
+        && (!('startTime' in data) || (data.startTime is string && data.startTime.size() <= 30))
+        && (!('customerName' in data) || (data.customerName is string && data.customerName.size() <= 160))
+        && (!('offerAmount' in data) || (data.offerAmount is number && data.offerAmount >= 0 && data.offerAmount <= 500000))
+        && (!('travelCharges' in data) || (data.travelCharges is number && data.travelCharges >= 0 && data.travelCharges <= 100000))
+        && (!('estimatedArrivalTime' in data) || (data.estimatedArrivalTime is string && data.estimatedArrivalTime.size() <= 80))
+        && (!('offerMessage' in data) || (data.offerMessage is string && data.offerMessage.size() <= 600))
+        && (!('offerSubmittedAt' in data) || data.offerSubmittedAt is timestamp)
+        && (!('agreedPrice' in data) || (data.agreedPrice is number && data.agreedPrice >= 0 && data.agreedPrice <= 500000))
+        && (!('dealConfirmedAt' in data) || data.dealConfirmedAt is timestamp)
+        && (!('workStartedAt' in data) || data.workStartedAt is timestamp)
+        && (!('completedAt' in data) || data.completedAt is timestamp)
+        && (!('cancelledAt' in data) || data.cancelledAt is timestamp)
+        && (!('cancelledByUid' in data) || isValidId(data.cancelledByUid))
+        && data.liveTrackingAuthorized is bool
+        && (!('workerRating' in data) || (data.workerRating is number && data.workerRating >= 1 && data.workerRating <= 5))
+        && (!('employerFeedback' in data) || (data.employerFeedback is string && data.employerFeedback.size() <= 500))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidPartnershipEnquiry(data) {
+      return data.keys().hasAll([
+          'submitterUid', 'organisationName', 'departmentOrInstitution',
+          'contactPerson', 'designation', 'email', 'phone', 'state',
+          'district', 'partnershipInterest', 'message', 'status',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'submitterUid', 'organisationName', 'departmentOrInstitution',
+          'contactPerson', 'designation', 'email', 'phone', 'state',
+          'district', 'partnershipInterest', 'message', 'attachmentName',
+          'status', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.submitterUid)
+        && data.organisationName is string && data.organisationName.size() >= 2 && data.organisationName.size() <= 160
+        && data.departmentOrInstitution is string && data.departmentOrInstitution.size() >= 2 && data.departmentOrInstitution.size() <= 160
+        && data.contactPerson is string && data.contactPerson.size() >= 2 && data.contactPerson.size() <= 120
+        && data.designation is string && data.designation.size() >= 2 && data.designation.size() <= 120
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && data.phone is string && data.phone.size() >= 8 && data.phone.size() <= 20
+        && data.state is string && data.state.size() >= 2 && data.state.size() <= 80
+        && data.district is string && data.district.size() >= 2 && data.district.size() <= 80
+        && data.partnershipInterest is string && data.partnershipInterest.size() >= 2 && data.partnershipInterest.size() <= 120
+        && data.message is string && data.message.size() >= 5 && data.message.size() <= 2000
+        && (!('attachmentName' in data) || (data.attachmentName is string && data.attachmentName.size() <= 200))
+        && data.status in ['received', 'under_review', 'responded', 'archived']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidGrievance(data) {
+      return data.keys().hasAll([
+          'reporterUid', 'category', 'subject', 'description',
+          'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'reporterUid', 'category', 'targetReference', 'subject',
+          'description', 'status', 'adminNotes', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.reporterUid)
+        && data.category in ['fraudulent_job', 'non_payment', 'harassment', 'unsafe_workplace', 'account_appeal', 'other']
+        && (!('targetReference' in data) || (data.targetReference is string && data.targetReference.size() <= 140))
+        && data.subject is string && data.subject.size() >= 3 && data.subject.size() <= 160
+        && data.description is string && data.description.size() >= 10 && data.description.size() <= 2000
+        && data.status in ['open', 'under_review', 'resolved', 'dismissed']
+        && (!('adminNotes' in data) || (data.adminNotes is string && data.adminNotes.size() <= 1000))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAnnouncement(data) {
+      return data.keys().hasAll([
+          'titleEn', 'titleHi', 'titleMr', 'bodyEn', 'bodyHi', 'bodyMr',
+          'active', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'titleEn', 'titleHi', 'titleMr', 'bodyEn', 'bodyHi', 'bodyMr',
+          'active', 'createdAt', 'updatedAt'
+        ])
+        && data.titleEn is string && data.titleEn.size() >= 2 && data.titleEn.size() <= 160
+        && data.titleHi is string && data.titleHi.size() >= 2 && data.titleHi.size() <= 160
+        && data.titleMr is string && data.titleMr.size() >= 2 && data.titleMr.size() <= 160
+        && data.bodyEn is string && data.bodyEn.size() >= 2 && data.bodyEn.size() <= 500
+        && data.bodyHi is string && data.bodyHi.size() >= 2 && data.bodyHi.size() <= 500
+        && data.bodyMr is string && data.bodyMr.size() >= 2 && data.bodyMr.size() <= 500
+        && data.active is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAuditLog(data) {
+      return data.keys().hasAll(['adminUid', 'adminEmail', 'action', 'targetCollection', 'targetId', 'createdAt'])
+        && data.keys().hasOnly(['adminUid', 'adminEmail', 'action', 'targetCollection', 'targetId', 'details', 'createdAt'])
+        && isValidId(data.adminUid)
+        && data.adminEmail is string && data.adminEmail.size() >= 3 && data.adminEmail.size() <= 200
+        && data.action is string && data.action.size() >= 2 && data.action.size() <= 120
+        && data.targetCollection is string && data.targetCollection.size() >= 2 && data.targetCollection.size() <= 80
+        && data.targetId is string && data.targetId.size() >= 1 && data.targetId.size() <= 128
+        && (!('details' in data) || (data.details is string && data.details.size() <= 500))
+        && data.createdAt is timestamp;
+    }
+
+    function isValidVehicleListing(data) {
+      return data.keys().hasAll([
+          'ownerUid', 'registrationId', 'ownerDisplayName', 'vehicleType', 'vehicleTitle',
+          'vehicleNumberMasked', 'seatingOrCapacity', 'acAvailable', 'withDriver',
+          'ratePerKm', 'ratePerDay', 'minFare', 'availabilityStatus', 'state', 'district',
+          'cityOrVillage', 'approxLat', 'approxLng', 'languagesKnown', 'verificationStatus',
+          'completedTripsCount', 'ratingAvg', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid', 'registrationId', 'ownerDisplayName', 'vehicleType', 'vehicleTitle',
+          'vehicleNumberMasked', 'seatingOrCapacity', 'acAvailable', 'withDriver',
+          'ratePerKm', 'ratePerDay', 'minFare', 'availabilityStatus', 'state', 'district',
+          'cityOrVillage', 'approxLat', 'approxLng', 'languagesKnown', 'serviceNotes',
+          'verificationStatus', 'completedTripsCount', 'ratingAvg', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerUid)
+        && data.registrationId is string && data.registrationId.size() >= 5 && data.registrationId.size() <= 40
+        && data.ownerDisplayName is string && data.ownerDisplayName.size() >= 2 && data.ownerDisplayName.size() <= 120
+        && data.vehicleType in ['bike_taxi', 'auto_rickshaw', 'car_sedan', 'suv_innova', 'trolley_cart', 'mini_tempo', 'pickup_tempo', 'tractor']
+        && data.vehicleTitle is string && data.vehicleTitle.size() >= 2 && data.vehicleTitle.size() <= 120
+        && data.vehicleNumberMasked is string && data.vehicleNumberMasked.size() >= 4 && data.vehicleNumberMasked.size() <= 20
+        && data.seatingOrCapacity is string && data.seatingOrCapacity.size() >= 1 && data.seatingOrCapacity.size() <= 60
+        && data.acAvailable is bool
+        && data.withDriver is bool
+        && data.ratePerKm is number && data.ratePerKm >= 0 && data.ratePerKm <= 500
+        && data.ratePerDay is number && data.ratePerDay >= 0 && data.ratePerDay <= 50000
+        && data.minFare is number && data.minFare >= 0 && data.minFare <= 50000
+        && data.availabilityStatus in ['available', 'busy', 'offline']
+        && data.state is string && data.state.size() >= 2 && data.state.size() <= 80
+        && data.district is string && data.district.size() >= 2 && data.district.size() <= 80
+        && data.cityOrVillage is string && data.cityOrVillage.size() >= 2 && data.cityOrVillage.size() <= 100
+        && data.approxLat is number && data.approxLat >= -90 && data.approxLat <= 90
+        && data.approxLng is number && data.approxLng >= -180 && data.approxLng <= 180
+        && data.languagesKnown is list && data.languagesKnown.size() >= 1 && data.languagesKnown.size() <= 10 && data.languagesKnown[0] is string
+        && (!('serviceNotes' in data) || (data.serviceNotes is string && data.serviceNotes.size() <= 500))
+        && data.verificationStatus in ['pending', 'verified', 'suspended']
+        && data.completedTripsCount is number && data.completedTripsCount >= 0 && data.completedTripsCount <= 100000
+        && data.ratingAvg is number && data.ratingAvg >= 0 && data.ratingAvg <= 5
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidVehiclePrivate(data) {
+      return data.keys().hasAll([
+          'ownerUid', 'ownerName', 'mobile', 'mobileVerified', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid', 'ownerName', 'mobile', 'mobileVerified', 'verificationMethod',
+          'testPinHash', 'email', 'rcOrLicenseNotes', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerUid)
+        && data.ownerName is string && data.ownerName.size() >= 2 && data.ownerName.size() <= 120
+        && data.mobile is string && data.mobile.size() >= 10 && data.mobile.size() <= 20
+        && data.mobileVerified is bool
+        && (!('verificationMethod' in data) || data.verificationMethod in ['sms_otp', 'firebase_phone', 'test_pin'])
+        && (!('testPinHash' in data) || (data.testPinHash is string && data.testPinHash.size() <= 128))
+        && (!('email' in data) || (data.email is string && data.email.size() <= 200))
+        && (!('rcOrLicenseNotes' in data) || (data.rcOrLicenseNotes is string && data.rcOrLicenseNotes.size() <= 500))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidVehicleBooking(data) {
+      return data.keys().hasAll([
+          'vehicleId', 'vehicleTitle', 'vehicleType', 'ownerUid', 'customerUid',
+          'customerName', 'pickupLocation', 'dropLocation', 'tripType', 'travelDate',
+          'travelTime', 'passengersCount', 'offeredFare', 'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'vehicleId', 'vehicleTitle', 'vehicleType', 'ownerUid', 'customerUid',
+          'customerName', 'pickupLocation', 'dropLocation', 'tripType', 'travelDate',
+          'travelTime', 'passengersCount', 'offeredFare', 'note', 'status',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.vehicleId)
+        && data.vehicleTitle is string && data.vehicleTitle.size() >= 2 && data.vehicleTitle.size() <= 140
+        && data.vehicleType in ['bike_taxi', 'auto_rickshaw', 'car_sedan', 'suv_innova', 'trolley_cart', 'mini_tempo', 'pickup_tempo', 'tractor']
+        && isValidId(data.ownerUid)
+        && isValidId(data.customerUid)
+        && data.customerName is string && data.customerName.size() >= 2 && data.customerName.size() <= 120
+        && data.pickupLocation is string && data.pickupLocation.size() >= 2 && data.pickupLocation.size() <= 160
+        && data.dropLocation is string && data.dropLocation.size() >= 2 && data.dropLocation.size() <= 160
+        && data.tripType in ['one_way', 'round_trip', 'hourly', 'full_day']
+        && data.travelDate is string && data.travelDate.size() >= 4 && data.travelDate.size() <= 30
+        && data.travelTime is string && data.travelTime.size() >= 2 && data.travelTime.size() <= 30
+        && data.passengersCount is number && data.passengersCount >= 1 && data.passengersCount <= 100
+        && data.offeredFare is number && data.offeredFare >= 0 && data.offeredFare <= 500000
+        && (!('note' in data) || (data.note is string && data.note.size() <= 600))
+        && data.status in ['requested', 'accepted', 'declined', 'completed', 'cancelled']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCustomerPreference(data) {
+      return data.keys().hasAll([
+          'ownerUid', 'frequentWorkerCategories', 'frequentVehicleTypes',
+          'totalHireOrders', 'totalTransportOrders', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid', 'defaultState', 'defaultDistrict', 'defaultCityOrVillage',
+          'defaultLat', 'defaultLng', 'savedAddressLabel', 'frequentWorkerCategories',
+          'frequentVehicleTypes', 'totalHireOrders', 'totalTransportOrders',
+          'lastOrderTitle', 'lastOrderCategory', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerUid)
+        && (!('defaultState' in data) || (data.defaultState is string && data.defaultState.size() <= 80))
+        && (!('defaultDistrict' in data) || (data.defaultDistrict is string && data.defaultDistrict.size() <= 80))
+        && (!('defaultCityOrVillage' in data) || (data.defaultCityOrVillage is string && data.defaultCityOrVillage.size() <= 100))
+        && (!('defaultLat' in data) || (data.defaultLat is number && data.defaultLat >= -90 && data.defaultLat <= 90))
+        && (!('defaultLng' in data) || (data.defaultLng is number && data.defaultLng >= -180 && data.defaultLng <= 180))
+        && (!('savedAddressLabel' in data) || (data.savedAddressLabel is string && data.savedAddressLabel.size() <= 160))
+        && data.frequentWorkerCategories is list && data.frequentWorkerCategories.size() <= 10
+        && (data.frequentWorkerCategories.size() == 0 || data.frequentWorkerCategories[0] is string)
+        && data.frequentVehicleTypes is list && data.frequentVehicleTypes.size() <= 10
+        && (data.frequentVehicleTypes.size() == 0 || data.frequentVehicleTypes[0] is string)
+        && data.totalHireOrders is number && data.totalHireOrders >= 0 && data.totalHireOrders <= 100000
+        && data.totalTransportOrders is number && data.totalTransportOrders >= 0 && data.totalTransportOrders <= 100000
+        && (!('lastOrderTitle' in data) || (data.lastOrderTitle is string && data.lastOrderTitle.size() <= 160))
+        && (!('lastOrderCategory' in data) || (data.lastOrderCategory is string && data.lastOrderCategory.size() <= 80))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDeviceToken(data) {
+      return data.keys().hasAll([
+          'ownerUid', 'role', 'isDemo', 'token', 'platform', 'browser',
+          'preferredLanguage', 'enabled', 'userAgentShort', 'lastSeenAt', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid', 'role', 'isDemo', 'demoAccountId', 'token', 'platform', 'browser',
+          'preferredLanguage', 'enabled', 'userAgentShort', 'lastSeenAt', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerUid)
+        && data.role in ['worker', 'employer', 'admin', 'demo_worker']
+        && data.isDemo is bool
+        && (!('demoAccountId' in data) || isValidId(data.demoAccountId))
+        && data.token is string && data.token.size() >= 20 && data.token.size() <= 512
+        && data.platform in ['android', 'ios', 'desktop']
+        && data.browser is string && data.browser.size() >= 1 && data.browser.size() <= 60
+        && data.preferredLanguage in ['en', 'hi', 'mr']
+        && data.enabled is bool
+        && data.userAgentShort is string && data.userAgentShort.size() <= 160
+        && data.lastSeenAt is timestamp
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidNotificationPreferences(data) {
+      return data.keys().hasAll([
+          'ownerUid', 'masterEnabled', 'matchingJobs', 'nearbyJobs',
+          'applicationUpdates', 'bookingNotifications', 'announcements',
+          'preferredLanguage', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid', 'masterEnabled', 'matchingJobs', 'nearbyJobs',
+          'applicationUpdates', 'bookingNotifications', 'announcements',
+          'preferredLanguage', 'voiceAlertsEnabled', 'soundEnabled',
+          'toneNewJobEnabled', 'toneNewOfferEnabled', 'toneDealConfirmedEnabled', 'toneDealClosedEnabled',
+          'preferredCategories', 'preferredRadiusKm', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerUid)
+        && data.masterEnabled is bool
+        && data.matchingJobs is bool
+        && data.nearbyJobs is bool
+        && data.applicationUpdates is bool
+        && data.bookingNotifications is bool
+        && data.announcements is bool
+        && data.preferredLanguage in ['en', 'hi', 'mr']
+        && (!('voiceAlertsEnabled' in data) || data.voiceAlertsEnabled is bool)
+        && (!('soundEnabled' in data) || data.soundEnabled is bool)
+        && (!('toneNewJobEnabled' in data) || data.toneNewJobEnabled is bool)
+        && (!('toneNewOfferEnabled' in data) || data.toneNewOfferEnabled is bool)
+        && (!('toneDealConfirmedEnabled' in data) || data.toneDealConfirmedEnabled is bool)
+        && (!('toneDealClosedEnabled' in data) || data.toneDealClosedEnabled is bool)
+        && (!('preferredCategories' in data) || (data.preferredCategories is list && data.preferredCategories.size() <= 35 && (data.preferredCategories.size() == 0 || data.preferredCategories[0] is string)))
+        && (!('preferredRadiusKm' in data) || data.preferredRadiusKm in [5, 10, 20, 30])
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDemoAccount(data) {
+      return data.keys().hasAll([
+          'adminUid', 'name', 'maskedMobile', 'primarySkill', 'skills',
+          'state', 'district', 'cityOrVillage', 'preferredLanguage',
+          'notificationsEnabled', 'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'adminUid', 'assignedUid', 'name', 'maskedMobile', 'primarySkill', 'skills',
+          'state', 'district', 'cityOrVillage', 'preferredLanguage',
+          'notificationsEnabled', 'status', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.adminUid)
+        && (!('assignedUid' in data) || isValidId(data.assignedUid))
+        && data.name is string && data.name.size() >= 2 && data.name.size() <= 120
+        && data.maskedMobile is string && data.maskedMobile.size() >= 6 && data.maskedMobile.size() <= 20
+        && data.primarySkill is string && data.primarySkill.size() >= 2 && data.primarySkill.size() <= 80
+        && data.skills is list && data.skills.size() >= 1 && data.skills.size() <= 15 && data.skills[0] is string
+        && data.state is string && data.state.size() >= 2 && data.state.size() <= 80
+        && data.district is string && data.district.size() >= 2 && data.district.size() <= 80
+        && data.cityOrVillage is string && data.cityOrVillage.size() >= 2 && data.cityOrVillage.size() <= 100
+        && data.preferredLanguage in ['en', 'hi', 'mr']
+        && data.notificationsEnabled is bool
+        && data.status == 'DEMO'
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDemoJob(data) {
+      return data.keys().hasAll([
+          'adminUid', 'title', 'category', 'description', 'workersRequired',
+          'offeredWage', 'wageUnit', 'workType', 'state', 'district', 'cityOrVillage',
+          'status', 'isDemo', 'applicationsCount', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'adminUid', 'title', 'category', 'description', 'workersRequired',
+          'offeredWage', 'wageUnit', 'workType', 'state', 'district', 'cityOrVillage',
+          'status', 'isDemo', 'applicationsCount', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.adminUid)
+        && data.title is string && data.title.size() >= 3 && data.title.size() <= 160
+        && data.category is string && data.category.size() >= 2 && data.category.size() <= 80
+        && data.description is string && data.description.size() >= 5 && data.description.size() <= 1000
+        && data.workersRequired is number && data.workersRequired >= 1 && data.workersRequired <= 500
+        && data.offeredWage is number && data.offeredWage >= 0 && data.offeredWage <= 500000
+        && data.wageUnit in ['daily', 'monthly', 'hourly', 'contract']
+        && data.workType in ['full_time', 'part_time', 'daily_wage', 'contract', 'temporary', 'urgent', 'bulk']
+        && data.state is string && data.state.size() >= 2 && data.state.size() <= 80
+        && data.district is string && data.district.size() >= 2 && data.district.size() <= 80
+        && data.cityOrVillage is string && data.cityOrVillage.size() >= 2 && data.cityOrVillage.size() <= 100
+        && data.status in ['open', 'closed']
+        && data.isDemo == true
+        && data.applicationsCount is number && data.applicationsCount >= 0 && data.applicationsCount <= 5000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDemoApplication(data) {
+      return data.keys().hasAll([
+          'demoJobId', 'demoJobTitle', 'demoAccountId', 'applicantUid',
+          'workerName', 'proposedWage', 'status', 'isDemo', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'demoJobId', 'demoJobTitle', 'demoAccountId', 'applicantUid',
+          'workerName', 'proposedWage', 'note', 'status', 'isDemo', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.demoJobId)
+        && data.demoJobTitle is string && data.demoJobTitle.size() >= 2 && data.demoJobTitle.size() <= 160
+        && isValidId(data.demoAccountId)
+        && isValidId(data.applicantUid)
+        && data.workerName is string && data.workerName.size() >= 2 && data.workerName.size() <= 120
+        && data.proposedWage is number && data.proposedWage >= 0 && data.proposedWage <= 500000
+        && (!('note' in data) || (data.note is string && data.note.size() <= 400))
+        && data.status in ['applied', 'reviewed']
+        && data.isDemo == true
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDemoModeConfig(data) {
+      return data.keys().hasAll(['enabled', 'testOnlyOtpMode', 'maxUsers', 'updatedByUid', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['enabled', 'testOnlyOtpMode', 'maxUsers', 'updatedByUid', 'createdAt', 'updatedAt'])
+        && data.enabled is bool
+        && data.testOnlyOtpMode is bool
+        && data.maxUsers is number && data.maxUsers >= 1 && data.maxUsers <= 20
+        && isValidId(data.updatedByUid)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDemoUserProfile(data) {
+      return data.keys().hasAll([
+          'uniqueUserId', 'ownerUid', 'role', 'category', 'displayName', 'mobile10',
+          'maskedMobile', 'testVerificationStatus', 'availabilityStatus', 'state',
+          'district', 'cityOrVillage', 'lat', 'lng', 'accuracyMeters',
+          'locationPermissionStatus', 'locationSource', 'isDemo', 'lastActiveAt',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'uniqueUserId', 'ownerUid', 'slotLabel', 'deviceLabel', 'testPinHash',
+          'role', 'category', 'displayName', 'mobile10',
+          'maskedMobile', 'testVerificationStatus', 'availabilityStatus', 'state',
+          'district', 'cityOrVillage', 'lat', 'lng', 'accuracyMeters',
+          'locationPermissionStatus', 'locationSource', 'photoDocId', 'pushEnabled', 'isDemo',
+          'lastActiveAt', 'createdAt', 'updatedAt'
+        ])
+        && data.uniqueUserId is string && data.uniqueUserId.size() >= 6 && data.uniqueUserId.size() <= 48 && data.uniqueUserId.matches('^RS-DEMO-[A-Z0-9\\-]+$')
+        && isValidId(data.ownerUid)
+        && (!('slotLabel' in data) || (data.slotLabel is string && data.slotLabel.size() <= 60))
+        && (!('deviceLabel' in data) || (data.deviceLabel is string && data.deviceLabel.size() <= 60))
+        && (!('testPinHash' in data) || (data.testPinHash is string && data.testPinHash.size() <= 128))
+        && data.role in ['customer', 'worker']
+        && data.category is string && data.category.size() >= 2 && data.category.size() <= 80
+        && data.displayName is string && data.displayName.size() >= 2 && data.displayName.size() <= 120
+        && data.mobile10 is string && data.mobile10.size() == 10 && data.mobile10.matches('^[6-9][0-9]{9}$')
+        && data.maskedMobile is string && data.maskedMobile.size() >= 10 && data.maskedMobile.size() <= 20
+        && data.testVerificationStatus == 'demo_test_verified'
+        && data.availabilityStatus in ['available', 'busy', 'offline']
+        && data.state is string && data.state.size() >= 2 && data.state.size() <= 80
+        && data.district is string && data.district.size() >= 2 && data.district.size() <= 80
+        && data.cityOrVillage is string && data.cityOrVillage.size() >= 2 && data.cityOrVillage.size() <= 100
+        && data.lat is number && data.lat >= -90 && data.lat <= 90
+        && data.lng is number && data.lng >= -180 && data.lng <= 180
+        && data.accuracyMeters is number && data.accuracyMeters >= 0 && data.accuracyMeters <= 200000
+        && data.locationPermissionStatus in ['granted', 'denied', 'prompt', 'manual_fallback']
+        && data.locationSource in ['gps', 'search', 'manual_test']
+        && (!('photoDocId' in data) || isValidId(data.photoDocId))
+        && (!('pushEnabled' in data) || data.pushEnabled is bool)
+        && data.isDemo == true
+        && data.lastActiveAt is timestamp
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDemoMobileRegistry(data) {
+      return data.keys().hasAll(['mobile10', 'demoUserId', 'ownerUid', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['mobile10', 'demoUserId', 'ownerUid', 'createdAt', 'updatedAt'])
+        && data.mobile10 is string && data.mobile10.size() == 10 && data.mobile10.matches('^[6-9][0-9]{9}$')
+        && isValidId(data.demoUserId)
+        && isValidId(data.ownerUid)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDemoWorkOrder(data) {
+      return data.keys().hasAll([
+          'orderCode', 'ownerUid', 'customerDemoUserId', 'customerName', 'customerUniqueId',
+          'serviceCategory', 'title', 'description', 'state', 'district', 'cityOrVillage',
+          'requestLat', 'requestLng', 'offeredWage', 'wageUnit', 'status',
+          'matchedWorkerIds', 'matchedWorkerOwnerUids', 'rejectedWorkerIds',
+          'customerLocationSharing', 'workerLocationSharing', 'isDemo', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'orderCode', 'ownerUid', 'customerDemoUserId', 'customerName', 'customerUniqueId',
+          'serviceCategory', 'title', 'description', 'state', 'district', 'cityOrVillage',
+          'requestLat', 'requestLng', 'offeredWage', 'wageUnit', 'status',
+          'matchedWorkerIds', 'matchedWorkerOwnerUids', 'rejectedWorkerIds',
+          'acceptedWorkerId', 'acceptedWorkerOwnerUid', 'acceptedWorkerName', 'acceptedWorkerUniqueId',
+          'acceptedWorkerPhotoDocId', 'customerConfirmedAt', 'completedAt', 'closedAt',
+          'customerLocationSharing', 'workerLocationSharing',
+          'completionNotes', 'workerRating', 'isDemo', 'createdAt', 'updatedAt'
+        ])
+        && data.orderCode is string && data.orderCode.size() >= 5 && data.orderCode.size() <= 48
+        && isValidId(data.ownerUid)
+        && isValidId(data.customerDemoUserId)
+        && data.customerName is string && data.customerName.size() >= 2 && data.customerName.size() <= 120
+        && data.customerUniqueId is string && data.customerUniqueId.size() >= 5 && data.customerUniqueId.size() <= 48
+        && data.serviceCategory is string && data.serviceCategory.size() >= 2 && data.serviceCategory.size() <= 80
+        && data.title is string && data.title.size() >= 3 && data.title.size() <= 160
+        && data.description is string && data.description.size() >= 5 && data.description.size() <= 1000
+        && data.state is string && data.state.size() >= 2 && data.state.size() <= 80
+        && data.district is string && data.district.size() >= 2 && data.district.size() <= 80
+        && data.cityOrVillage is string && data.cityOrVillage.size() >= 2 && data.cityOrVillage.size() <= 100
+        && data.requestLat is number && data.requestLat >= -90 && data.requestLat <= 90
+        && data.requestLng is number && data.requestLng >= -180 && data.requestLng <= 180
+        && data.offeredWage is number && data.offeredWage >= 0 && data.offeredWage <= 500000
+        && data.wageUnit in ['daily', 'monthly', 'hourly', 'contract']
+        && data.status in ['requested', 'accepted', 'customer_confirmed', 'in_progress', 'completed', 'closed', 'declined', 'cancelled']
+        && data.matchedWorkerIds is list && data.matchedWorkerIds.size() <= 10
+        && (data.matchedWorkerIds.size() == 0 || data.matchedWorkerIds[0] is string)
+        && data.matchedWorkerOwnerUids is list && data.matchedWorkerOwnerUids.size() <= 10
+        && (data.matchedWorkerOwnerUids.size() == 0 || data.matchedWorkerOwnerUids[0] is string)
+        && data.rejectedWorkerIds is list && data.rejectedWorkerIds.size() <= 10
+        && (data.rejectedWorkerIds.size() == 0 || data.rejectedWorkerIds[0] is string)
+        && (!('acceptedWorkerId' in data) || isValidId(data.acceptedWorkerId))
+        && (!('acceptedWorkerOwnerUid' in data) || isValidId(data.acceptedWorkerOwnerUid))
+        && (!('acceptedWorkerName' in data) || (data.acceptedWorkerName is string && data.acceptedWorkerName.size() <= 120))
+        && (!('acceptedWorkerUniqueId' in data) || (data.acceptedWorkerUniqueId is string && data.acceptedWorkerUniqueId.size() <= 48))
+        && (!('acceptedWorkerPhotoDocId' in data) || isValidId(data.acceptedWorkerPhotoDocId))
+        && (!('customerConfirmedAt' in data) || data.customerConfirmedAt is timestamp)
+        && (!('completedAt' in data) || data.completedAt is timestamp)
+        && (!('closedAt' in data) || data.closedAt is timestamp)
+        && data.customerLocationSharing is bool
+        && data.workerLocationSharing is bool
+        && (!('completionNotes' in data) || (data.completionNotes is string && data.completionNotes.size() <= 500))
+        && (!('workerRating' in data) || (data.workerRating is number && data.workerRating >= 1 && data.workerRating <= 5))
+        && data.isDemo == true
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDemoLiveLocationShare(data) {
+      return data.keys().hasAll([
+          'orderId', 'ownerUid', 'authorizedOwnerUids', 'demoUserId', 'participantRole',
+          'participantName', 'lat', 'lng', 'accuracyMeters', 'sharingActive', 'permissionState',
+          'source', 'isDemo', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'orderId', 'ownerUid', 'authorizedOwnerUids', 'demoUserId', 'participantRole',
+          'participantName', 'lat', 'lng', 'accuracyMeters', 'sharingActive', 'permissionState',
+          'source', 'isDemo', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.orderId)
+        && isValidId(data.ownerUid)
+        && data.authorizedOwnerUids is list && data.authorizedOwnerUids.size() >= 1 && data.authorizedOwnerUids.size() <= 4
+        && data.authorizedOwnerUids[0] is string
+        && isValidId(data.demoUserId)
+        && data.participantRole in ['customer', 'worker']
+        && data.participantName is string && data.participantName.size() >= 2 && data.participantName.size() <= 120
+        && data.lat is number && data.lat >= -90 && data.lat <= 90
+        && data.lng is number && data.lng >= -180 && data.lng <= 180
+        && data.accuracyMeters is number && data.accuracyMeters >= 0 && data.accuracyMeters <= 200000
+        && data.sharingActive is bool
+        && data.permissionState in ['granted', 'denied', 'prompt', 'manual_fallback']
+        && data.source in ['gps_watch', 'gps_once', 'simulated_move']
+        && data.isDemo == true
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidDemoNotificationRecord(data) {
+      return data.keys().hasAll([
+          'dedupeKey', 'recipientDemoUserId', 'recipientName', 'recipientRole',
+          'recipientOwnerUid', 'senderOwnerUid', 'ownerUid', 'orderId',
+          'eventType', 'title', 'body', 'inAppDelivered', 'browserNotificationStatus',
+          'fcmPushStatus', 'read', 'isDemo', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'dedupeKey', 'recipientDemoUserId', 'recipientName', 'recipientRole',
+          'recipientOwnerUid', 'senderOwnerUid', 'ownerUid', 'orderId',
+          'eventType', 'title', 'body', 'inAppDelivered', 'browserNotificationStatus',
+          'fcmPushStatus', 'fcmErrorReason', 'read', 'isDemo', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.dedupeKey)
+        && isValidId(data.recipientDemoUserId)
+        && data.recipientName is string && data.recipientName.size() >= 2 && data.recipientName.size() <= 120
+        && data.recipientRole in ['customer', 'worker']
+        && isValidId(data.recipientOwnerUid)
+        && isValidId(data.senderOwnerUid)
+        && isValidId(data.ownerUid)
+        && isValidId(data.orderId)
+        && data.eventType in ['job_request', 'job_accepted', 'customer_confirmed', 'job_started', 'job_rejected', 'job_completed', 'deal_closed', 'location_started', 'location_stopped']
+        && data.title is string && data.title.size() >= 2 && data.title.size() <= 160
+        && data.body is string && data.body.size() >= 2 && data.body.size() <= 500
+        && data.inAppDelivered is bool
+        && data.browserNotificationStatus in ['delivered', 'permission_default', 'permission_denied', 'unsupported']
+        && data.fcmPushStatus in ['sent', 'failed', 'skipped_no_token']
+        && (!('fcmErrorReason' in data) || (data.fcmErrorReason is string && data.fcmErrorReason.size() <= 400))
+        && data.read is bool
+        && data.isDemo == true
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidProfilePhoto(data) {
+      return data.keys().hasAll(['ownerUid', 'subjectId', 'role', 'mimeType', 'sizeBytes', 'photoData', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerUid', 'subjectId', 'role', 'mimeType', 'sizeBytes', 'photoData', 'createdAt', 'updatedAt'])
+        && isValidId(data.ownerUid)
+        && isValidId(data.subjectId)
+        && data.role in ['worker', 'customer']
+        && data.mimeType in ['image/jpeg', 'image/png', 'image/webp']
+        && data.sizeBytes is number && data.sizeBytes > 0 && data.sizeBytes <= 5242880
+        && data.photoData is string && data.photoData.size() >= 30 && data.photoData.size() <= 480000
+        && data.photoData[0:11] == 'data:image/'
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidAcceptedCustomerPhoto(data) {
+      return data.keys().hasAll(['ownerUid', 'workerUid', 'sourceType', 'sourceId', 'photoData', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerUid', 'workerUid', 'sourceType', 'sourceId', 'photoData', 'createdAt', 'updatedAt'])
+        && isValidId(data.ownerUid)
+        && isValidId(data.workerUid)
+        && data.sourceType in ['job_application', 'demo_work_order']
+        && isValidId(data.sourceId)
+        && data.photoData is string && data.photoData.size() >= 30 && data.photoData.size() <= 480000
+        && data.photoData[0:11] == 'data:image/'
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isAcceptedJobGrantValid(data) {
+      return (
+        data.sourceType == 'job_application'
+        && exists(/databases/$(database)/documents/applications/$(data.sourceId))
+        && get(/databases/$(database)/documents/applications/$(data.sourceId)).data.employerUid == data.ownerUid
+        && get(/databases/$(database)/documents/applications/$(data.sourceId)).data.workerUid == data.workerUid
+        && get(/databases/$(database)/documents/applications/$(data.sourceId)).data.status in ['accepted', 'work_completed']
+      ) || (
+        data.sourceType == 'demo_work_order'
+        && exists(/databases/$(database)/documents/demo_work_orders/$(data.sourceId))
+        && get(/databases/$(database)/documents/demo_work_orders/$(data.sourceId)).data.ownerUid == data.ownerUid
+        && get(/databases/$(database)/documents/demo_work_orders/$(data.sourceId)).data.acceptedWorkerOwnerUid == data.workerUid
+        && get(/databases/$(database)/documents/demo_work_orders/$(data.sourceId)).data.status in ['accepted', 'customer_confirmed', 'in_progress', 'completed', 'closed']
+      );
+    }
+
+    function isValidMobileUniquenessLock(data) {
+      return data.keys().hasAll(['ownerUid', 'role', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['ownerUid', 'role', 'createdAt', 'updatedAt'])
+        && isValidId(data.ownerUid)
+        && data.role in ['worker', 'employer']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidNotificationRecord(data) {
+      return data.keys().hasAll([
+          'recipientUid', 'recipientRole', 'isDemo', 'category', 'title', 'body',
+          'language', 'targetRoute', 'dedupeKey', 'deliveryStatus', 'read',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'recipientUid', 'recipientRole', 'senderUid', 'senderName', 'isDemo',
+          'category', 'eventType', 'toneType', 'dealStatus', 'title', 'body', 'voiceScript',
+          'approxLocationLabel', 'distanceKm', 'customerName', 'jobCategory',
+          'playSound', 'speakVoice', 'metadataLabel',
+          'language', 'targetRoute', 'targetJobId', 'targetApplicationId',
+          'targetDemoJobId', 'dedupeKey', 'deliveryStatus', 'errorMessage',
+          'read', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.recipientUid)
+        && data.recipientRole in ['worker', 'employer', 'admin', 'demo_worker']
+        && (!('senderUid' in data) || isValidId(data.senderUid))
+        && (!('senderName' in data) || (data.senderName is string && data.senderName.size() <= 140))
+        && data.isDemo is bool
+        && data.category in ['matchingJobs', 'nearbyJobs', 'applicationUpdates', 'bookingNotifications', 'announcements']
+        && (!('eventType' in data) || (data.eventType is string && data.eventType.size() <= 60))
+        && (!('toneType' in data) || data.toneType in ['new_job', 'new_offer', 'deal_accepted', 'deal_completed', 'deal_cancelled', 'general'])
+        && (!('dealStatus' in data) || isValidDealStatus(data.dealStatus))
+        && data.title is string && data.title.size() >= 2 && data.title.size() <= 160
+        && data.body is string && data.body.size() >= 2 && data.body.size() <= 500
+        && (!('voiceScript' in data) || (data.voiceScript is string && data.voiceScript.size() <= 700))
+        && (!('approxLocationLabel' in data) || (data.approxLocationLabel is string && data.approxLocationLabel.size() <= 160))
+        && (!('distanceKm' in data) || (data.distanceKm is number && data.distanceKm >= 0 && data.distanceKm <= 5000))
+        && (!('customerName' in data) || (data.customerName is string && data.customerName.size() <= 160))
+        && (!('jobCategory' in data) || (data.jobCategory is string && data.jobCategory.size() <= 80))
+        && (!('playSound' in data) || data.playSound is bool)
+        && (!('speakVoice' in data) || data.speakVoice is bool)
+        && (!('metadataLabel' in data) || (data.metadataLabel is string && data.metadataLabel.size() <= 240))
+        && data.language in ['en', 'hi', 'mr']
+        && data.targetRoute is string && data.targetRoute.size() >= 2 && data.targetRoute.size() <= 60
+        && (!('targetJobId' in data) || isValidId(data.targetJobId))
+        && (!('targetApplicationId' in data) || isValidId(data.targetApplicationId))
+        && (!('targetDemoJobId' in data) || isValidId(data.targetDemoJobId))
+        && isValidId(data.dedupeKey)
+        && data.deliveryStatus in ['sent', 'failed', 'in_app_only']
+        && (!('errorMessage' in data) || (data.errorMessage is string && data.errorMessage.size() <= 400))
+        && data.read is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function canNotifyOnDealContext(data) {
+      return (
+        'targetApplicationId' in data
+        && exists(/databases/$(database)/documents/applications/$(data.targetApplicationId))
+        && (
+          (
+            get(/databases/$(database)/documents/applications/$(data.targetApplicationId)).data.employerUid == request.auth.uid
+            && get(/databases/$(database)/documents/applications/$(data.targetApplicationId)).data.workerUid == data.recipientUid
+          ) || (
+            get(/databases/$(database)/documents/applications/$(data.targetApplicationId)).data.workerUid == request.auth.uid
+            && get(/databases/$(database)/documents/applications/$(data.targetApplicationId)).data.employerUid == data.recipientUid
+          )
+        )
+      ) || (
+        'targetJobId' in data
+        && exists(/databases/$(database)/documents/jobs/$(data.targetJobId))
+        && (
+          get(/databases/$(database)/documents/jobs/$(data.targetJobId)).data.employerUid == request.auth.uid
+          || get(/databases/$(database)/documents/jobs/$(data.targetJobId)).data.employerUid == data.recipientUid
+        )
+      );
+    }
+
+    function isValidDealMessage(data) {
+      return data.keys().hasAll([
+          'applicationId', 'jobId', 'employerUid', 'workerUid',
+          'senderUid', 'senderRole', 'senderName', 'text', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'applicationId', 'jobId', 'employerUid', 'workerUid',
+          'senderUid', 'senderRole', 'senderName', 'text', 'createdAt'
+        ])
+        && isValidId(data.applicationId)
+        && isValidId(data.jobId)
+        && isValidId(data.employerUid)
+        && isValidId(data.workerUid)
+        && isValidId(data.senderUid)
+        && data.senderRole in ['customer', 'worker']
+        && data.senderName is string && data.senderName.size() >= 2 && data.senderName.size() <= 120
+        && data.text is string && data.text.size() >= 1 && data.text.size() <= 1000
+        && data.createdAt is timestamp;
+    }
+
+    function isValidDealLocationShare(data) {
+      return data.keys().hasAll([
+          'applicationId', 'jobId', 'ownerUid', 'authorizedUids',
+          'role', 'participantName', 'lat', 'lng', 'accuracyMeters',
+          'sharingActive', 'source', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'applicationId', 'jobId', 'ownerUid', 'authorizedUids',
+          'role', 'participantName', 'lat', 'lng', 'accuracyMeters',
+          'sharingActive', 'source', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.applicationId)
+        && isValidId(data.jobId)
+        && isValidId(data.ownerUid)
+        && data.authorizedUids is list && data.authorizedUids.size() == 2
+        && isValidId(data.authorizedUids[0]) && isValidId(data.authorizedUids[1])
+        && data.role in ['customer', 'worker']
+        && data.participantName is string && data.participantName.size() >= 2 && data.participantName.size() <= 120
+        && data.lat is number && data.lat >= -90 && data.lat <= 90
+        && data.lng is number && data.lng >= -180 && data.lng <= 180
+        && data.accuracyMeters is number && data.accuracyMeters >= 0 && data.accuracyMeters <= 200000
+        && data.sharingActive is bool
+        && data.source in ['gps_watch', 'gps_once', 'manual_pin', 'simulated_move']
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isActiveAcceptedDeal(appId) {
+      return exists(/databases/$(database)/documents/applications/$(appId))
+        && get(/databases/$(database)/documents/applications/$(appId)).data.status == 'accepted'
+        && (
+          !('dealStatus' in get(/databases/$(database)/documents/applications/$(appId)).data)
+          || get(/databases/$(database)/documents/applications/$(appId)).data.dealStatus in ['OFFER_ACCEPTED', 'DEAL_CONFIRMED', 'WORK_IN_PROGRESS']
+        );
+    }
+
+    // Collection Rules
+
+    match /users/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(userId)
+        && isOwner(userId)
+        && isValidUserAccount(incoming())
+        && incoming().uid == userId
+        && (incoming().role in ['worker', 'employer'] || isAdmin())
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(userId)
+        && isValidUserAccount(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().uid == existing().uid
+        && (
+          isAdmin() ||
+          (
+            isOwner(userId)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'preferredLanguage', 'role', 'updatedAt'])
+            && incoming().role in ['worker', 'employer']
+          )
+        );
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    match /admins/{adminId} {
+      allow get: if isValidId(adminId) && (isOwner(adminId) || isAdmin());
+      allow list: if isAdmin();
+      allow create, update: if isValidId(adminId) && isAdmin() && isValidAdminMember(incoming());
+      allow delete: if isValidId(adminId) && isAdmin();
+    }
+
+    match /publicWorkers/{workerId} {
+      allow get: if isValidId(workerId);
+      allow list: if true;
+      allow create: if isValidId(workerId)
+        && isOwner(workerId)
+        && isValidPublicWorker(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().verificationStatus == 'pending'
+        && incoming().completedJobsCount == 0
+        && incoming().ratingAvg == 0
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(workerId)
+        && isVerifiedUser()
+        && isValidPublicWorker(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().registrationId == existing().registrationId
+        && (
+          isAdmin() ||
+          (
+            isOwner(existing().ownerUid)
+            && existing().verificationStatus != 'suspended'
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'displayName', 'primarySkill', 'skills', 'experienceYears',
+              'expectedWage', 'wageUnit', 'preferredWorkType', 'availabilityStatus',
+              'state', 'district', 'cityOrVillage', 'approxLat', 'approxLng',
+              'languagesKnown', 'gender', 'education', 'isWomenEnterprise', 'photoDocId',
+              'preferredLanguage', 'preferredRadiusKm', 'voiceAlertsEnabled', 'updatedAt'
+            ])
+          ) ||
+          (
+            existing().verificationStatus != 'suspended'
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'ratingAvg', 'completedJobsCount', 'lastRatedApplicationId', 'updatedAt'
+            ])
+            && 'lastRatedApplicationId' in incoming()
+            && isValidId(incoming().lastRatedApplicationId)
+            && (!('lastRatedApplicationId' in existing()) || incoming().lastRatedApplicationId != existing().lastRatedApplicationId)
+            && exists(/databases/$(database)/documents/applications/$(incoming().lastRatedApplicationId))
+            && get(/databases/$(database)/documents/applications/$(incoming().lastRatedApplicationId)).data.employerUid == request.auth.uid
+            && get(/databases/$(database)/documents/applications/$(incoming().lastRatedApplicationId)).data.workerUid == workerId
+            && get(/databases/$(database)/documents/applications/$(incoming().lastRatedApplicationId)).data.status == 'work_completed'
+            && 'workerRating' in get(/databases/$(database)/documents/applications/$(incoming().lastRatedApplicationId)).data
+            && incoming().completedJobsCount >= existing().completedJobsCount
+            && incoming().completedJobsCount <= existing().completedJobsCount + 1
+          )
+        );
+      allow delete: if isValidId(workerId) && isAdmin();
+    }
+
+    match /workerPrivate/{workerId} {
+      allow get: if isValidId(workerId) && (isOwner(workerId) || isAdmin());
+      allow list: if isVerifiedUser() && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow create: if isValidId(workerId)
+        && isOwner(workerId)
+        && isValidWorkerPrivate(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().mobileVerified == true
+        && incoming().idVerificationStatus in ['not_submitted', 'voluntary_pending']
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(workerId)
+        && isVerifiedUser()
+        && isValidWorkerPrivate(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && (
+          isAdmin() ||
+          (
+            isOwner(existing().ownerUid)
+            && incoming().mobileVerified == true
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'fullName', 'mobile', 'mobileVerified', 'verificationMethod', 'testPinHash',
+              'email', 'ageConfirmed', 'preferredWorkLocation', 'liveLocationConsent',
+              'privacyConsent', 'idVerificationStatus', 'certificateNotes', 'photoUrl',
+              'photoDocId', 'updatedAt'
+            ])
+            && incoming().idVerificationStatus in ['not_submitted', 'voluntary_pending']
+          )
+        );
+      allow delete: if isValidId(workerId) && isAdmin();
+    }
+
+    match /publicEmployers/{employerId} {
+      allow get: if isValidId(employerId);
+      allow list: if true;
+      allow create: if isValidId(employerId)
+        && isOwner(employerId)
+        && isValidPublicEmployer(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().verificationStatus == 'pending'
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(employerId)
+        && isVerifiedUser()
+        && isValidPublicEmployer(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().registrationId == existing().registrationId
+        && (
+          isAdmin() ||
+          (
+            isOwner(existing().ownerUid)
+            && existing().verificationStatus != 'suspended'
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'businessName', 'businessType', 'industryCategory',
+              'state', 'district', 'requiredCategories', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isValidId(employerId) && isAdmin();
+    }
+
+    match /employerPrivate/{employerId} {
+      allow get: if isValidId(employerId) && (isOwner(employerId) || isAdmin());
+      allow list: if isVerifiedUser() && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow create: if isValidId(employerId)
+        && isOwner(employerId)
+        && isValidEmployerPrivate(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().mobileVerified == true
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(employerId)
+        && isVerifiedUser()
+        && isValidEmployerPrivate(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && (
+          isAdmin() ||
+          (
+            isOwner(existing().ownerUid)
+            && incoming().mobileVerified == true
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'contactPerson', 'mobile', 'mobileVerified', 'verificationMethod', 'testPinHash',
+              'email', 'businessAddress', 'gstNumber', 'establishmentDetails',
+              'workforceNotes', 'photoDocId', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isValidId(employerId) && isAdmin();
+    }
+
+    match /jobs/{jobId} {
+      allow get: if isValidId(jobId);
+      allow list: if true;
+      allow create: if isValidId(jobId)
+        && isVerifiedUser()
+        && isValidJob(incoming())
+        && incoming().employerUid == request.auth.uid
+        && incoming().status == 'open'
+        && incoming().applicationsCount == 0
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(jobId)
+        && isVerifiedUser()
+        && isValidJob(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().employerUid == existing().employerUid
+        && (
+          isAdmin() ||
+          (
+            isOwner(existing().employerUid)
+            && !(existing().status in ['completed', 'cancelled'])
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'title', 'category', 'description', 'workersRequired',
+              'requiredSkills', 'state', 'district', 'cityOrVillage',
+              'workLocationLabel', 'lat', 'lng', 'jobDate', 'startTime',
+              'duration', 'workType', 'offeredWage', 'wageUnit',
+              'paymentTerms', 'contactPreference', 'isWomenFriendly',
+              'isAccessible', 'biddingEnabled', 'photoAttachment',
+              'workPhotoUrls', 'orderKind', 'pickupLocationLabel', 'pickupLat', 'pickupLng',
+              'destinationLocationLabel', 'destinationLat', 'destinationLng', 'transportItemType',
+              'photoAnalyzed', 'status', 'dealStatus', 'acceptedApplicationId', 'acceptedWorkerUid',
+              'notifiedWorkerUids', 'approxLocationLabel', 'initialRadiusKm',
+              'currentRadiusKm', 'radiusStageUpdatedAt', 'updatedAt'
+            ])
+          ) ||
+          (
+            existing().status == 'open'
+            && incoming().diff(existing()).affectedKeys().hasOnly(['applicationsCount', 'dealStatus', 'updatedAt'])
+            && incoming().applicationsCount >= existing().applicationsCount
+            && incoming().applicationsCount <= existing().applicationsCount + 1
+            && (!('dealStatus' in incoming()) || incoming().dealStatus in ['REQUESTED', 'NOTIFIED', 'OFFER_RECEIVED'])
+          ) ||
+          (
+            'acceptedWorkerUid' in existing()
+            && existing().acceptedWorkerUid == request.auth.uid
+            && !(existing().status in ['completed', 'cancelled'])
+            && incoming().diff(existing()).affectedKeys().hasOnly(['dealStatus', 'status', 'updatedAt'])
+            && isValidDealStatus(incoming().dealStatus)
+            && incoming().dealStatus in ['OFFER_ACCEPTED', 'DEAL_CONFIRMED', 'WORK_IN_PROGRESS', 'WORK_COMPLETED', 'CANCELLED']
+          ) ||
+          (
+            existing().status == 'open'
+            && 'acceptedApplicationId' in incoming()
+            && 'acceptedWorkerUid' in incoming()
+            && incoming().acceptedWorkerUid == request.auth.uid
+            && incoming().diff(existing()).affectedKeys().hasOnly(['acceptedApplicationId', 'acceptedWorkerUid', 'dealStatus', 'status', 'updatedAt'])
+            && incoming().status == 'in_progress'
+            && incoming().dealStatus in ['OFFER_ACCEPTED', 'DEAL_CONFIRMED']
+            && exists(/databases/$(database)/documents/applications/$(incoming().acceptedApplicationId))
+            && get(/databases/$(database)/documents/applications/$(incoming().acceptedApplicationId)).data.workerUid == request.auth.uid
+            && get(/databases/$(database)/documents/applications/$(incoming().acceptedApplicationId)).data.jobId == jobId
+            && get(/databases/$(database)/documents/applications/$(incoming().acceptedApplicationId)).data.status in ['invited', 'accepted']
+          )
+        );
+      allow delete: if isValidId(jobId) && isAdmin();
+    }
+
+    match /applications/{applicationId} {
+      allow get: if isValidId(applicationId)
+        && isVerifiedUser()
+        && (existing().workerUid == request.auth.uid || existing().employerUid == request.auth.uid || isAdmin());
+      allow list: if isVerifiedUser()
+        && (existing().workerUid == request.auth.uid || existing().employerUid == request.auth.uid || isAdmin());
+      allow create: if isValidId(applicationId)
+        && isVerifiedUser()
+        && isValidApplication(incoming())
+        && (
+          (incoming().workerUid == request.auth.uid && incoming().status == 'applied') ||
+          (incoming().employerUid == request.auth.uid && incoming().status == 'invited')
+        )
+        && incoming().liveTrackingAuthorized == false
+        && isValidTimestampOnCreate()
+        && get(/databases/$(database)/documents/jobs/$(incoming().jobId)).data.employerUid == incoming().employerUid;
+      allow update: if isValidId(applicationId)
+        && isVerifiedUser()
+        && isValidApplication(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().jobId == existing().jobId
+        && incoming().employerUid == existing().employerUid
+        && incoming().workerUid == existing().workerUid
+        && (
+          isAdmin() ||
+          (
+            !(existing().status == 'work_completed' || ('dealStatus' in existing() && existing().dealStatus in ['WORK_COMPLETED', 'CANCELLED']))
+            && isOwner(existing().workerUid)
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'dealStatus', 'proposedWage', 'offerAmount', 'travelCharges', 'estimatedArrivalTime',
+              'offerMessage', 'offerSubmittedAt', 'note', 'liveTrackingAuthorized',
+              'dealConfirmedAt', 'workStartedAt', 'completedAt', 'cancelledAt',
+              'cancelledByUid', 'updatedAt'
+            ])
+            && incoming().status in ['applied', 'accepted', 'declined', 'work_completed']
+            && (incoming().status != 'accepted' || existing().status in ['invited', 'accepted'])
+            && (incoming().status != 'work_completed' || existing().status == 'accepted')
+            && (!incoming().liveTrackingAuthorized || incoming().status == 'accepted')
+          ) ||
+          (
+            !(existing().status == 'work_completed' || ('dealStatus' in existing() && existing().dealStatus in ['WORK_COMPLETED', 'CANCELLED']))
+            && isOwner(existing().employerUid)
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'status', 'dealStatus', 'agreedPrice', 'dealConfirmedAt',
+              'liveTrackingAuthorized', 'completedAt', 'cancelledAt', 'cancelledByUid',
+              'workerRating', 'employerFeedback', 'updatedAt'
+            ])
+            && incoming().status in ['invited', 'accepted', 'declined', 'work_completed']
+            && (!('liveTrackingAuthorized' in incoming()) || !incoming().liveTrackingAuthorized || incoming().status == 'accepted')
+          ) ||
+          (
+            existing().status == 'work_completed'
+            && !('workerRating' in existing())
+            && isOwner(existing().employerUid)
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'workerRating', 'employerFeedback', 'updatedAt'
+            ])
+            && 'workerRating' in incoming()
+            && incoming().workerRating is number
+            && incoming().workerRating >= 1
+            && incoming().workerRating <= 5
+          )
+        );
+      allow delete: if isValidId(applicationId) && isAdmin();
+    }
+
+    match /partnershipEnquiries/{enquiryId} {
+      allow get: if isValidId(enquiryId) && isVerifiedUser() && (existing().submitterUid == request.auth.uid || isAdmin());
+      allow list: if isVerifiedUser() && (existing().submitterUid == request.auth.uid || isAdmin());
+      allow create: if isValidId(enquiryId)
+        && isVerifiedUser()
+        && isValidPartnershipEnquiry(incoming())
+        && incoming().submitterUid == request.auth.uid
+        && incoming().status == 'received'
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(enquiryId)
+        && isAdmin()
+        && isValidPartnershipEnquiry(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().submitterUid == existing().submitterUid;
+      allow delete: if isValidId(enquiryId) && isAdmin();
+    }
+
+    match /grievances/{grievanceId} {
+      allow get: if isValidId(grievanceId) && isVerifiedUser() && (existing().reporterUid == request.auth.uid || isAdmin());
+      allow list: if isVerifiedUser() && (existing().reporterUid == request.auth.uid || isAdmin());
+      allow create: if isValidId(grievanceId)
+        && isVerifiedUser()
+        && isValidGrievance(incoming())
+        && incoming().reporterUid == request.auth.uid
+        && incoming().status == 'open'
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(grievanceId)
+        && isAdmin()
+        && isValidGrievance(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().reporterUid == existing().reporterUid;
+      allow delete: if isValidId(grievanceId) && isAdmin();
+    }
+
+    match /announcements/{announcementId} {
+      allow get: if isValidId(announcementId);
+      allow list: if true;
+      allow create: if isValidId(announcementId)
+        && isAdmin()
+        && isValidAnnouncement(incoming())
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(announcementId)
+        && isAdmin()
+        && isValidAnnouncement(incoming())
+        && isValidTimestampOnUpdate();
+      allow delete: if isValidId(announcementId) && isAdmin();
+    }
+
+    match /auditLogs/{logId} {
+      allow get: if isValidId(logId) && isAdmin();
+      allow list: if isAdmin();
+      allow create: if isValidId(logId)
+        && isAdmin()
+        && isValidAuditLog(incoming())
+        && incoming().adminUid == request.auth.uid
+        && incoming().createdAt == request.time;
+      allow update, delete: if false;
+    }
+
+    match /vehicleListings/{vehicleId} {
+      allow get: if isValidId(vehicleId);
+      allow list: if true;
+      allow create: if isValidId(vehicleId)
+        && isVerifiedUser()
+        && isValidVehicleListing(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().verificationStatus == 'pending'
+        && incoming().completedTripsCount == 0
+        && incoming().ratingAvg == 0
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(vehicleId)
+        && isVerifiedUser()
+        && isValidVehicleListing(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().registrationId == existing().registrationId
+        && (
+          isAdmin() ||
+          (
+            isOwner(existing().ownerUid)
+            && existing().verificationStatus != 'suspended'
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'ownerDisplayName', 'vehicleType', 'vehicleTitle', 'vehicleNumberMasked',
+              'seatingOrCapacity', 'acAvailable', 'withDriver', 'ratePerKm', 'ratePerDay',
+              'minFare', 'availabilityStatus', 'state', 'district', 'cityOrVillage',
+              'approxLat', 'approxLng', 'languagesKnown', 'serviceNotes', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isValidId(vehicleId) && isAdmin();
+    }
+
+    match /vehiclePrivate/{vehicleId} {
+      allow get: if isValidId(vehicleId)
+        && isVerifiedUser()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isVerifiedUser() && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow create: if isValidId(vehicleId)
+        && isVerifiedUser()
+        && isValidVehiclePrivate(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().mobileVerified == true
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(vehicleId)
+        && isVerifiedUser()
+        && isValidVehiclePrivate(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && (
+          isAdmin() ||
+          (
+            isOwner(existing().ownerUid)
+            && incoming().mobileVerified == true
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'ownerName', 'mobile', 'mobileVerified', 'verificationMethod', 'testPinHash',
+              'email', 'rcOrLicenseNotes', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isValidId(vehicleId) && isAdmin();
+    }
+
+    match /vehicleBookings/{bookingId} {
+      allow get: if isValidId(bookingId)
+        && isVerifiedUser()
+        && (existing().customerUid == request.auth.uid || existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isVerifiedUser()
+        && (existing().customerUid == request.auth.uid || existing().ownerUid == request.auth.uid || isAdmin());
+      allow create: if isValidId(bookingId)
+        && isVerifiedUser()
+        && isValidVehicleBooking(incoming())
+        && incoming().customerUid == request.auth.uid
+        && incoming().status == 'requested'
+        && isValidTimestampOnCreate()
+        && get(/databases/$(database)/documents/vehicleListings/$(incoming().vehicleId)).data.ownerUid == incoming().ownerUid;
+      allow update: if isValidId(bookingId)
+        && isVerifiedUser()
+        && isValidVehicleBooking(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().vehicleId == existing().vehicleId
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().customerUid == existing().customerUid
+        && !(existing().status in ['completed', 'cancelled', 'declined'])
+        && (
+          isAdmin() ||
+          (
+            isOwner(existing().ownerUid)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+            && incoming().status in ['accepted', 'declined', 'completed']
+          ) ||
+          (
+            isOwner(existing().customerUid)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+            && incoming().status in ['cancelled', 'completed']
+          )
+        );
+      allow delete: if isValidId(bookingId) && isAdmin();
+    }
+
+    match /customerPreferences/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(userId)
+        && isOwner(userId)
+        && isValidCustomerPreference(incoming())
+        && incoming().ownerUid == userId
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(userId)
+        && isVerifiedUser()
+        && isValidCustomerPreference(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && (isAdmin() || isOwner(userId));
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    match /device_tokens/{tokenId} {
+      allow get: if isValidId(tokenId)
+        && isVerifiedUser()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow list: if isVerifiedUser()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+      allow create: if isValidId(tokenId)
+        && isVerifiedUser()
+        && isValidDeviceToken(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(tokenId)
+        && isVerifiedUser()
+        && isValidDeviceToken(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && (isAdmin() || isOwner(existing().ownerUid));
+      allow delete: if isValidId(tokenId)
+        && isVerifiedUser()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+    }
+
+    match /notification_preferences/{userId} {
+      allow get: if isValidId(userId) && (isOwner(userId) || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(userId)
+        && isOwner(userId)
+        && isValidNotificationPreferences(incoming())
+        && incoming().ownerUid == userId
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(userId)
+        && isVerifiedUser()
+        && isValidNotificationPreferences(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && (isAdmin() || isOwner(userId));
+      allow delete: if isValidId(userId) && isAdmin();
+    }
+
+    match /notifications/{notificationId} {
+      allow get: if isValidId(notificationId)
+        && isVerifiedUser()
+        && (existing().recipientUid == request.auth.uid || isAdmin());
+      allow list: if isVerifiedUser()
+        && (existing().recipientUid == request.auth.uid || isAdmin());
+      allow create: if isAdmin() || (
+        isValidId(notificationId)
+        && isVerifiedUser()
+        && isValidNotificationRecord(incoming())
+        && incoming().senderUid == request.auth.uid
+        && incoming().recipientUid != request.auth.uid
+        && incoming().dedupeKey == notificationId
+        && !exists(/databases/$(database)/documents/notifications/$(notificationId))
+        && incoming().isDemo == false
+        && incoming().read == false
+        && isValidTimestampOnCreate()
+        && canNotifyOnDealContext(incoming())
+      );
+      allow delete: if isAdmin();
+      allow update: if isValidId(notificationId)
+        && isVerifiedUser()
+        && isOwner(existing().recipientUid)
+        && incoming().diff(existing()).affectedKeys().hasOnly(['read', 'updatedAt'])
+        && incoming().read is bool
+        && isValidTimestampOnUpdate();
+    }
+
+    match /notification_delivery_logs/{logId} {
+      allow get: if isValidId(logId) && isAdmin();
+      allow list: if isAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /demo_accounts/{accountId} {
+      allow get: if isValidId(accountId) && isVerifiedUser();
+      allow list: if isVerifiedUser();
+      allow create: if isValidId(accountId)
+        && isAdmin()
+        && isValidDemoAccount(incoming())
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(accountId)
+        && isVerifiedUser()
+        && isValidDemoAccount(incoming())
+        && isValidTimestampOnUpdate()
+        && (
+          isAdmin() ||
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['assignedUid', 'notificationsEnabled', 'updatedAt'])
+            && incoming().assignedUid == request.auth.uid
+          )
+        );
+      allow delete: if isValidId(accountId) && isAdmin();
+    }
+
+    match /demo_jobs/{demoJobId} {
+      allow get: if isValidId(demoJobId) && isVerifiedUser();
+      allow list: if isVerifiedUser();
+      allow create: if isValidId(demoJobId)
+        && isAdmin()
+        && isValidDemoJob(incoming())
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(demoJobId)
+        && isVerifiedUser()
+        && isValidDemoJob(incoming())
+        && isValidTimestampOnUpdate()
+        && (
+          isAdmin() ||
+          (
+            incoming().diff(existing()).affectedKeys().hasOnly(['applicationsCount', 'updatedAt'])
+            && incoming().applicationsCount == existing().applicationsCount + 1
+          )
+        );
+      allow delete: if isValidId(demoJobId) && isAdmin();
+    }
+
+    match /demo_applications/{demoAppId} {
+      allow get: if isValidId(demoAppId)
+        && isVerifiedUser()
+        && (existing().applicantUid == request.auth.uid || isAdmin());
+      allow list: if isVerifiedUser()
+        && (existing().applicantUid == request.auth.uid || isAdmin());
+      allow create: if isValidId(demoAppId)
+        && isVerifiedUser()
+        && isValidDemoApplication(incoming())
+        && incoming().applicantUid == request.auth.uid
+        && incoming().status == 'applied'
+        && incoming().isDemo == true
+        && isValidTimestampOnCreate()
+        && exists(/databases/$(database)/documents/demo_jobs/$(incoming().demoJobId));
+      allow update, delete: if isValidId(demoAppId) && isAdmin();
+    }
+
+    match /platform_settings/{settingId} {
+      allow get: if isValidId(settingId);
+      allow list: if isAdmin();
+      allow create: if isValidId(settingId)
+        && isAdmin()
+        && isValidDemoModeConfig(incoming())
+        && incoming().updatedByUid == request.auth.uid
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(settingId)
+        && isAdmin()
+        && isValidDemoModeConfig(incoming())
+        && incoming().updatedByUid == request.auth.uid
+        && isValidTimestampOnUpdate();
+      allow delete: if isValidId(settingId) && isAdmin();
+    }
+
+    match /demo_users/{demoUserId} {
+      allow get, list: if isVerifiedUser()
+        && (isDemoModeEnabled() || isAdmin());
+      allow create: if isValidId(demoUserId)
+        && isVerifiedUser()
+        && (isDemoModeEnabled() || isAdmin())
+        && isValidDemoUserProfile(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().isDemo == true
+        && isValidTimestampOnCreate()
+        && existsAfter(/databases/$(database)/documents/demo_mobile_registry/$( 'mob_' + incoming().mobile10 ));
+      allow update: if isValidId(demoUserId)
+        && isVerifiedUser()
+        && (isDemoModeEnabled() || isAdmin())
+        && isValidDemoUserProfile(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().uniqueUserId == existing().uniqueUserId
+        && incoming().mobile10 == existing().mobile10
+        && (isOwner(existing().ownerUid) || isAdmin());
+      allow delete: if isValidId(demoUserId)
+        && isVerifiedUser()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+    }
+
+    match /demo_mobile_registry/{mobileKey} {
+      allow get: if isValidId(mobileKey)
+        && isVerifiedUser()
+        && (isDemoModeEnabled() || isAdmin());
+      allow list: if isAdmin();
+      allow create: if isValidId(mobileKey)
+        && isVerifiedUser()
+        && (isDemoModeEnabled() || isAdmin())
+        && isValidDemoMobileRegistry(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && mobileKey == ('mob_' + incoming().mobile10)
+        && !exists(/databases/$(database)/documents/demo_mobile_registry/$(mobileKey))
+        && isValidTimestampOnCreate();
+      allow update: if false;
+      allow delete: if isValidId(mobileKey)
+        && isVerifiedUser()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+    }
+
+    match /demo_work_orders/{orderId} {
+      allow get, list: if isVerifiedUser()
+        && (isDemoModeEnabled() || isAdmin())
+        && (
+          isAdmin()
+          || existing().ownerUid == request.auth.uid
+          || request.auth.uid in existing().matchedWorkerOwnerUids
+          || ('acceptedWorkerOwnerUid' in existing() && existing().acceptedWorkerOwnerUid == request.auth.uid)
+        );
+      allow create: if isValidId(orderId)
+        && isVerifiedUser()
+        && (isDemoModeEnabled() || isAdmin())
+        && isValidDemoWorkOrder(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().status == 'requested'
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(orderId)
+        && isVerifiedUser()
+        && (isDemoModeEnabled() || isAdmin())
+        && isValidDemoWorkOrder(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && (
+          isAdmin()
+          || isOwner(existing().ownerUid)
+          || (
+            request.auth.uid in existing().matchedWorkerOwnerUids
+            && existing().status == 'requested'
+            && (
+              (
+                incoming().status == 'accepted'
+                && incoming().acceptedWorkerOwnerUid == request.auth.uid
+              )
+              || incoming().status in ['requested', 'declined']
+            )
+          )
+          || (
+            'acceptedWorkerOwnerUid' in existing()
+            && existing().acceptedWorkerOwnerUid == request.auth.uid
+            && existing().status in ['accepted', 'customer_confirmed', 'in_progress']
+            && incoming().status in ['accepted', 'customer_confirmed', 'in_progress', 'completed']
+          )
+        );
+      allow delete: if isValidId(orderId)
+        && isVerifiedUser()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+    }
+
+    match /demo_location_shares/{shareId} {
+      allow get, list: if isVerifiedUser()
+        && (isDemoModeEnabled() || isAdmin())
+        && (
+          isAdmin()
+          || existing().ownerUid == request.auth.uid
+          || request.auth.uid in existing().authorizedOwnerUids
+        );
+      allow create: if isValidId(shareId)
+        && isVerifiedUser()
+        && (isDemoModeEnabled() || isAdmin())
+        && isValidDemoLiveLocationShare(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && isValidTimestampOnCreate()
+        && (
+          !incoming().sharingActive ||
+          get(/databases/$(database)/documents/demo_work_orders/$(incoming().orderId)).data.status in ['accepted', 'customer_confirmed', 'in_progress']
+        );
+      allow update: if isValidId(shareId)
+        && isVerifiedUser()
+        && (isDemoModeEnabled() || isAdmin())
+        && isValidDemoLiveLocationShare(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().orderId == existing().orderId
+        && (
+          isAdmin()
+          || isOwner(existing().ownerUid)
+          || (
+            request.auth.uid in existing().authorizedOwnerUids
+            && incoming().sharingActive == false
+            && incoming().lat == existing().lat
+            && incoming().lng == existing().lng
+          )
+        )
+        && (
+          !incoming().sharingActive ||
+          get(/databases/$(database)/documents/demo_work_orders/$(incoming().orderId)).data.status in ['accepted', 'customer_confirmed', 'in_progress']
+        );
+      allow delete: if isValidId(shareId)
+        && isVerifiedUser()
+        && (existing().ownerUid == request.auth.uid || isAdmin());
+    }
+
+    match /demo_notifications/{notifId} {
+      allow get, list: if isVerifiedUser()
+        && (isDemoModeEnabled() || isAdmin())
+        && (
+          isAdmin()
+          || existing().recipientOwnerUid == request.auth.uid
+          || existing().senderOwnerUid == request.auth.uid
+        );
+      allow create: if isValidId(notifId)
+        && isVerifiedUser()
+        && (isDemoModeEnabled() || isAdmin())
+        && isValidDemoNotificationRecord(incoming())
+        && incoming().senderOwnerUid == request.auth.uid
+        && incoming().dedupeKey == notifId
+        && !exists(/databases/$(database)/documents/demo_notifications/$(notifId))
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(notifId)
+        && isVerifiedUser()
+        && (isDemoModeEnabled() || isAdmin())
+        && isValidDemoNotificationRecord(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().senderOwnerUid == existing().senderOwnerUid
+        && incoming().recipientOwnerUid == existing().recipientOwnerUid
+        && (
+          isAdmin()
+          || (
+            isOwner(existing().recipientOwnerUid)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['read', 'updatedAt'])
+          )
+          || (
+            isOwner(existing().senderOwnerUid)
+            && incoming().diff(existing()).affectedKeys().hasOnly(['fcmPushStatus', 'fcmErrorReason', 'updatedAt'])
+          )
+        );
+      allow delete: if isValidId(notifId)
+        && isVerifiedUser()
+        && (existing().ownerUid == request.auth.uid || existing().recipientOwnerUid == request.auth.uid || isAdmin());
+    }
+
+    match /profilePhotos/{photoId} {
+      allow get: if isValidId(photoId)
+        && isVerifiedUser()
+        && (isOwner(existing().ownerUid) || isAdmin() || existing().role == 'worker');
+      allow list: if isVerifiedUser()
+        && (existing().ownerUid == request.auth.uid || isAdmin() || existing().role == 'worker');
+      allow create: if isValidId(photoId)
+        && isVerifiedUser()
+        && isOwner(incoming().ownerUid)
+        && isValidProfilePhoto(incoming())
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(photoId)
+        && isVerifiedUser()
+        && isOwner(existing().ownerUid)
+        && isValidProfilePhoto(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().subjectId == existing().subjectId
+        && incoming().role == existing().role;
+      allow delete: if isValidId(photoId)
+        && isVerifiedUser()
+        && (isOwner(existing().ownerUid) || isAdmin());
+    }
+
+    match /acceptedCustomerPhotos/{grantId} {
+      allow get: if isValidId(grantId)
+        && isVerifiedUser()
+        && (isAdmin() || existing().ownerUid == request.auth.uid || existing().workerUid == request.auth.uid);
+      allow list: if isVerifiedUser()
+        && (isAdmin() || existing().ownerUid == request.auth.uid || existing().workerUid == request.auth.uid);
+      allow create: if isValidId(grantId)
+        && isVerifiedUser()
+        && isOwner(incoming().ownerUid)
+        && isValidAcceptedCustomerPhoto(incoming())
+        && isAcceptedJobGrantValid(incoming())
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(grantId)
+        && isVerifiedUser()
+        && isOwner(existing().ownerUid)
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().workerUid == existing().workerUid
+        && incoming().sourceType == existing().sourceType
+        && incoming().sourceId == existing().sourceId
+        && isValidAcceptedCustomerPhoto(incoming())
+        && isAcceptedJobGrantValid(incoming())
+        && isValidTimestampOnUpdate();
+      allow delete: if isValidId(grantId)
+        && isVerifiedUser()
+        && (isOwner(existing().ownerUid) || isAdmin());
+    }
+
+    match /mobileUniquenessLocks/{lockId} {
+      allow get: if isValidId(lockId) && isVerifiedUser();
+      allow list: if isAdmin();
+      allow create: if isValidId(lockId)
+        && isVerifiedUser()
+        && isOwner(incoming().ownerUid)
+        && isValidMobileUniquenessLock(incoming())
+        && !exists(/databases/$(database)/documents/mobileUniquenessLocks/$(lockId))
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(lockId)
+        && isVerifiedUser()
+        && isOwner(existing().ownerUid)
+        && incoming().ownerUid == existing().ownerUid
+        && isValidMobileUniquenessLock(incoming())
+        && isValidTimestampOnUpdate();
+      allow delete: if isValidId(lockId)
+        && isVerifiedUser()
+        && (isOwner(existing().ownerUid) || isAdmin());
+    }
+
+    match /dealMessages/{messageId} {
+      allow get: if isValidId(messageId)
+        && isVerifiedUser()
+        && (existing().employerUid == request.auth.uid || existing().workerUid == request.auth.uid || isAdmin());
+      allow list: if isVerifiedUser()
+        && (existing().employerUid == request.auth.uid || existing().workerUid == request.auth.uid || isAdmin());
+      allow create: if isValidId(messageId)
+        && isVerifiedUser()
+        && isValidDealMessage(incoming())
+        && incoming().senderUid == request.auth.uid
+        && incoming().createdAt == request.time
+        && (
+          (incoming().senderRole == 'customer' && request.auth.uid == incoming().employerUid) ||
+          (incoming().senderRole == 'worker' && request.auth.uid == incoming().workerUid)
+        )
+        && (
+          (
+            exists(/databases/$(database)/documents/applications/$(incoming().applicationId))
+            && get(/databases/$(database)/documents/applications/$(incoming().applicationId)).data.employerUid == incoming().employerUid
+            && get(/databases/$(database)/documents/applications/$(incoming().applicationId)).data.workerUid == incoming().workerUid
+          ) || (
+            exists(/databases/$(database)/documents/jobs/$(incoming().jobId))
+            && get(/databases/$(database)/documents/jobs/$(incoming().jobId)).data.employerUid == incoming().employerUid
+            && get(/databases/$(database)/documents/jobs/$(incoming().jobId)).data.status in ['open', 'in_progress']
+            && exists(/databases/$(database)/documents/publicWorkers/$(incoming().workerUid))
+          )
+        );
+      allow update: if false;
+      allow delete: if isValidId(messageId) && isAdmin();
+    }
+
+    match /dealLocationShares/{shareId} {
+      allow get: if isValidId(shareId)
+        && isVerifiedUser()
+        && (request.auth.uid in existing().authorizedUids || isAdmin());
+      allow list: if isVerifiedUser()
+        && (request.auth.uid in existing().authorizedUids || isAdmin());
+      allow create: if isValidId(shareId)
+        && isVerifiedUser()
+        && isValidDealLocationShare(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && request.auth.uid in incoming().authorizedUids
+        && isValidTimestampOnCreate()
+        && isActiveAcceptedDeal(incoming().applicationId)
+        && get(/databases/$(database)/documents/applications/$(incoming().applicationId)).data.employerUid in incoming().authorizedUids
+        && get(/databases/$(database)/documents/applications/$(incoming().applicationId)).data.workerUid in incoming().authorizedUids
+        && (
+          (incoming().role == 'customer' && request.auth.uid == get(/databases/$(database)/documents/applications/$(incoming().applicationId)).data.employerUid) ||
+          (incoming().role == 'worker' && request.auth.uid == get(/databases/$(database)/documents/applications/$(incoming().applicationId)).data.workerUid)
+        );
+      allow update: if isValidId(shareId)
+        && isVerifiedUser()
+        && isValidDealLocationShare(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().applicationId == existing().applicationId
+        && incoming().jobId == existing().jobId
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().role == existing().role
+        && incoming().authorizedUids == existing().authorizedUids
+        && (
+          isAdmin()
+          || (
+            isOwner(existing().ownerUid)
+            && (!incoming().sharingActive || isActiveAcceptedDeal(existing().applicationId))
+          )
+          || (
+            request.auth.uid in existing().authorizedUids
+            && incoming().sharingActive == false
+            && incoming().lat == existing().lat
+            && incoming().lng == existing().lng
+          )
+        );
+      allow delete: if isValidId(shareId)
+        && isVerifiedUser()
+        && (isOwner(existing().ownerUid) || isAdmin());
+    }
+  }
+}

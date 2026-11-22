@@ -11,6 +11,7 @@ import {
   Crosshair,
   Download,
   FileText,
+  Gift,
   History,
   LocateFixed,
   Lock,
@@ -33,13 +34,16 @@ import { RojgarSetuLogo } from './RojgarSetuLogo';
 import { SecureAvatar } from './SecureAvatar';
 import { UserNotificationCenter } from './UserNotificationCenter';
 import { AdminNotificationDemoPanel } from './AdminNotificationDemoPanel';
+import { AdminAdsManagementPanel } from './AdminAdsManagementPanel';
+import { AdminReferralsPanel } from './AdminReferralsPanel';
 import { ApproximateJobLocationMap } from './ApproximateJobLocationMap';
 import { DealCoordinationPanel, getDealStatusBadgeStyle } from './DealCoordinationPanel';
 import { OrderChatBox } from './OrderChatBox';
 import { getJobPhotoUrls } from '../lib/workPhotoService';
-import { doc, serverTimestamp, updateDoc } from 'firebase/firestore';
+import { doc, getDoc, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { getVehicleTypeLabel } from '../data/vehicleTypes';
+import { SERVICE_CATALOG_V2 } from '../data/serviceCatalogV2';
 import { useLanguage } from '../i18n/LanguageContext';
 import { db, handleFirestoreError, OperationType } from '../lib/firebase';
 import { detectBestGpsLocation } from '../lib/locationService';
@@ -56,6 +60,7 @@ import {
   adminUpdateGrievanceStatus,
   adminUpdateJobStatus,
   adminUpdateVerification,
+  adminUpdateWorkerAvailability,
   callNotificationApi,
   cancelDeal,
   completeDeal,
@@ -205,7 +210,7 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
   onClearHighlightedDemoJob,
 }) => {
   const { lang, t } = useLanguage();
-  const { user, workerProfile, workerPrivate, signInWithGoogle, refreshUserProfiles } = useAuth();
+  const { user, authReady, workerProfile, workerPrivate, signInWithGoogle, refreshUserProfiles } = useAuth();
   const [applications, setApplications] = useState<JobApplication[]>([]);
   const [ownerVehicles, setOwnerVehicles] = useState<VehicleListing[]>([]);
   const [ownerVehicleBookings, setOwnerVehicleBookings] = useState<VehicleBooking[]>([]);
@@ -221,6 +226,8 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
   const [openMapJobIds, setOpenMapJobIds] = useState<Record<string, boolean>>({});
   const [openChatJobIds, setOpenChatJobIds] = useState<Record<string, boolean>>({});
   const [lightboxPhotoUrl, setLightboxPhotoUrl] = useState<string | null>(null);
+  const [fetchedSpotlightJob, setFetchedSpotlightJob] = useState<JobPosting | null>(null);
+  const [spotlightLoading, setSpotlightLoading] = useState(false);
   const newRequestSectionRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
@@ -240,14 +247,6 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
     };
   }, [user?.uid, user?.emailVerified]);
 
-  useEffect(() => {
-    if (!highlightedJobId) return;
-    const timer = window.setTimeout(() => {
-      newRequestSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 80);
-    return () => window.clearTimeout(timer);
-  }, [highlightedJobId]);
-
   const jobsById = useMemo(() => {
     const record: Record<string, JobPosting> = {};
     jobs.forEach((j) => {
@@ -255,6 +254,40 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
     });
     return record;
   }, [jobs]);
+
+  // Direct Firestore fallback fetch for deep-linked notification jobId if not yet present in live jobs feed
+  useEffect(() => {
+    if (!highlightedJobId) {
+      setFetchedSpotlightJob(null);
+      setSpotlightLoading(false);
+      return;
+    }
+    if (jobsById[highlightedJobId]) {
+      setFetchedSpotlightJob(null);
+      setSpotlightLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setSpotlightLoading(true);
+    getDoc(doc(db, 'jobs', highlightedJobId))
+      .then((snap) => {
+        if (cancelled) return;
+        if (snap.exists()) {
+          setFetchedSpotlightJob({ id: snap.id, ...(snap.data() as Omit<JobPosting, 'id'>) });
+        } else {
+          setFetchedSpotlightJob(null);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setFetchedSpotlightJob(null);
+      })
+      .finally(() => {
+        if (!cancelled) setSpotlightLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [highlightedJobId, jobsById]);
 
   const matchingJobs = useMemo(() => {
     if (!workerProfile) return [];
@@ -274,17 +307,59 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
 
   const spotlightJob = useMemo(() => {
     if (!highlightedJobId) return undefined;
-    const candidate = jobsById[highlightedJobId];
-    if (!candidate) return undefined;
-    const myApp = applications.find((a) => a.jobId === highlightedJobId);
-    if (candidate.status === 'open' || Boolean(myApp)) return candidate;
-    return undefined;
-  }, [highlightedJobId, jobsById, applications]);
+    return (
+      jobsById[highlightedJobId] ||
+      (fetchedSpotlightJob && fetchedSpotlightJob.id === highlightedJobId
+        ? fetchedSpotlightJob
+        : undefined)
+    );
+  }, [highlightedJobId, jobsById, fetchedSpotlightJob]);
 
   const spotlightApp = useMemo(() => {
     if (!highlightedJobId) return undefined;
     return applications.find((a) => a.jobId === highlightedJobId);
   }, [highlightedJobId, applications]);
+
+  const hasWorkerProfile = Boolean(workerProfile);
+  const hasSpotlightJob = Boolean(spotlightJob);
+
+  useEffect(() => {
+    if (!highlightedJobId || !hasWorkerProfile) return;
+    const timer = window.setTimeout(() => {
+      newRequestSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 100);
+    return () => window.clearTimeout(timer);
+  }, [highlightedJobId, hasWorkerProfile, hasSpotlightJob]);
+
+  const buildFallbackJobFromApp = (app: JobApplication): JobPosting => ({
+    id: app.jobId,
+    employerUid: app.employerUid,
+    employerName: app.customerName || 'Customer',
+    title: app.jobTitle,
+    category: app.jobCategory || workerProfile?.primarySkill || 'General',
+    description: app.note || app.jobTitle,
+    workType: 'daily_wage',
+    offeredWage: app.proposedWage || 0,
+    wageUnit: 'daily',
+    workersRequired: 1,
+    requiredSkills: [app.jobCategory || workerProfile?.primarySkill || 'General'],
+    state: workerProfile?.state || '',
+    district: app.jobDistrict || workerProfile?.district || '',
+    cityOrVillage: app.jobLocationLabel || workerProfile?.cityOrVillage || '',
+    workLocationLabel: app.jobLocationLabel || '',
+    approxLocationLabel: app.jobLocationLabel || app.jobDistrict || '',
+    lat: workerProfile?.approxLat || 0,
+    lng: workerProfile?.approxLng || 0,
+    jobDate: app.jobDate,
+    startTime: app.startTime,
+    paymentTerms: 'On work completion',
+    contactPreference: 'platform_message',
+    biddingEnabled: true,
+    isWomenFriendly: false,
+    isAccessible: false,
+    status: 'open',
+    applicationsCount: 1,
+  });
 
   const handleListenJobVoice = (job: JobPosting) => {
     unlockAudioOnUserGesture();
@@ -474,6 +549,19 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
       targetRoute: 'employer-dashboard',
     }).catch(() => undefined);
   };
+
+  if (!authReady) {
+    return (
+      <div className="max-w-3xl mx-auto px-4 py-14">
+        <div className="bg-white border border-slate-200 rounded-lg p-8 text-center space-y-3">
+          <h1 className="font-display text-xl font-bold text-[#0B3B75]">
+            {tr(lang, 'Loading Customer Request & Dashboard...', 'ग्राहक अनुरोध लोड हो रहा है...', 'ग्राहक विनंती लोड होत आहे...')}
+          </h1>
+          <p className="text-xs text-slate-500">{t.common.loading}</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!user) {
     return (
@@ -741,7 +829,7 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
         </div>
 
         {/* Loading state while deep-linked notification job hydrates */}
-        {highlightedJobId && !spotlightJob && jobs.length === 0 && (
+        {highlightedJobId && !spotlightJob && (spotlightLoading || jobs.length === 0) && (
           <div className="bg-amber-50 border-2 border-[#E06D1B] rounded-lg p-5 text-sm font-semibold text-[#0B3B75]">
             {tr(
               lang,
@@ -885,7 +973,16 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
             })()}
 
             {/* 4 & 5. Primary Action Buttons: SEND OFFER + CHAT (or Active Deal Panel if already offered/accepted) */}
-            {!spotlightApp || spotlightApp.status === 'invited' ? (
+            {!spotlightApp && spotlightJob.status !== 'open' ? (
+              <div className="rounded-md bg-slate-100 border border-slate-300 px-3.5 py-2.5 text-xs font-semibold text-slate-700">
+                {tr(
+                  lang,
+                  `This hiring request is currently "${spotlightJob.status}" and is no longer accepting new offers.`,
+                  `यह अनुरोध वर्तमान में "${spotlightJob.status}" है और अब नए ऑफर स्वीकार नहीं कर रहा है।`,
+                  `ही विनंती सध्या "${spotlightJob.status}" आहे आणि नवीन ऑफर स्वीकारत नाही.`
+                )}
+              </div>
+            ) : !spotlightApp || spotlightApp.status === 'invited' ? (
               <>
                 <div className="flex flex-wrap gap-2.5 pt-1">
                   <button
@@ -1162,25 +1259,14 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
 
                   {!isEditingOffer ? (
                     <div className="flex flex-wrap gap-2 pt-1">
-                      {job ? (
-                        <button
-                          type="button"
-                          disabled={busyActionId === app.id}
-                          onClick={() => handleOpenOfferEditor(`invite_${app.id}`, app.proposedWage)}
-                          className="flex-1 min-h-[48px] px-4 py-2.5 rounded-md bg-[#0B3B75] text-white text-sm font-extrabold hover:bg-slate-800 whitespace-nowrap cursor-pointer"
-                        >
-                          {tr(lang, 'SEND OFFER', 'ऑफर भेजें', 'ऑफर पाठवा')}
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          disabled={busyActionId === app.id}
-                          onClick={() => handleInviteDecision(app, 'accepted')}
-                          className="flex-1 min-h-[48px] px-4 py-2.5 rounded-md bg-[#15803D] text-white text-sm font-bold hover:bg-emerald-800 whitespace-nowrap cursor-pointer"
-                        >
-                          {t.dashboards.acceptBtn}
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        disabled={busyActionId === app.id}
+                        onClick={() => handleOpenOfferEditor(`invite_${app.id}`, app.proposedWage)}
+                        className="flex-1 min-h-[48px] px-4 py-2.5 rounded-md bg-[#0B3B75] text-white text-sm font-extrabold hover:bg-slate-800 whitespace-nowrap cursor-pointer"
+                      >
+                        {tr(lang, 'SEND OFFER', 'ऑफर भेजें', 'ऑफर पाठवा')}
+                      </button>
                       <button
                         type="button"
                         onClick={() =>
@@ -1204,65 +1290,63 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
                       </button>
                     </div>
                   ) : (
-                    job && (
-                      <form
-                        onSubmit={(e) => handleSubmitOfferForJob(e, job, app)}
-                        className="bg-white border-2 border-[#0B3B75] rounded-md p-3 space-y-2.5"
-                      >
-                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                          <div>
-                            <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                              {tr(lang, 'Enter Your Price (₹) *', 'अपना दर दर्ज करें (₹) *', 'तुमचा दर टाका (₹) *')}
-                            </label>
-                            <input
-                              type="number"
-                              required
-                              min={1}
-                              value={offerPriceInput}
-                              onChange={(e) => setOfferPriceInput(e.target.value)}
-                              placeholder={tr(lang, 'Enter Your Price (₹)', 'दर (₹)', 'दर (₹)')}
-                              className="w-full min-h-[42px] px-2.5 py-1.5 border border-slate-300 rounded text-sm font-mono-tabular font-bold"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                              {tr(lang, 'Travel Charges (Optional)', 'यात्रा शुल्क (वैकल्पिक)', 'प्रवास खर्च (ऐच्छिक)')}
-                            </label>
-                            <input
-                              type="number"
-                              min={0}
-                              value={offerTravelInput}
-                              onChange={(e) => setOfferTravelInput(e.target.value)}
-                              placeholder={tr(lang, '0 (Optional)', '0 (वैकल्पिक)', '0 (ऐच्छिक)')}
-                              className="w-full min-h-[42px] px-2.5 py-1.5 border border-slate-300 rounded text-sm font-mono-tabular"
-                            />
-                          </div>
+                    <form
+                      onSubmit={(e) => handleSubmitOfferForJob(e, job || buildFallbackJobFromApp(app), app)}
+                      className="bg-white border-2 border-[#0B3B75] rounded-md p-3 space-y-2.5"
+                    >
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                            {tr(lang, 'Enter Your Price (₹) *', 'अपना दर दर्ज करें (₹) *', 'तुमचा दर टाका (₹) *')}
+                          </label>
+                          <input
+                            type="number"
+                            required
+                            min={1}
+                            value={offerPriceInput}
+                            onChange={(e) => setOfferPriceInput(e.target.value)}
+                            placeholder={tr(lang, 'Enter Your Price (₹)', 'दर (₹)', 'दर (₹)')}
+                            className="w-full min-h-[42px] px-2.5 py-1.5 border border-slate-300 rounded text-sm font-mono-tabular font-bold"
+                          />
                         </div>
-                        <input
-                          type="text"
-                          value={offerMsgInput}
-                          onChange={(e) => setOfferMsgInput(e.target.value)}
-                          placeholder={tr(lang, 'Message (Optional)', 'संदेश (वैकल्पिक)', 'संदेश (ऐच्छिक)')}
-                          className="w-full min-h-[42px] px-2.5 py-1.5 border border-slate-300 rounded text-xs"
-                        />
-                        <div className="flex gap-2">
-                          <button
-                            type="submit"
-                            disabled={busyActionId === app.id}
-                            className="flex-1 min-h-[46px] px-4 py-2 rounded-md bg-[#0B3B75] text-white text-sm font-extrabold cursor-pointer"
-                          >
-                            {tr(lang, 'SEND OFFER', 'ऑफर भेजें', 'ऑफर पाठवा')}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setOfferDraftTargetId(null)}
-                            className="min-h-[46px] px-4 py-2 rounded-md border border-slate-300 text-xs font-semibold text-slate-700 cursor-pointer"
-                          >
-                            {t.common.cancel}
-                          </button>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                            {tr(lang, 'Travel Charges (Optional)', 'यात्रा शुल्क (वैकल्पिक)', 'प्रवास खर्च (ऐच्छिक)')}
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            value={offerTravelInput}
+                            onChange={(e) => setOfferTravelInput(e.target.value)}
+                            placeholder={tr(lang, '0 (Optional)', '0 (वैकल्पिक)', '0 (ऐच्छिक)')}
+                            className="w-full min-h-[42px] px-2.5 py-1.5 border border-slate-300 rounded text-sm font-mono-tabular"
+                          />
                         </div>
-                      </form>
-                    )
+                      </div>
+                      <input
+                        type="text"
+                        value={offerMsgInput}
+                        onChange={(e) => setOfferMsgInput(e.target.value)}
+                        placeholder={tr(lang, 'Message (Optional)', 'संदेश (वैकल्पिक)', 'संदेश (ऐच्छिक)')}
+                        className="w-full min-h-[42px] px-2.5 py-1.5 border border-slate-300 rounded text-xs"
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          type="submit"
+                          disabled={busyActionId === app.id}
+                          className="flex-1 min-h-[46px] px-4 py-2 rounded-md bg-[#0B3B75] text-white text-sm font-extrabold cursor-pointer"
+                        >
+                          {tr(lang, 'SEND OFFER', 'ऑफर भेजें', 'ऑफर पाठवा')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setOfferDraftTargetId(null)}
+                          className="min-h-[46px] px-4 py-2 rounded-md border border-slate-300 text-xs font-semibold text-slate-700 cursor-pointer"
+                        >
+                          {t.common.cancel}
+                        </button>
+                      </div>
+                    </form>
                   )}
 
                   {openChatJobIds[`invite_${app.id}`] && (
@@ -1684,10 +1768,10 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
                           <button
                             type="button"
                             disabled={busyActionId === app.id}
-                            onClick={() => handleInviteDecision(app, 'accepted')}
-                            className="min-h-[44px] px-4 py-2 rounded-md bg-[#15803D] text-white text-xs font-semibold hover:bg-emerald-800 whitespace-nowrap cursor-pointer"
+                            onClick={() => handleOpenOfferEditor(`app_inv_${app.id}`, app.proposedWage)}
+                            className="min-h-[44px] px-4 py-2 rounded-md bg-[#0B3B75] text-white text-xs font-extrabold hover:bg-slate-800 whitespace-nowrap cursor-pointer"
                           >
-                            {t.dashboards.acceptBtn}
+                            {tr(lang, 'SEND OFFER', 'ऑफर भेजें', 'ऑफर पाठवा')}
                           </button>
                           <button
                             type="button"
@@ -1727,6 +1811,66 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
                       )}
                     </div>
                   </div>
+
+                  {app.status === 'invited' && offerDraftTargetId === `app_inv_${app.id}` && (
+                    <form
+                      onSubmit={(e) => handleSubmitOfferForJob(e, job || buildFallbackJobFromApp(app), app)}
+                      className="bg-slate-50 border-2 border-[#0B3B75] rounded-md p-3 space-y-2.5"
+                    >
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                            {tr(lang, 'Enter Your Price (₹) *', 'अपना दर दर्ज करें (₹) *', 'तुमचा दर टाका (₹) *')}
+                          </label>
+                          <input
+                            type="number"
+                            required
+                            min={1}
+                            value={offerPriceInput}
+                            onChange={(e) => setOfferPriceInput(e.target.value)}
+                            placeholder={tr(lang, 'Enter Your Price (₹)', 'दर (₹)', 'दर (₹)')}
+                            className="w-full min-h-[42px] px-2.5 py-1.5 border border-slate-300 rounded text-sm font-mono-tabular font-bold bg-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                            {tr(lang, 'Travel Charges (Optional)', 'यात्रा शुल्क (वैकल्पिक)', 'प्रवास खर्च (ऐच्छिक)')}
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            value={offerTravelInput}
+                            onChange={(e) => setOfferTravelInput(e.target.value)}
+                            placeholder={tr(lang, '0 (Optional)', '0 (वैकल्पिक)', '0 (ऐच्छिक)')}
+                            className="w-full min-h-[42px] px-2.5 py-1.5 border border-slate-300 rounded text-sm font-mono-tabular bg-white"
+                          />
+                        </div>
+                      </div>
+                      <input
+                        type="text"
+                        value={offerMsgInput}
+                        onChange={(e) => setOfferMsgInput(e.target.value)}
+                        placeholder={tr(lang, 'Message (Optional)', 'संदेश (वैकल्पिक)', 'संदेश (ऐच्छिक)')}
+                        className="w-full min-h-[42px] px-2.5 py-1.5 border border-slate-300 rounded text-xs bg-white"
+                      />
+                      <div className="flex gap-2">
+                        <button
+                          type="submit"
+                          disabled={busyActionId === app.id}
+                          className="flex-1 min-h-[44px] px-4 py-2 rounded-md bg-[#0B3B75] text-white text-sm font-extrabold cursor-pointer"
+                        >
+                          {tr(lang, 'SEND OFFER', 'ऑफर भेजें', 'ऑफर पाठवा')}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setOfferDraftTargetId(null)}
+                          className="min-h-[44px] px-4 py-2 rounded-md border border-slate-300 bg-white text-xs font-semibold text-slate-700 cursor-pointer"
+                        >
+                          {t.common.cancel}
+                        </button>
+                      </div>
+                    </form>
+                  )}
 
                   {/* Shared Deal Status Timeline, Two-Way Chat & Two-Way Live Map */}
                   <DealCoordinationPanel
@@ -2049,7 +2193,7 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
   onClearHighlightedJob,
 }) => {
   const { lang, t } = useLanguage();
-  const { user, employerProfile, employerPrivate, customerPreference, signInWithGoogle } = useAuth();
+  const { user, authReady, employerProfile, employerPrivate, customerPreference, signInWithGoogle } = useAuth();
   const [applications, setApplications] = useState<JobApplication[]>([]);
   const [orderMessages, setOrderMessages] = useState<DealMessage[]>([]);
   const [customerVehicleBookings, setCustomerVehicleBookings] = useState<VehicleBooking[]>([]);
@@ -2085,12 +2229,6 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
       u3();
     };
   }, [user?.uid, user?.emailVerified]);
-
-  useEffect(() => {
-    if (highlightedJobId && customerOrdersRef.current) {
-      customerOrdersRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
-  }, [highlightedJobId]);
 
   const jobsById = useMemo(() => {
     const mapObj: Record<string, JobPosting> = {};
@@ -2245,6 +2383,17 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
 
     return entries;
   }, [myJobs, applicationsByJobId, preOfferChatsByJobId, jobsById, highlightedJobId]);
+
+  const hasCustomerUser = Boolean(user);
+  const unifiedOrderCount = unifiedOrders.length;
+
+  useEffect(() => {
+    if (!highlightedJobId || !hasCustomerUser) return;
+    const timer = window.setTimeout(() => {
+      customerOrdersRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 100);
+    return () => window.clearTimeout(timer);
+  }, [highlightedJobId, hasCustomerUser, unifiedOrderCount]);
 
   const frequentStats = useMemo(() => {
     const hireOrders = Math.max(customerPreference?.totalHireOrders ?? 0, myJobs.length);
@@ -2511,6 +2660,19 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
       ])
     );
   };
+
+  if (!authReady) {
+    return (
+      <div className="max-w-3xl mx-auto px-4 py-14">
+        <div className="bg-white border border-slate-200 rounded-lg p-8 text-center space-y-3">
+          <h1 className="font-display text-xl font-bold text-[#0B3B75]">
+            {tr(lang, 'Loading Your Orders & Worker Offers...', 'आपके ऑर्डर और ऑफर लोड हो रहे हैं...', 'तुमच्या ऑर्डर आणि ऑफर लोड होत आहेत...')}
+          </h1>
+          <p className="text-xs text-slate-500">{t.common.loading}</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!user) {
     return (
@@ -3699,6 +3861,9 @@ type AdminTab =
   | 'workers'
   | 'employers'
   | 'jobs'
+  | 'categories'
+  | 'advertisements'
+  | 'referrals'
   | 'notifications'
   | 'grievances'
   | 'enquiries'
@@ -3863,6 +4028,9 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
             { id: 'workers', label: `Workers (${workers.length})`, icon: Users },
             { id: 'employers', label: `Employers (${employers.length})`, icon: Briefcase },
             { id: 'jobs', label: `Jobs (${jobs.length})`, icon: FileText },
+            { id: 'categories', label: `Services & Radius (${SERVICE_CATALOG_V2.length})`, icon: Radar },
+            { id: 'advertisements', label: 'Advertisement Management', icon: Megaphone },
+            { id: 'referrals', label: 'Referrals & Rewards', icon: Gift },
             { id: 'notifications', label: '📲 Live Notification Demo', icon: BellRing },
             { id: 'grievances', label: `${t.dashboards.grievances} (${grievances.length})`, icon: AlertTriangle },
             { id: 'enquiries', label: `${t.dashboards.enquiries} (${enquiries.length})`, icon: Shield },
@@ -3871,7 +4039,8 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
           ] as { id: AdminTab; label: string; icon: React.ComponentType<{ className?: string }> }[]
         ).map((item) => {
           const Icon = item.icon;
-          const isNotif = item.id === 'notifications';
+          const isHighlight =
+            item.id === 'notifications' || item.id === 'advertisements' || item.id === 'referrals';
           return (
             <button
               key={item.id}
@@ -3879,10 +4048,10 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
               onClick={() => setTab(item.id)}
               className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md text-xs font-semibold cursor-pointer ${
                 tab === item.id
-                  ? isNotif
+                  ? isHighlight
                     ? 'bg-[#E06D1B] text-white'
                     : 'bg-[#0B3B75] text-white'
-                  : isNotif
+                  : isHighlight
                   ? 'bg-amber-50 border border-amber-300 text-[#C25E00] hover:bg-amber-100'
                   : 'bg-white border border-slate-200 text-slate-700 hover:bg-slate-50'
               }`}
@@ -3894,8 +4063,73 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
         })}
       </div>
 
+      {tab === 'advertisements' && <AdminAdsManagementPanel />}
+
+      {tab === 'referrals' && <AdminReferralsPanel />}
+
       {tab === 'notifications' && (
         <AdminNotificationDemoPanel workers={workers} employers={employers} />
+      )}
+
+      {tab === 'categories' && (
+        <div className="bg-white border border-slate-200 rounded-lg p-6 space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div>
+              <h2 className="font-display text-lg font-bold text-[#0B3B75]">
+                Service Categories, Subcategories &amp; Matching Radius
+              </h2>
+              <p className="text-xs text-slate-600 mt-0.5">
+                Progressive nearby matching starts at <strong>2 km</strong>, expands to <strong>5 km</strong>, and reaches <strong>10 km</strong>. Bike Rider / Transport stays isolated from general service orders.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-1.5 text-xs font-semibold">
+              <span className="px-2.5 py-1 rounded bg-emerald-50 border border-emerald-200 text-[#15803D]">Stage 1: 2 km</span>
+              <span className="px-2.5 py-1 rounded bg-amber-50 border border-amber-200 text-[#C25E00]">Stage 2: 5 km</span>
+              <span className="px-2.5 py-1 rounded bg-blue-50 border border-blue-200 text-[#0B3B75]">Stage 3: 10 km</span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {SERVICE_CATALOG_V2.map((cat) => (
+              <div
+                key={cat.id}
+                className="rounded-lg border border-slate-200 p-4 space-y-2.5 bg-slate-50/40"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <h3 className="font-bold text-sm text-[#0B3B75]">
+                      {cat.en}
+                    </h3>
+                    <p className="text-[11px] text-slate-500">
+                      {cat.mr} · {cat.hi}
+                    </p>
+                  </div>
+                  <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-white border border-slate-200 text-[#15803D]">
+                    Worker Quote
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-600">
+                  DB Category: <span className="font-semibold text-slate-800">{cat.canonicalCategory}</span>
+                  {cat.isTransport && (
+                    <span className="ml-1.5 px-1.5 py-0.5 rounded bg-amber-100 text-[#C25E00] font-semibold">
+                      Separate Flow
+                    </span>
+                  )}
+                </p>
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {cat.subServices.map((sub) => (
+                    <span
+                      key={sub.id}
+                      className="text-[11px] px-2 py-0.5 rounded bg-white border border-slate-200 text-slate-700"
+                    >
+                      {sub.en}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
 
       {/* Tab Content */}
@@ -3929,12 +4163,15 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
                     <th className="py-2 pr-4">Name</th>
                     <th className="py-2 pr-4">Primary Skill</th>
                     <th className="py-2 pr-4">District</th>
+                    <th className="py-2 pr-4">Availability</th>
                     <th className="py-2 pr-4">Status</th>
                     <th className="py-2">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {workers.map((w) => (
+                  {workers.map((w) => {
+                    const isAvailable = (w.availabilityStatus || 'available') !== 'offline';
+                    return (
                     <tr key={w.id}>
                       <td className="py-3 pr-4 font-mono-tabular text-xs">{w.registrationId}</td>
                       <td className="py-3 pr-4 font-semibold text-[#0B3B75]">
@@ -3950,8 +4187,43 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
                       </td>
                       <td className="py-3 pr-4 text-slate-600">{w.primarySkill}</td>
                       <td className="py-3 pr-4 text-slate-600">{w.district}, {w.state}</td>
+                      <td className="py-3 pr-4">
+                        <span
+                          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold uppercase ${
+                            isAvailable
+                              ? 'bg-emerald-50 text-[#15803D] border border-emerald-200'
+                              : 'bg-slate-100 text-slate-600 border border-slate-200'
+                          }`}
+                        >
+                          {isAvailable ? 'Available' : 'Offline'}
+                        </span>
+                      </td>
                       <td className="py-3 pr-4 font-semibold uppercase text-xs">{w.verificationStatus}</td>
                       <td className="py-3 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          disabled={busyId === `avail-${w.id}`}
+                          onClick={async () => {
+                            setBusyId(`avail-${w.id}`);
+                            try {
+                              await adminUpdateWorkerAvailability(
+                                w.id,
+                                isAvailable ? 'offline' : 'available',
+                                user.uid,
+                                adminEmail
+                              );
+                            } finally {
+                              setBusyId(null);
+                            }
+                          }}
+                          className={`px-2.5 py-1 rounded text-xs font-semibold cursor-pointer border ${
+                            isAvailable
+                              ? 'border-amber-300 text-[#C25E00] hover:bg-amber-50'
+                              : 'border-emerald-300 text-[#15803D] hover:bg-emerald-50'
+                          }`}
+                        >
+                          {isAvailable ? 'Set Offline' : 'Set Available'}
+                        </button>
                         {w.verificationStatus !== 'verified' && (
                           <button
                             type="button"
@@ -3995,7 +4267,8 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
                         )}
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

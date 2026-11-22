@@ -17,6 +17,88 @@ export const VISIBLE_DEAL_STAGE_ORDER: readonly VisibleDealStage[] = [
   'WORK_COMPLETED',
 ] as const;
 
+export type SixStepDealStage =
+  | 'REQUEST_SENT'
+  | 'WORKER_FOUND'
+  | 'WORKER_CONFIRMED'
+  | 'WORKER_ON_THE_WAY'
+  | 'WORK_STARTED'
+  | 'WORK_COMPLETED'
+  | 'CANCELLED';
+
+export const SIX_STEP_STAGE_ORDER: readonly Exclude<SixStepDealStage, 'CANCELLED'>[] = [
+  'REQUEST_SENT',
+  'WORKER_FOUND',
+  'WORKER_CONFIRMED',
+  'WORKER_ON_THE_WAY',
+  'WORK_STARTED',
+  'WORK_COMPLETED',
+] as const;
+
+export function toSixStepDealStage(
+  input?: Pick<JobApplication, 'status' | 'dealStatus'> | DealStatus | string | null,
+  hasWorkerLiveLocation = false
+): SixStepDealStage {
+  if (!input) return 'REQUEST_SENT';
+  const raw = typeof input === 'string' ? input : input.dealStatus || input.status;
+  switch (raw) {
+    case 'REQUESTED':
+    case 'NOTIFIED':
+    case 'NEW_ORDER':
+    case 'NEW_REQUEST':
+    case 'invited':
+      return 'REQUEST_SENT';
+    case 'OFFER_RECEIVED':
+    case 'OFFER_SENT':
+    case 'applied':
+      return 'WORKER_FOUND';
+    case 'OFFER_ACCEPTED':
+    case 'DEAL_CONFIRMED':
+    case 'WORK_CONFIRMED':
+    case 'accepted':
+      return hasWorkerLiveLocation ? 'WORKER_ON_THE_WAY' : 'WORKER_CONFIRMED';
+    case 'WORKER_ON_THE_WAY':
+    case 'WORKER_ARRIVED':
+    case 'LOCATION_SHARED':
+      return 'WORKER_ON_THE_WAY';
+    case 'WORK_IN_PROGRESS':
+      return 'WORK_STARTED';
+    case 'WORK_COMPLETED':
+    case 'work_completed':
+    case 'completed':
+      return 'WORK_COMPLETED';
+    case 'CANCELLED':
+    case 'REJECTED':
+    case 'declined':
+    case 'cancelled':
+      return 'CANCELLED';
+    default:
+      return 'REQUEST_SENT';
+  }
+}
+
+export function getSixStepLabel(stage: SixStepDealStage, lang: Language, arrived = false): string {
+  switch (stage) {
+    case 'REQUEST_SENT':
+      return lang === 'mr' ? 'रिक्वेस्ट पाठवली' : lang === 'hi' ? 'रिक्वेस्ट भेजी गई' : 'Request Sent';
+    case 'WORKER_FOUND':
+      return lang === 'mr' ? 'कामगार मिळाला' : lang === 'hi' ? 'कामगार मिला' : 'Worker Found';
+    case 'WORKER_CONFIRMED':
+      return lang === 'mr' ? 'कामगार निश्चित' : lang === 'hi' ? 'कामगार कन्फर्म' : 'Worker Confirmed';
+    case 'WORKER_ON_THE_WAY':
+      if (arrived) {
+        return lang === 'mr' ? 'कामगार पोहोचला' : lang === 'hi' ? 'कामगार पहुँचा' : 'Worker Arrived';
+      }
+      return lang === 'mr' ? 'कामगार येत आहे' : lang === 'hi' ? 'कामगार रास्ते में' : 'Worker On The Way';
+    case 'WORK_STARTED':
+      return lang === 'mr' ? 'काम सुरू झाले' : lang === 'hi' ? 'काम शुरू हुआ' : 'Work Started';
+    case 'WORK_COMPLETED':
+      return lang === 'mr' ? 'काम पूर्ण झाले' : lang === 'hi' ? 'काम पूरा हुआ' : 'Work Completed';
+    case 'CANCELLED':
+      return lang === 'mr' ? 'रद्द झाले' : lang === 'hi' ? 'रद्द किया गया' : 'Cancelled';
+  }
+}
+
 export function toVisibleDealStage(
   input?: Pick<JobApplication, 'status' | 'dealStatus'> | DealStatus | string | null,
   hasSharedLocation = false
@@ -36,6 +118,8 @@ export function toVisibleDealStage(
       case 'applied':
         return 'OFFER_SENT';
       case 'LOCATION_SHARED':
+      case 'WORKER_ON_THE_WAY':
+      case 'WORKER_ARRIVED':
         return 'LOCATION_SHARED';
       case 'OFFER_ACCEPTED':
       case 'DEAL_CONFIRMED':
@@ -71,19 +155,19 @@ export function getVisibleDealStatusLabel(
   const stage = toVisibleDealStage(input, hasSharedLocation);
   switch (stage) {
     case 'NEW_ORDER':
-      return lang === 'mr' ? 'नवीन ऑर्डर' : lang === 'hi' ? 'नया ऑर्डर' : 'New Order';
+      return lang === 'mr' ? 'रिक्वेस्ट पाठवली' : lang === 'hi' ? 'रिक्वेस्ट भेजी गई' : 'Request Sent';
     case 'OFFER_SENT':
-      return lang === 'mr' ? 'ऑफर पाठवली' : lang === 'hi' ? 'ऑफर भेजा गया' : 'Offer Sent';
+      return lang === 'mr' ? 'कामगार मिळाला' : lang === 'hi' ? 'कामगार मिला' : 'Worker Found';
     case 'OFFER_ACCEPTED':
-      return lang === 'mr' ? 'ऑफर स्वीकारली' : lang === 'hi' ? 'ऑफर स्वीकार' : 'Offer Accepted';
+      return lang === 'mr' ? 'कामगार निश्चित' : lang === 'hi' ? 'कामगार कन्फर्म' : 'Worker Confirmed';
     case 'LOCATION_SHARED':
-      return lang === 'mr' ? 'लोकेशन शेअर केले' : lang === 'hi' ? 'लोकेशन साझा' : 'Location Shared';
+      return lang === 'mr' ? 'कामगार येत आहे' : lang === 'hi' ? 'कामगार रास्ते में' : 'On The Way';
     case 'WORK_COMPLETED':
       return lang === 'mr' ? 'काम पूर्ण झाले' : lang === 'hi' ? 'काम पूरा हुआ' : 'Work Completed';
     case 'CANCELLED':
       return lang === 'mr' ? 'रद्द झाले' : lang === 'hi' ? 'रद्द किया गया' : 'Cancelled';
     default:
-      return lang === 'mr' ? 'नवीन ऑर्डर' : lang === 'hi' ? 'नया ऑर्डर' : 'New Order';
+      return lang === 'mr' ? 'रिक्वेस्ट पाठवली' : lang === 'hi' ? 'रिक्वेस्ट भेजी गई' : 'Request Sent';
   }
 }
 
@@ -237,12 +321,13 @@ export function getToneTypeForEvent(input: {
 
   const ev = (input.eventType || '').toLowerCase();
   if (ev === 'hiring_request_created' || ev === 'new_job_broadcast') return 'new_job';
-  if (ev === 'worker_offer_sent' || ev === 'worker_quotation' || ev === 'new_application') return 'new_offer';
+  if (ev === 'worker_offer_sent' || ev === 'worker_quotation' || ev === 'new_application' || ev === 'quote_revision_requested') return 'new_offer';
   if (
     ev === 'offer_accepted' ||
     ev === 'deal_confirmed' ||
     ev === 'job_request_accepted' ||
     ev === 'booking_accepted' ||
+    ev === 'worker_on_the_way' ||
     ev === 'work_started' ||
     ev === 'worker_arrived' ||
     ev === 'customer_location_shared' ||
@@ -264,7 +349,15 @@ export function getToneTypeForEvent(input: {
   const ds = (input.dealStatus || '').toUpperCase();
   if (ds === 'REQUESTED' || ds === 'NOTIFIED') return 'new_job';
   if (ds === 'OFFER_RECEIVED') return 'new_offer';
-  if (ds === 'OFFER_ACCEPTED' || ds === 'DEAL_CONFIRMED' || ds === 'WORK_IN_PROGRESS') return 'deal_accepted';
+  if (
+    ds === 'OFFER_ACCEPTED' ||
+    ds === 'DEAL_CONFIRMED' ||
+    ds === 'WORKER_ON_THE_WAY' ||
+    ds === 'WORKER_ARRIVED' ||
+    ds === 'WORK_IN_PROGRESS'
+  ) {
+    return 'deal_accepted';
+  }
   if (ds === 'WORK_COMPLETED') return 'deal_completed';
   if (ds === 'CANCELLED' || ds === 'REJECTED') return 'deal_cancelled';
 

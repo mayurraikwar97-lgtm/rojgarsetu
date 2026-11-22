@@ -1,11 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertCircle, CheckCircle2, Compass, MapPin, Plus, ShieldAlert, X } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Compass, Gift, MapPin, Plus, ShieldAlert, X } from 'lucide-react';
 import { EMPLOYMENT_CATEGORIES } from '../data/categories';
 import { getDistrictCoordinates, INDIA_STATES_DISTRICTS } from '../data/indiaLocations';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../i18n/LanguageContext';
 import { formatUiError } from '../lib/firebase';
 import { saveWorkerRegistration } from '../lib/firestoreService';
+import {
+  captureReferralCodeFromUrl,
+  ensureWorkerReferralCode,
+  lookupReferralCode,
+  recordWorkerReferralAttribution,
+} from '../lib/adsReferralService';
 import { detectBestGpsLocation } from '../lib/locationService';
 import {
   buildWorkerPhotoDocId,
@@ -21,10 +27,14 @@ import { PWAInstallButton } from './PWAControls';
 import { SecureAvatar } from './SecureAvatar';
 
 interface WorkerRegistrationFormProps {
+  initialReferralCode?: string;
   onNavigate: (route: PageRoute) => void;
 }
 
-export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({ onNavigate }) => {
+export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
+  initialReferralCode = '',
+  onNavigate,
+}) => {
   const { lang, t } = useLanguage();
   const { user, authError, clearAuthError, workerProfile, workerPrivate, signInWithGoogle, refreshUserProfiles } = useAuth();
   const authBannerRef = useRef<HTMLDivElement | null>(null);
@@ -69,6 +79,73 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({ 
   const [gpsStatusMsg, setGpsStatusMsg] = useState('');
   const [gpsDetecting, setGpsDetecting] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
+
+  // Worker Referral Attribution State (100% Free Registration; optional referral code)
+  const [referralCodeInput, setReferralCodeInput] = useState<string>(() =>
+    (initialReferralCode || captureReferralCodeFromUrl() || '').trim().toUpperCase()
+  );
+  const [capturedFromUrl, setCapturedFromUrl] = useState<boolean>(() =>
+    Boolean(initialReferralCode || captureReferralCodeFromUrl())
+  );
+  const [resolvedReferrer, setResolvedReferrer] = useState<{
+    referralCode: string;
+    ownerUid: string;
+    workerName: string;
+  } | null>(null);
+  const [referralLookupState, setReferralLookupState] = useState<
+    'idle' | 'checking' | 'valid' | 'invalid' | 'self'
+  >('idle');
+  const [myGeneratedReferralCode, setMyGeneratedReferralCode] = useState('');
+
+  useEffect(() => {
+    const incoming = (initialReferralCode || '').trim().toUpperCase();
+    if (incoming && !workerProfile && !referralCodeInput) {
+      setReferralCodeInput(incoming);
+      setCapturedFromUrl(true);
+    }
+  }, [initialReferralCode, workerProfile, referralCodeInput]);
+
+  useEffect(() => {
+    if (workerProfile) return;
+    const normalized = referralCodeInput.trim().toUpperCase();
+    if (!normalized) {
+      setResolvedReferrer(null);
+      setReferralLookupState('idle');
+      return;
+    }
+    if (!/^[A-Z0-9_-]{4,32}$/.test(normalized)) {
+      setResolvedReferrer(null);
+      setReferralLookupState('invalid');
+      return;
+    }
+    let cancelled = false;
+    setReferralLookupState('checking');
+    const timer = window.setTimeout(() => {
+      void lookupReferralCode(normalized).then((rec) => {
+        if (cancelled) return;
+        if (!rec) {
+          setResolvedReferrer(null);
+          setReferralLookupState('invalid');
+          return;
+        }
+        if (user && rec.ownerUid === user.uid) {
+          setResolvedReferrer(null);
+          setReferralLookupState('self');
+          return;
+        }
+        setResolvedReferrer({
+          referralCode: rec.referralCode,
+          ownerUid: rec.ownerUid,
+          workerName: rec.workerName,
+        });
+        setReferralLookupState('valid');
+      });
+    }, 280);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [referralCodeInput, user, workerProfile]);
 
   useEffect(() => {
     if (workerProfile && workerPrivate) {
@@ -259,52 +336,109 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({ 
         resolvedPhotoDocId = workerProfile ? '' : undefined;
       }
 
-      await saveWorkerRegistration(
-        user.uid,
-        Boolean(workerProfile),
-        {
-          ownerUid: user.uid,
-          registrationId: regId,
-          displayName: fullName.trim().slice(0, 120),
-          primarySkill,
-          skills: normalizedSkills,
-          experienceYears: Number(experienceYears) || 0,
-          expectedWage: Number(expectedWage) || 0,
-          wageUnit,
-          preferredWorkType,
-          availabilityStatus,
-          state: stateName,
-          district: districtName,
-          cityOrVillage: cityOrVillage.trim().slice(0, 100),
-          approxLat,
-          approxLng,
-          languagesKnown: langs,
-          gender,
-          education: education.trim().slice(0, 100),
-          verificationStatus: workerProfile?.verificationStatus || 'pending',
-          isWomenEnterprise: gender === 'female',
-          ...(resolvedPhotoDocId !== undefined ? { photoDocId: resolvedPhotoDocId } : {}),
-          completedJobsCount: workerProfile?.completedJobsCount || 0,
-          ratingAvg: workerProfile?.ratingAvg || 0,
-        },
-        {
-          ownerUid: user.uid,
-          fullName: fullName.trim().slice(0, 120),
-          mobile: mobile.trim(),
-          mobileVerified,
-          ...(verificationMethod ? { verificationMethod } : {}),
-          ...(testPinHash ? { testPinHash } : {}),
-          email: email.trim().slice(0, 200),
-          ageConfirmed,
-          preferredWorkLocation: preferredWorkLocation.trim().slice(0, 160),
-          liveLocationConsent,
-          privacyConsent,
-          idVerificationStatus,
-          certificateNotes: certificateNotes.trim().slice(0, 500),
-          photoUrl: photoUrl.trim().slice(0, 1000),
-          ...(resolvedPhotoDocId !== undefined ? { photoDocId: resolvedPhotoDocId } : {}),
+      const isNewWorker = !workerProfile;
+      const validReferrerForCreate =
+        isNewWorker && resolvedReferrer && resolvedReferrer.ownerUid !== user.uid
+          ? resolvedReferrer
+          : null;
+
+      const publicWorkerData = {
+        ownerUid: user.uid,
+        registrationId: regId,
+        displayName: fullName.trim().slice(0, 120),
+        primarySkill,
+        skills: normalizedSkills,
+        experienceYears: Number(experienceYears) || 0,
+        expectedWage: Number(expectedWage) || 0,
+        wageUnit,
+        preferredWorkType,
+        availabilityStatus,
+        state: stateName,
+        district: districtName,
+        cityOrVillage: cityOrVillage.trim().slice(0, 100),
+        approxLat,
+        approxLng,
+        languagesKnown: langs,
+        gender,
+        education: education.trim().slice(0, 100),
+        verificationStatus: workerProfile?.verificationStatus || 'pending',
+        isWomenEnterprise: gender === 'female',
+        ...(resolvedPhotoDocId !== undefined ? { photoDocId: resolvedPhotoDocId } : {}),
+        completedJobsCount: workerProfile?.completedJobsCount || 0,
+        ratingAvg: workerProfile?.ratingAvg || 0,
+        ...(workerProfile?.referralCode ? { referralCode: workerProfile.referralCode } : {}),
+        ...(workerProfile?.referredByCode
+          ? {
+              referredByCode: workerProfile.referredByCode,
+              ...(workerProfile.referredByUid ? { referredByUid: workerProfile.referredByUid } : {}),
+              ...(workerProfile.referredByName ? { referredByName: workerProfile.referredByName } : {}),
+            }
+          : validReferrerForCreate
+          ? {
+              referredByCode: validReferrerForCreate.referralCode,
+              referredByUid: validReferrerForCreate.ownerUid,
+              referredByName: validReferrerForCreate.workerName.slice(0, 120),
+            }
+          : {}),
+      };
+
+      const privateWorkerData = {
+        ownerUid: user.uid,
+        fullName: fullName.trim().slice(0, 120),
+        mobile: mobile.trim(),
+        mobileVerified,
+        ...(verificationMethod ? { verificationMethod } : {}),
+        ...(testPinHash ? { testPinHash } : {}),
+        email: email.trim().slice(0, 200),
+        ageConfirmed,
+        preferredWorkLocation: preferredWorkLocation.trim().slice(0, 160),
+        liveLocationConsent,
+        privacyConsent,
+        idVerificationStatus,
+        certificateNotes: certificateNotes.trim().slice(0, 500),
+        photoUrl: photoUrl.trim().slice(0, 1000),
+        ...(resolvedPhotoDocId !== undefined ? { photoDocId: resolvedPhotoDocId } : {}),
+        ...(workerPrivate?.referralCode ? { referralCode: workerPrivate.referralCode } : {}),
+        ...(workerPrivate?.referredByCode
+          ? {
+              referredByCode: workerPrivate.referredByCode,
+              ...(workerPrivate.referredByUid ? { referredByUid: workerPrivate.referredByUid } : {}),
+            }
+          : validReferrerForCreate
+          ? {
+              referredByCode: validReferrerForCreate.referralCode,
+              referredByUid: validReferrerForCreate.ownerUid,
+            }
+          : {}),
+      };
+
+      await saveWorkerRegistration(user.uid, Boolean(workerProfile), publicWorkerData, privateWorkerData);
+
+      // Automatically assign a unique personal referral code & lock referral attribution (non-blocking)
+      try {
+        const assignedCode = await ensureWorkerReferralCode(
+          { id: user.uid, ...publicWorkerData },
+          privateWorkerData
+        );
+        setMyGeneratedReferralCode(assignedCode);
+      } catch {
+        // Non-blocking: WorkerReferralsTab also backfills on open
+      }
+
+      if (validReferrerForCreate) {
+        try {
+          await recordWorkerReferralAttribution({
+            referralCode: validReferrerForCreate.referralCode,
+            sourceChannel: capturedFromUrl ? 'url_link' : 'manual_code',
+            referredUid: user.uid,
+            referredWorkerName: fullName.trim().slice(0, 120),
+            referredRegistrationId: regId,
+            referredMobile: mobile.trim(),
+          });
+        } catch {
+          // Non-blocking: registration itself succeeded cleanly
         }
-      );
+      }
 
       setSelectedPhoto(null);
       setRemovePhoto(false);
@@ -414,6 +548,30 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({ 
                   {cityOrVillage}, {districtName}, {stateName}
                 </div>
               </div>
+              {(myGeneratedReferralCode || workerProfile?.referralCode) && (
+                <div className="sm:col-span-3 pt-2 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <Gift className="w-4 h-4 text-[#E06D1B]" />
+                    <span className="text-xs text-slate-600 font-medium">
+                      {lang === 'mr'
+                        ? 'तुमचा वैयक्तिक रेफरल कोड:'
+                        : lang === 'hi'
+                        ? 'आपका व्यक्तिगत रेफरल कोड:'
+                        : 'Your Personal Referral Code:'}
+                    </span>
+                    <span className="font-mono-tabular font-extrabold text-[#0B3B75]">
+                      {myGeneratedReferralCode || workerProfile?.referralCode}
+                    </span>
+                  </div>
+                  <span className="text-[11px] font-semibold text-[#15803D]">
+                    {lang === 'mr'
+                      ? 'कामगार डॅशबोर्डमध्ये "माझे रेफरल" मध्ये लिंक शेअर करा'
+                      : lang === 'hi'
+                      ? 'डैशबोर्ड में "मेरे रेफरल" से लिंक शेयर करें'
+                      : 'Share your link from "My Referrals" in Worker Dashboard'}
+                  </span>
+                </div>
+              )}
             </div>
 
             <div className="rounded-md bg-blue-50 border border-blue-200 p-4 text-sm font-medium text-[#0B3B75]">
@@ -891,6 +1049,94 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({ 
         <div className="bg-slate-50 border border-slate-200 rounded-md p-4 flex items-start gap-3 text-xs text-slate-700 leading-relaxed">
           <ShieldAlert className="w-4 h-4 text-[#0B3B75] shrink-0 mt-0.5" />
           <p>{t.workerForm.idNotice}</p>
+        </div>
+
+        {/* Optional Worker Referral Code Section (Registration remains 100% FREE) */}
+        <div className="rounded-lg border border-emerald-200 bg-emerald-50/40 p-4 space-y-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 text-xs sm:text-sm font-bold text-[#0B3B75]">
+              <Gift className="w-4 h-4 text-[#E06D1B]" />
+              <span>
+                {lang === 'mr'
+                  ? 'रेफरल कोड (ऐच्छिक) · सध्या नोंदणी १००% मोफत'
+                  : lang === 'hi'
+                  ? 'रेफरल कोड (वैकल्पिक) · वर्तमान पंजीकरण 100% निःशुल्क'
+                  : 'Worker Referral Code (Optional) · 100% Free Registration'}
+              </span>
+            </div>
+            <span className="text-[11px] font-bold text-[#15803D]">
+              {lang === 'mr' ? 'कोणतेही शुल्क नाही (₹0)' : lang === 'hi' ? 'कोई शुल्क नहीं (₹0)' : 'Zero Fee (₹0)'}
+            </span>
+          </div>
+
+          {workerProfile?.referredByCode ? (
+            <div className="text-xs text-emerald-900 font-semibold">
+              {lang === 'mr'
+                ? `नोंदणीकृत रेफरल: ${workerProfile.referredByName || 'कामगार'} (${workerProfile.referredByCode}) — कायमस्वरूपी जतन`
+                : lang === 'hi'
+                ? `सत्यापित रेफरल: ${workerProfile.referredByName || 'कामगार'} (${workerProfile.referredByCode}) — स्थायी रूप से लॉक`
+                : `Referred by: ${workerProfile.referredByName || 'Registered Worker'} (${workerProfile.referredByCode}) — Permanently locked`}
+            </div>
+          ) : !workerProfile ? (
+            <div className="space-y-2">
+              <div className="flex flex-col sm:flex-row gap-2">
+                <input
+                  type="text"
+                  value={referralCodeInput}
+                  onChange={(e) => {
+                    setCapturedFromUrl(false);
+                    setReferralCodeInput(e.target.value.toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 32));
+                  }}
+                  placeholder={
+                    lang === 'mr'
+                      ? 'मित्र कामगाराचा रेफरल कोड (उदा. PRASHANT-7K4M)'
+                      : lang === 'hi'
+                      ? 'साथी कामगार का रेफरल कोड (उदा. PRASHANT-7K4M)'
+                      : 'Enter fellow worker referral code (e.g., PRASHANT-7K4M)'
+                  }
+                  className="flex-1 px-3 py-2 border border-slate-300 bg-white rounded-md text-sm font-mono-tabular uppercase"
+                />
+              </div>
+              {referralLookupState === 'valid' && resolvedReferrer && (
+                <p className="text-xs font-bold text-[#15803D] flex items-center gap-1.5">
+                  <CheckCircle2 className="w-4 h-4 shrink-0" />
+                  <span>
+                    {lang === 'mr'
+                      ? `रेफर करणारे कामगार: ${resolvedReferrer.workerName} (${resolvedReferrer.referralCode})`
+                      : lang === 'hi'
+                      ? `रेफर करने वाले कामगार: ${resolvedReferrer.workerName} (${resolvedReferrer.referralCode})`
+                      : `Referred by: ${resolvedReferrer.workerName} (${resolvedReferrer.referralCode})`}
+                  </span>
+                </p>
+              )}
+              {referralLookupState === 'self' && (
+                <p className="text-xs font-semibold text-red-700">
+                  {lang === 'mr'
+                    ? 'स्वतःचा रेफरल कोड वापरता येत नाही.'
+                    : lang === 'hi'
+                    ? 'अपना स्वयं का रेफरल कोड उपयोग नहीं किया जा सकता।'
+                    : 'Self-referral is not allowed.'}
+                </p>
+              )}
+              {referralLookupState === 'invalid' && referralCodeInput.trim().length > 0 && (
+                <p className="text-xs font-medium text-amber-800">
+                  {lang === 'mr'
+                    ? 'हा रेफरल कोड सापडला नाही. तुम्ही कोडशिवायही मोफत नोंदणी करू शकता.'
+                    : lang === 'hi'
+                    ? 'यह रेफरल कोड नहीं मिला। आप बिना कोड के भी निःशुल्क पंजीकरण कर सकते हैं।'
+                    : 'Referral code not found. You can leave this blank and still register for free.'}
+                </p>
+              )}
+            </div>
+          ) : (
+            <p className="text-xs text-slate-600">
+              {lang === 'mr'
+                ? 'तुमचा वैयक्तिक रेफरल कोड कामगार डॅशबोर्डमधील "माझे रेफरल" विभागात उपलब्ध आहे.'
+                : lang === 'hi'
+                ? 'आपका व्यक्तिगत रेफरल कोड कामगार डैशबोर्ड के "मेरे रेफरल" टैब में उपलब्ध है।'
+                : 'Your personal referral code and share link are available in Worker Dashboard → My Referrals.'}
+            </p>
+          )}
         </div>
 
         <div className="space-y-3 pt-2 border-t border-slate-200">

@@ -15,8 +15,9 @@ import { INDIA_STATES_DISTRICTS } from '../data/indiaLocations';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../i18n/LanguageContext';
 import { submitGrievanceReport, submitPartnershipEnquiry } from '../lib/firestoreService';
-import type { GrievanceReport, Language } from '../types/domain';
+import type { GrievanceReport, Language, PageRoute } from '../types/domain';
 import { RojgarSetuLogo } from './RojgarSetuLogo';
+import { SponsoredAdSlider } from './SponsoredAdSlider';
 
 function tr(lang: Language, en: string, hi: string, mr: string): string {
   return lang === 'hi' ? hi : lang === 'mr' ? mr : en;
@@ -580,8 +581,10 @@ export const PartnershipsView: React.FC = () => {
    3. SKILLS & TRAINING VIEW
 ============================================================================ */
 
-export const SkillsTrainingView: React.FC = () => {
-  const { t } = useLanguage();
+export const SkillsTrainingView: React.FC<{
+  onNavigate?: (route: PageRoute, categoryFilter?: string) => void;
+}> = ({ onNavigate }) => {
+  const { lang, t } = useLanguage();
   const [activeTab, setActiveTab] = useState<'all' | 'govt' | 'vocational' | 'apprenticeship'>('all');
 
   const items = t.skillsTraining.items.filter((i) => activeTab === 'all' || i.type === activeTab);
@@ -591,7 +594,14 @@ export const SkillsTrainingView: React.FC = () => {
       <div className="bg-white border border-slate-200 rounded-lg p-6 sm:p-10 space-y-4">
         <div className="flex items-center gap-2 text-xs font-semibold text-[#15803D]">
           <GraduationCap className="w-4 h-4" />
-          <span>Skill Awareness & Training Directory</span>
+          <span>
+            {tr(
+              lang,
+              'Employment, Skill Development & Career Guidance Centre',
+              'रोजगार, कौशल विकास एवं करियर मार्गदर्शन केंद्र',
+              'रोजगार, कौशल्य विकास व करिअर मार्गदर्शन केंद्र'
+            )}
+          </span>
         </div>
         <h1 className="font-display text-3xl font-extrabold text-[#0B3B75]">{t.skillsTraining.heading}</h1>
         <p className="text-base text-slate-600 max-w-3xl">{t.skillsTraining.subheading}</p>
@@ -604,7 +614,115 @@ export const SkillsTrainingView: React.FC = () => {
             {t.skillsTraining.partnerNotice}
           </div>
         </div>
+
+        {/* Direct Employment & Guidance Quick Hub */}
+        {onNavigate && (
+          <div className="pt-4 border-t border-slate-200 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2.5">
+            {(
+              [
+                { route: 'find-work', label: tr(lang, 'Search for Jobs', 'काम खोजें', 'काम शोधा') },
+                { route: 'find-workers', label: tr(lang, 'Find Local Workers', 'कामगार खोजें', 'कामगार शोधा') },
+                { route: 'register-worker', label: tr(lang, 'Register as Worker', 'कामगार पंजीकरण', 'कामगार नोंदणी') },
+                { route: 'register-employer', label: tr(lang, 'Register as Employer', 'नियोक्ता पंजीकरण', 'नियोक्ता नोंदणी') },
+                { route: 'govt-schemes', label: tr(lang, 'Government Schemes', 'सरकारी योजनाएं', 'सरकारी योजना') },
+              ] as { route: PageRoute; label: string }[]
+            ).map((btn) => (
+              <button
+                key={btn.route}
+                type="button"
+                onClick={() => onNavigate(btn.route)}
+                className="px-3 py-2.5 rounded-md border border-slate-300 bg-slate-50 hover:bg-[#0B3B75] hover:text-white hover:border-[#0B3B75] text-xs font-bold text-[#0B3B75] transition-colors cursor-pointer text-center"
+              >
+                {btn.label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
+
+      {/* Career, Apprenticeship, Job Fairs & Self-Employment Guidance Cards */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        {[
+          {
+            title: tr(lang, 'Skill Training Centres', 'कौशल प्रशिक्षण केंद्र', 'कौशल्य प्रशिक्षण केंद्रे'),
+            desc: tr(
+              lang,
+              'Locate accredited PMKVY, ITI, and NSDC training centres near your district via Skill India Digital Hub.',
+              'स्किल इंडिया डिजिटल हब के माध्यम से अपने जिले के नजदीकी PMKVY, ITI और NSDC प्रशिक्षण केंद्र खोजें।',
+              'स्किल इंडिया डिजिटल हबद्वारे आपल्या जिल्ह्यातील जवळची PMKVY, ITI व NSDC प्रशिक्षण केंद्रे शोधा.'
+            ),
+            url: 'https://www.skillindiadigital.gov.in',
+            linkLabel: 'skillindiadigital.gov.in',
+          },
+          {
+            title: tr(lang, 'Apprenticeship (NAPS)', 'अप्रेंटिसशिप जानकारी (NAPS)', 'शिकाऊ उमेदवारी (NAPS)'),
+            desc: tr(
+              lang,
+              'Apply for practical on-the-job industrial training with monthly stipend under the Apprentices Act.',
+              'उद्योगों में प्रत्यक्ष व्यावहारिक प्रशिक्षण और स्टाइपेंड के लिए राष्ट्रीय शिक्षुता पोर्टल पर पंजीकरण करें।',
+              'उद्योगांमध्ये प्रत्यक्ष प्रशिक्षण व विद्यावेतनासाठी राष्ट्रीय शिकाऊ उमेदवारी पोर्टलवर नोंदणी करा.'
+            ),
+            url: 'https://www.apprenticeshipindia.gov.in',
+            linkLabel: 'apprenticeshipindia.gov.in',
+          },
+          {
+            title: tr(lang, 'Employment Fairs & NCS', 'रोजगार मेले एवं करियर मार्गदर्शन', 'रोजगार मेळावे व करिअर मार्गदर्शन'),
+            desc: tr(
+              lang,
+              'Track district Rozgar Melas, free career counselling, and verified job openings on NCS and Mahaswayam.',
+              'NCS और महास्वयं पोर्टल पर जिला रोजगार मेले, निःशुल्क करियर मार्गदर्शन और नौकरियों की जानकारी पाएं।',
+              'NCS आणि महास्वयंम पोर्टलवर जिल्हा रोजगार मेळावे, करिअर मार्गदर्शन व नोकऱ्यांची माहिती पहा.'
+            ),
+            url: 'https://www.ncs.gov.in',
+            linkLabel: 'ncs.gov.in',
+          },
+          {
+            title: tr(lang, 'Self-Employment Guidance', 'स्वरोजगार एवं उद्यमिता मार्गदर्शन', 'स्वयंरोजगार व उद्योजकता मार्गदर्शन'),
+            desc: tr(
+              lang,
+              'Explore PMEGP, CMEGP Maharashtra, MUDRA, PM Vishwakarma, and Udyam registration for starting your own enterprise.',
+              'अपना व्यवसाय शुरू करने के लिए PMEGP, CMEGP महाराष्ट्र, मुद्रा, पीएम विश्वकर्मा और उद्यम पंजीकरण की जानकारी देखें।',
+              'स्वतःचा व्यवसाय सुरू करण्यासाठी PMEGP, CMEGP महाराष्ट्र, मुद्रा, पीएम विश्वकर्मा व उद्यम नोंदणी माहिती पहा.'
+            ),
+            url: '',
+            linkLabel: tr(lang, 'Open Entrepreneur Schemes →', 'उद्योजक योजनाएं देखें →', 'उद्योजक योजना पहा →'),
+          },
+        ].map((card) => (
+          <div key={card.title} className="bg-white border border-slate-200 rounded-lg p-5 flex flex-col justify-between gap-3">
+            <div className="space-y-1.5">
+              <h2 className="font-display text-base font-bold text-[#0B3B75]">{card.title}</h2>
+              <p className="text-xs text-slate-600 leading-relaxed">{card.desc}</p>
+            </div>
+            {card.url ? (
+              <a
+                href={card.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-xs font-bold text-[#15803D] hover:underline"
+              >
+                {card.linkLabel} ↗
+              </a>
+            ) : (
+              onNavigate && (
+                <button
+                  type="button"
+                  onClick={() => onNavigate('for-entrepreneurs')}
+                  className="text-left text-xs font-bold text-[#C25E00] hover:underline cursor-pointer"
+                >
+                  {card.linkLabel}
+                </button>
+              )
+            )}
+          </div>
+        ))}
+      </div>
+
+      <SponsoredAdSlider
+        compact
+        category="all"
+        placement="service_info"
+        onNavigate={onNavigate ? (r) => onNavigate(r) : undefined}
+      />
 
       <div className="flex flex-wrap gap-2">
         {(

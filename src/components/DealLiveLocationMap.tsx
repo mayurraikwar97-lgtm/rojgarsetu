@@ -134,6 +134,8 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
     application.status === 'accepted' &&
     (effectiveStatus === 'OFFER_ACCEPTED' ||
       effectiveStatus === 'DEAL_CONFIRMED' ||
+      effectiveStatus === 'WORKER_ON_THE_WAY' ||
+      effectiveStatus === 'WORKER_ARRIVED' ||
       effectiveStatus === 'WORK_IN_PROGRESS');
   const isClosed =
     effectiveStatus === 'WORK_COMPLETED' ||

@@ -11,6 +11,7 @@ import { EMPLOYMENT_CATEGORIES } from './src/data/categories.ts';
 import { calculateDistanceKm, findNearestDistrict, INDIA_STATES_DISTRICTS } from './src/data/indiaLocations.ts';
 import { classifyRequestRuleBased } from './src/lib/aiFallbackClassifier.ts';
 import { registerNotificationRoutes } from './src/server/notificationsEngine.ts';
+import { registerAdsAndReferralsRoutes } from './src/server/adsAndReferralsEngine.ts';
 import { getOtpPublicConfig, handleOtpRequest, handleOtpVerify } from './src/server/otpEngine.ts';
 
 dotenv.config();
@@ -370,6 +371,7 @@ async function startServer() {
   });
 
   registerNotificationRoutes(app, __dirname);
+  registerAdsAndReferralsRoutes(app, __dirname);
 
   // Google Maps Geocoding API v4 Reverse Proxy (handles CORS & attribution header)
   app.get('/api/geocode/reverse', async (req: Request, res: Response) => {
