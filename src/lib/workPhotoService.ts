@@ -1,8 +1,7 @@
-import { getDownloadURL, ref, uploadBytes } from 'firebase/storage';
+import { getDownloadURL, ref, uploadBytesResumable } from 'firebase/storage';
 import { storage } from './firebase';
 
-const ALLOWED_IMAGE_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
-export const MAX_WORK_PHOTOS = 4;
+export const MAX_WORK_PHOTOS = 6;
 const MAX_INPUT_FILE_BYTES = 10 * 1024 * 1024; // 10 MB source
 const MAX_FALLBACK_DATA_URL_LENGTH = 78000; // Safe within Firestore rules (<= 85000 chars)
 
@@ -12,14 +11,19 @@ export interface UploadedWorkPhoto {
   name: string;
 }
 
+function isSupportedImageFile(file: File): boolean {
+  if (file.type && file.type.startsWith('image/')) return true;
+  return /\.(jpe?g|png|webp|gif|bmp|heic|heif)$/i.test(file.name || '');
+}
+
 function readFileAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => {
       if (typeof reader.result === 'string') resolve(reader.result);
-      else reject(new Error('Could not read image file.'));
+      else reject(new Error('Could not read the selected photo file.'));
     };
-    reader.onerror = () => reject(new Error('Failed to read selected image.'));
+    reader.onerror = () => reject(new Error('Failed to read the selected photo. Please try again.'));
     reader.readAsDataURL(file);
   });
 }
@@ -28,7 +32,8 @@ function loadImage(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error('Invalid image file.'));
+    img.onerror = () =>
+      reject(new Error('Unsupported or corrupted photo format. Please choose a JPG, PNG, or WebP photo.'));
     img.src = src;
   });
 }
@@ -38,11 +43,11 @@ async function compressImageToBlobAndDataUrl(
   maxDimension: number,
   maxDataUrlChars: number
 ): Promise<{ blob: Blob; dataUrl: string }> {
-  if (!ALLOWED_IMAGE_MIME.has(file.type)) {
-    throw new Error('Only JPG, PNG, or WebP photos are supported.');
+  if (!isSupportedImageFile(file)) {
+    throw new Error('Only image files (JPG, PNG, WebP) are supported.');
   }
   if (file.size > MAX_INPUT_FILE_BYTES) {
-    throw new Error('Photo must be under 10 MB.');
+    throw new Error('Photo is larger than 10 MB. Please choose a smaller image.');
   }
 
   const rawDataUrl = await readFileAsDataUrl(file);
@@ -62,14 +67,13 @@ async function compressImageToBlobAndDataUrl(
   ctx.fillRect(0, 0, width, height);
   ctx.drawImage(img, 0, 0, width, height);
 
-  let quality = 0.82;
+  let quality = 0.84;
   let dataUrl = canvas.toDataURL('image/jpeg', quality);
   while (dataUrl.length > maxDataUrlChars && quality > 0.36) {
     quality -= 0.08;
     dataUrl = canvas.toDataURL('image/jpeg', quality);
   }
 
-  // If still large (e.g. complex photo for fallback), downscale slightly
   if (dataUrl.length > maxDataUrlChars) {
     const smallCanvas = document.createElement('canvas');
     smallCanvas.width = Math.max(120, Math.round(width * 0.65));
@@ -87,10 +91,10 @@ async function compressImageToBlobAndDataUrl(
     canvas.toBlob(
       (b) => {
         if (b) resolve(b);
-        else reject(new Error('Could not encode image blob.'));
+        else reject(new Error('Could not prepare photo for upload.'));
       },
       'image/jpeg',
-      0.82
+      0.84
     );
   });
 
@@ -98,17 +102,25 @@ async function compressImageToBlobAndDataUrl(
 }
 
 /**
- * Uploads a customer work/goods photo to Firebase Storage (`work_orders/{ownerUid}/{folder}/{name}.jpg`).
- * Automatically falls back to a compact compressed data URL if Firebase Storage rules/CORS are not yet enabled,
+ * Uploads a customer work photo to Firebase Storage (`work_orders/{ownerUid}/{folder}_{ts}_{rand}.jpg`)
+ * using resumable upload with real-time progress reporting (0–100%).
+ * Falls back to a compact compressed data URL only if Firebase Storage bucket/CORS is unavailable,
  * so order creation is never blocked.
  */
 export async function uploadCustomerWorkPhoto(params: {
   file: File;
   ownerUid: string;
   folder?: 'work' | 'goods';
+  onProgress?: (percent: number) => void;
 }): Promise<UploadedWorkPhoto> {
-  const { file, ownerUid, folder = 'work' } = params;
-  const { blob, dataUrl } = await compressImageToBlobAndDataUrl(file, 960, MAX_FALLBACK_DATA_URL_LENGTH);
+  const { file, ownerUid, folder = 'work', onProgress } = params;
+  onProgress?.(10);
+  const { blob, dataUrl } = await compressImageToBlobAndDataUrl(
+    file,
+    1080,
+    MAX_FALLBACK_DATA_URL_LENGTH
+  );
+  onProgress?.(25);
 
   const safeUid = ownerUid.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || 'user';
   const rand = Math.random().toString(36).slice(2, 8);
@@ -116,17 +128,44 @@ export async function uploadCustomerWorkPhoto(params: {
 
   try {
     const storageRef = ref(storage, storagePath);
-    const uploadPromise = uploadBytes(storageRef, blob, {
-      contentType: 'image/jpeg',
-      cacheControl: 'public,max-age=86400',
-    }).then(() => getDownloadURL(storageRef));
+    const downloadUrl = await new Promise<string>((resolve, reject) => {
+      const uploadTask = uploadBytesResumable(storageRef, blob, {
+        contentType: 'image/jpeg',
+        cacheControl: 'public,max-age=86400',
+      });
 
-    // Bound Storage wait so misconfigured Storage rules/CORS never hang the order form
-    const timeoutPromise = new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('STORAGE_TIMEOUT')), 6500)
-    );
-    const downloadUrl = await Promise.race([uploadPromise, timeoutPromise]);
+      const timer = setTimeout(() => {
+        try {
+          uploadTask.cancel();
+        } catch {
+          // ignore cancel errors
+        }
+        reject(new Error('STORAGE_TIMEOUT'));
+      }, 8500);
+
+      uploadTask.on(
+        'state_changed',
+        (snapshot) => {
+          if (snapshot.totalBytes > 0) {
+            const pct = Math.round(25 + (snapshot.bytesTransferred / snapshot.totalBytes) * 70);
+            onProgress?.(Math.min(95, pct));
+          }
+        },
+        (err) => {
+          clearTimeout(timer);
+          reject(err);
+        },
+        () => {
+          clearTimeout(timer);
+          getDownloadURL(uploadTask.snapshot.ref)
+            .then((url) => resolve(url))
+            .catch(reject);
+        }
+      );
+    });
+
     if (downloadUrl && downloadUrl.startsWith('http')) {
+      onProgress?.(100);
       return {
         url: downloadUrl,
         storageMode: 'firebase_storage',
@@ -138,11 +177,13 @@ export async function uploadCustomerWorkPhoto(params: {
   }
 
   // Fallback compact data URL guaranteed to stay under Firestore rules size cap
+  onProgress?.(85);
   const compact =
     dataUrl.length <= MAX_FALLBACK_DATA_URL_LENGTH
       ? dataUrl
       : (await compressImageToBlobAndDataUrl(file, 480, MAX_FALLBACK_DATA_URL_LENGTH)).dataUrl;
 
+  onProgress?.(100);
   return {
     url: compact.slice(0, MAX_FALLBACK_DATA_URL_LENGTH),
     storageMode: 'firestore_compressed',

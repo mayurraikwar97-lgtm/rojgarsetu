@@ -373,7 +373,8 @@ export const UserNotificationCenter: React.FC<UserNotificationCenterProps> = ({
       onNavigateToTarget('worker-dashboard', undefined, item.targetDemoJobId);
       return;
     }
-    onNavigateToTarget(item.targetRoute || 'find-work', item.targetJobId);
+    const fallbackRoute: PageRoute = mode === 'worker' ? 'worker-dashboard' : 'employer-dashboard';
+    onNavigateToTarget(item.targetRoute || fallbackRoute, item.targetJobId);
   };
 
   const handleDemoApply = async (e: React.FormEvent) => {
@@ -956,10 +957,10 @@ export const UserNotificationCenter: React.FC<UserNotificationCenterProps> = ({
                   <button
                     type="button"
                     onClick={() => handleOpenNotification(n)}
-                    className="min-h-[40px] inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-[#0B3B75] text-xs font-semibold text-[#0B3B75] hover:bg-blue-50 cursor-pointer shrink-0 self-start sm:self-center"
+                    className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded bg-[#0B3B75] text-xs font-extrabold text-white hover:bg-slate-800 cursor-pointer shrink-0 self-start sm:self-center"
                   >
                     <ExternalLink className="w-3.5 h-3.5" />
-                    {tr(lang, 'Open', 'खोलें', 'उघडा')}
+                    {tr(lang, 'OPEN', 'खोलें (OPEN)', 'उघडा (OPEN)')}
                   </button>
                 </div>
               );

@@ -2656,8 +2656,67 @@ export function subscribeDealMessages(
   );
 }
 
-export async function sendDealMessage(params: {
-  app: JobApplication;
+/**
+ * Subscribes to ALL real-time messages for a specific (jobId, workerUid) conversation —
+ * seamlessly combining messages sent BEFORE an offer is submitted and AFTER offer/acceptance.
+ * Queries on a single participant field (workerUid or employerUid) so no composite index is required
+ * and Firestore security rules allowlist passes strictly.
+ */
+export function subscribeOrderMessagesForParticipant(params: {
+  jobId: string;
+  workerUid: string;
+  viewerRole: 'customer' | 'worker';
+  viewerUid: string;
+  onData: (items: DealMessage[]) => void;
+}): () => void {
+  const path = 'dealMessages';
+  const filterField = params.viewerRole === 'worker' ? 'workerUid' : 'employerUid';
+  const q = query(collection(db, path), where(filterField, '==', params.viewerUid));
+  return onSnapshot(
+    q,
+    (snap) => {
+      const list = snap.docs
+        .map((d) => ({ id: d.id, ...d.data() } as DealMessage))
+        .filter((m) => m.jobId === params.jobId && m.workerUid === params.workerUid);
+      list.sort((a, b) => {
+        const ta = (a.createdAt as { seconds?: number })?.seconds ?? 0;
+        const tb = (b.createdAt as { seconds?: number })?.seconds ?? 0;
+        return ta - tb;
+      });
+      params.onData(list);
+    },
+    (err) => handleFirestoreError(err, OperationType.LIST, path)
+  );
+}
+
+export function subscribeAllCustomerOrderMessages(
+  employerUid: string,
+  onData: (items: DealMessage[]) => void
+): () => void {
+  const path = 'dealMessages';
+  const q = query(collection(db, path), where('employerUid', '==', employerUid));
+  return onSnapshot(
+    q,
+    (snap) => {
+      const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as DealMessage));
+      list.sort((a, b) => {
+        const ta = (a.createdAt as { seconds?: number })?.seconds ?? 0;
+        const tb = (b.createdAt as { seconds?: number })?.seconds ?? 0;
+        return ta - tb;
+      });
+      onData(list);
+    },
+    (err) => handleFirestoreError(err, OperationType.LIST, path)
+  );
+}
+
+export async function sendOrderMessage(params: {
+  jobId: string;
+  jobTitle: string;
+  employerUid: string;
+  workerUid: string;
+  applicationId?: string;
+  dealStatus?: DealStatus;
   senderUid: string;
   senderRole: 'customer' | 'worker';
   senderName: string;
@@ -2666,14 +2725,19 @@ export async function sendDealMessage(params: {
   const cleanText = params.text.trim().slice(0, 1000);
   if (!cleanText) return;
   const path = 'dealMessages';
+  const threadAppId =
+    params.applicationId && params.applicationId.trim().length > 0
+      ? params.applicationId.trim()
+      : sanitizeSafeId(`pre_${params.jobId}_${params.workerUid}`);
+
   try {
     const safeSenderName =
       params.senderName.trim().length >= 2 ? params.senderName.trim().slice(0, 120) : 'Participant';
     await addDoc(collection(db, path), {
-      applicationId: params.app.id,
-      jobId: params.app.jobId,
-      employerUid: params.app.employerUid,
-      workerUid: params.app.workerUid,
+      applicationId: threadAppId,
+      jobId: params.jobId,
+      employerUid: params.employerUid,
+      workerUid: params.workerUid,
       senderUid: params.senderUid,
       senderRole: params.senderRole,
       senderName: safeSenderName,
@@ -2681,7 +2745,7 @@ export async function sendDealMessage(params: {
       createdAt: serverTimestamp(),
     });
 
-    const recipientUid = params.senderRole === 'customer' ? params.app.workerUid : params.app.employerUid;
+    const recipientUid = params.senderRole === 'customer' ? params.workerUid : params.employerUid;
     const recipientRole = params.senderRole === 'customer' ? 'worker' : 'employer';
     const targetRoute = params.senderRole === 'customer' ? 'worker-dashboard' : 'employer-dashboard';
     const eventType: DealNotificationEventType =
@@ -2691,26 +2755,47 @@ export async function sendDealMessage(params: {
       recipientUid,
       recipientRole,
       senderUid: params.senderUid,
-      senderName: params.senderName,
+      senderName: safeSenderName,
       category: 'applicationUpdates',
       eventType,
-      dealStatus: getEffectiveDealStatus(params.app),
-      title: `Message from ${params.senderName}: ${params.app.jobTitle}`,
-      body: `${params.senderName}: "${cleanText.slice(0, 160)}"`,
-      metadataLabel: params.app.jobTitle,
+      dealStatus: params.dealStatus || 'REQUESTED',
+      title: `Chat from ${safeSenderName}: ${params.jobTitle}`,
+      body: `${safeSenderName}: "${cleanText.slice(0, 160)}"`,
+      metadataLabel: params.jobTitle,
       targetRoute,
-      targetJobId: params.app.jobId,
-      targetApplicationId: params.app.id,
-      dedupeKey: sanitizeSafeId(`msg_${params.app.id}_${params.senderUid}_${Date.now()}`),
+      targetJobId: params.jobId,
+      ...(params.applicationId ? { targetApplicationId: params.applicationId } : {}),
+      dedupeKey: sanitizeSafeId(`msg_${params.jobId}_${params.senderUid}_${Date.now()}`),
       pushPayload: {
-        workerName: params.senderName,
-        jobTitle: params.app.jobTitle,
+        workerName: safeSenderName,
+        jobTitle: params.jobTitle,
         messageSnippet: cleanText.slice(0, 160),
       },
     });
   } catch (err) {
     handleFirestoreError(err, OperationType.CREATE, path);
   }
+}
+
+export async function sendDealMessage(params: {
+  app: JobApplication;
+  senderUid: string;
+  senderRole: 'customer' | 'worker';
+  senderName: string;
+  text: string;
+}): Promise<void> {
+  await sendOrderMessage({
+    jobId: params.app.jobId,
+    jobTitle: params.app.jobTitle,
+    employerUid: params.app.employerUid,
+    workerUid: params.app.workerUid,
+    applicationId: params.app.id,
+    dealStatus: getEffectiveDealStatus(params.app),
+    senderUid: params.senderUid,
+    senderRole: params.senderRole,
+    senderName: params.senderName,
+    text: params.text,
+  });
 }
 
 export function subscribeDealLocationShares(

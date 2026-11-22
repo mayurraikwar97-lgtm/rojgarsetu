@@ -176,7 +176,7 @@
         "isAccessible": { "type": "boolean" },
         "biddingEnabled": { "type": "boolean" },
         "photoAttachment": { "type": "string", "maxLength": 100000 },
-        "workPhotoUrls": { "type": "array", "description": "Up to 4 uploaded customer work or goods photos." },
+        "workPhotoUrls": { "type": "array", "description": "Up to 6 uploaded customer work or goods photos." },
         "orderKind": { "type": "string", "enum": ["work", "bike_transport"] },
         "pickupLocationLabel": { "type": "string", "maxLength": 160 },
         "pickupLat": { "type": "number" },
@@ -865,7 +865,7 @@
     },
     "DealMessage": {
       "title": "DealMessage",
-      "description": "Two-way real-time negotiation and coordination message scoped strictly to an application's customer and worker.",
+      "description": "Two-way real-time order chat message scoped strictly to a job's customer and worker (before and after offer submission).",
       "type": "object",
       "properties": {
         "applicationId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },

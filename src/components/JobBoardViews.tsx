@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { BellRing, Briefcase, Camera, CheckCircle2, LocateFixed, MapPin, PlusCircle, Search, Users, Volume2, VolumeX } from 'lucide-react';
+import { BellRing, Briefcase, CheckCircle2, LocateFixed, MapPin, PlusCircle, Search, Users, Volume2, VolumeX } from 'lucide-react';
 import { EMPLOYMENT_CATEGORIES } from '../data/categories';
 import { getDistrictCoordinates, INDIA_STATES_DISTRICTS } from '../data/indiaLocations';
 import { useAuth } from '../contexts/AuthContext';
@@ -18,7 +18,8 @@ import {
   getPublicJobLocationText,
   SERVICE_RADIUS_STAGES,
 } from '../lib/smartVoiceJobAlert';
-import { MAX_WORK_PHOTOS, uploadCustomerWorkPhoto } from '../lib/workPhotoService';
+import { MAX_WORK_PHOTOS } from '../lib/workPhotoService';
+import { WorkPhotoUploader } from './WorkPhotoUploader';
 import { speakJobAlert, stopVoiceAlert, unlockAudioOnUserGesture } from '../lib/voiceAlertEngine';
 import type {
   JobPosting,
@@ -678,26 +679,6 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
     }
   };
 
-  const handleUploadJobPhotos = async (files: FileList | null) => {
-    if (!files || files.length === 0 || !user) return;
-    const slots = MAX_WORK_PHOTOS - workPhotoUrls.length;
-    if (slots <= 0) return;
-    setPhotoUploading(true);
-    setErrorMsg('');
-    try {
-      const urls: string[] = [];
-      for (const file of Array.from(files).slice(0, slots)) {
-        const res = await uploadCustomerWorkPhoto({ file, ownerUid: user.uid, folder: 'work' });
-        urls.push(res.url);
-      }
-      setWorkPhotoUrls((prev) => [...prev, ...urls].slice(0, MAX_WORK_PHOTOS));
-    } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Unable to upload work photo.');
-    } finally {
-      setPhotoUploading(false);
-    }
-  };
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg('');
@@ -992,69 +973,33 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
               </div>
             </div>
 
-            {/* Work Photos Upload (1 or more) + SHARE JOB LOCATION */}
-            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <label className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md border border-[#0B3B75] bg-white text-[#0B3B75] text-xs font-bold hover:bg-blue-50 cursor-pointer">
-                  <Camera className="w-4 h-4 text-[#E06D1B]" />
-                  <span>
-                    {photoUploading
-                      ? 'Uploading photo...'
-                      : `Upload Work Photos (${workPhotoUrls.length}/${MAX_WORK_PHOTOS})`}
-                  </span>
-                  <input
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                    multiple
-                    disabled={photoUploading || workPhotoUrls.length >= MAX_WORK_PHOTOS}
-                    onChange={(e) => {
-                      void handleUploadJobPhotos(e.target.files);
-                      e.target.value = '';
-                    }}
-                    className="hidden"
-                  />
-                </label>
+            {/* UPLOAD WORK PHOTOS (Gallery + Camera + Progress + Preview + Replace/Remove) */}
+            <WorkPhotoUploader
+              photos={workPhotoUrls}
+              onChange={setWorkPhotoUrls}
+              ownerUid={user.uid}
+              folder="work"
+              disabled={saving}
+              onUploadingChange={setPhotoUploading}
+            />
 
-                <button
-                  type="button"
-                  disabled={gpsBusy}
-                  onClick={handleShareJobGps}
-                  className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md bg-[#15803D] text-white text-xs font-bold hover:bg-emerald-800 cursor-pointer disabled:opacity-60"
-                >
-                  <LocateFixed className="w-4 h-4" />
-                  <span>{gpsBusy ? 'Detecting GPS...' : 'SHARE JOB LOCATION'}</span>
-                </button>
+            {/* Approximate Work Area GPS Helper (Exact Location shared only AFTER offer acceptance) */}
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-3.5 flex flex-wrap items-center justify-between gap-2">
+              <div className="text-xs text-slate-600">
+                <strong className="text-[#0B3B75]">Approximate Work Area (GPS):</strong>{' '}
+                {pinnedCoords
+                  ? `Pinned (${pinnedCoords.lat.toFixed(4)}, ${pinnedCoords.lng.toFixed(4)}) — workers see approximate distance before quoting. Exact location is shared only after you accept an offer.`
+                  : 'Optional: pin your area so nearby workers see approximate distance. Exact location stays hidden until offer acceptance.'}
               </div>
-
-              {pinnedCoords && (
-                <p className="text-xs font-semibold text-[#15803D]">
-                  GPS pinned ({pinnedCoords.lat.toFixed(4)}, {pinnedCoords.lng.toFixed(4)}) — workers will see approximate distance &amp; area before quoting.
-                </p>
-              )}
-
-              {workPhotoUrls.length > 0 && (
-                <div className="flex flex-wrap gap-2">
-                  {workPhotoUrls.map((url, idx) => (
-                    <div key={`postjob-photo-${idx}`} className="relative">
-                      <img
-                        src={url}
-                        alt={`Work photo ${idx + 1}`}
-                        className="w-16 h-16 rounded object-cover border border-slate-300"
-                      />
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setWorkPhotoUrls((prev) => prev.filter((_, i) => i !== idx))
-                        }
-                        aria-label="Remove photo"
-                        className="absolute -top-1.5 -right-1.5 w-5 h-5 rounded-full bg-red-700 text-white text-[10px] font-bold flex items-center justify-center cursor-pointer"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              )}
+              <button
+                type="button"
+                disabled={gpsBusy}
+                onClick={handleShareJobGps}
+                className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md border border-[#0B3B75] bg-white text-[#0B3B75] text-xs font-bold hover:bg-blue-50 cursor-pointer disabled:opacity-60"
+              >
+                <LocateFixed className="w-4 h-4 text-[#E06D1B]" />
+                <span>{gpsBusy ? 'Detecting GPS...' : 'Pin Work Area (GPS)'}</span>
+              </button>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-5">

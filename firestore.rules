@@ -255,7 +255,7 @@ service cloud.firestore {
         && data.isAccessible is bool
         && data.biddingEnabled is bool
         && (!('photoAttachment' in data) || (data.photoAttachment is string && data.photoAttachment.size() <= 100000))
-        && (!('workPhotoUrls' in data) || (data.workPhotoUrls is list && data.workPhotoUrls.size() <= 4 && (data.workPhotoUrls.size() == 0 || (data.workPhotoUrls[0] is string && data.workPhotoUrls[0].size() <= 85000))))
+        && (!('workPhotoUrls' in data) || (data.workPhotoUrls is list && data.workPhotoUrls.size() <= 6 && (data.workPhotoUrls.size() == 0 || (data.workPhotoUrls[0] is string && data.workPhotoUrls[0].size() <= 85000))))
         && (!('orderKind' in data) || data.orderKind in ['work', 'bike_transport'])
         && (!('pickupLocationLabel' in data) || (data.pickupLocationLabel is string && data.pickupLocationLabel.size() <= 160))
         && (!('pickupLat' in data) || (data.pickupLat is number && data.pickupLat >= -90 && data.pickupLat <= 90))
@@ -1921,12 +1921,21 @@ service cloud.firestore {
         && isValidDealMessage(incoming())
         && incoming().senderUid == request.auth.uid
         && incoming().createdAt == request.time
-        && exists(/databases/$(database)/documents/applications/$(incoming().applicationId))
-        && get(/databases/$(database)/documents/applications/$(incoming().applicationId)).data.employerUid == incoming().employerUid
-        && get(/databases/$(database)/documents/applications/$(incoming().applicationId)).data.workerUid == incoming().workerUid
         && (
           (incoming().senderRole == 'customer' && request.auth.uid == incoming().employerUid) ||
           (incoming().senderRole == 'worker' && request.auth.uid == incoming().workerUid)
+        )
+        && (
+          (
+            exists(/databases/$(database)/documents/applications/$(incoming().applicationId))
+            && get(/databases/$(database)/documents/applications/$(incoming().applicationId)).data.employerUid == incoming().employerUid
+            && get(/databases/$(database)/documents/applications/$(incoming().applicationId)).data.workerUid == incoming().workerUid
+          ) || (
+            exists(/databases/$(database)/documents/jobs/$(incoming().jobId))
+            && get(/databases/$(database)/documents/jobs/$(incoming().jobId)).data.employerUid == incoming().employerUid
+            && get(/databases/$(database)/documents/jobs/$(incoming().jobId)).data.status in ['open', 'in_progress']
+            && exists(/databases/$(database)/documents/publicWorkers/$(incoming().workerUid))
+          )
         );
       allow update: if false;
       allow delete: if isValidId(messageId) && isAdmin();

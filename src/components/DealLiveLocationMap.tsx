@@ -14,7 +14,6 @@ import {
   Crosshair,
   ExternalLink,
   LocateFixed,
-  Lock,
   MapPin,
   Navigation,
   ShieldAlert,
@@ -132,9 +131,10 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
 
   const effectiveStatus = getEffectiveDealStatus(application);
   const isUnlocked =
-    effectiveStatus === 'OFFER_ACCEPTED' ||
-    effectiveStatus === 'DEAL_CONFIRMED' ||
-    effectiveStatus === 'WORK_IN_PROGRESS';
+    application.status === 'accepted' &&
+    (effectiveStatus === 'OFFER_ACCEPTED' ||
+      effectiveStatus === 'DEAL_CONFIRMED' ||
+      effectiveStatus === 'WORK_IN_PROGRESS');
   const isClosed =
     effectiveStatus === 'WORK_COMPLETED' ||
     effectiveStatus === 'CANCELLED' ||
@@ -319,24 +319,7 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
   };
 
   if (!isUnlocked && !isClosed) {
-    return (
-      <div className="rounded-md border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600 flex items-start gap-2">
-        <Lock className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
-        <div>
-          <strong className="text-[#0B3B75]">
-            {tr(lang, 'Exact Live Location Locked Before Acceptance', 'स्वीकृति से पहले सटीक लोकेशन गोपनीय है', 'काम मंजूर होण्यापूर्वी अचूक लोकेशन गोपनीय असते')}
-          </strong>
-          <p className="mt-0.5">
-            {tr(
-              lang,
-              `Approximate work area: ${application.jobLocationLabel || application.jobDistrict || job?.district || 'District level only'}. Two-way live map unlocks automatically once offer is accepted.`,
-              `अनुमानित क्षेत्र: ${application.jobLocationLabel || application.jobDistrict || job?.district || 'केवल जिला'}। ऑफर स्वीकार होने पर लाइव मानचित्र खुल जाएगा।`,
-              `अंदाजे परिसर: ${application.jobLocationLabel || application.jobDistrict || job?.district || 'फक्त जिल्हा'}. ऑफर स्वीकारल्यानंतर दोन-मार्ग लाइव्ह मॅप सुरू होईल.`
-            )}
-          </p>
-        </div>
-      </div>
-    );
+    return null;
   }
 
   if (isClosed) {
@@ -407,11 +390,11 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
               <Navigation className="w-4 h-4" />
               {viewerRole === 'customer'
                 ? myShare?.sharingActive
-                  ? tr(lang, 'UPDATE MY LOCATION', 'लोकेशन अपडेट करें', 'लोकेशन अपडेट करा')
-                  : tr(lang, 'SHARE MY LOCATION', 'मेरी लोकेशन साझा करें', 'माझे लोकेशन शेअर करा')
+                  ? tr(lang, 'UPDATE LOCATION', 'लोकेशन अपडेट करें', 'लोकेशन अपडेट करा')
+                  : tr(lang, 'SHARE LOCATION', 'लोकेशन साझा करें (SHARE LOCATION)', 'लोकेशन शेअर करा (SHARE LOCATION)')
                 : myShare?.sharingActive
-                ? tr(lang, 'UPDATE MY LOCATION', 'लाइव लोकेशन अपडेट करें', 'लाइव्ह लोकेशन अपडेट करा')
-                : tr(lang, 'SHARE MY LOCATION', 'मेरी लोकेशन साझा करें', 'माझे लोकेशन शेअर करा')}
+                ? tr(lang, 'UPDATE LOCATION', 'लाइव लोकेशन अपडेट करें', 'लाइव्ह लोकेशन अपडेट करा')
+                : tr(lang, 'SHARE LOCATION', 'लोकेशन साझा करें', 'लोकेशन शेअर करा')}
             </button>
           ) : (
             <button
