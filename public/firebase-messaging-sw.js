@@ -62,10 +62,15 @@ messaging.onBackgroundMessage((payload) => {
   const toneType = data.toneType || 'general';
   const baseTag = data.dedupeKey || data.jobId || data.demoJobId || 'alert';
   const tag = `${getSwTagPrefix(toneType)}-${baseTag}`;
-  const clickUrl = data.clickUrl || '/';
+  const clickUrl =
+    data.clickUrl ||
+    (data.jobId
+      ? `/?route=${encodeURIComponent(data.route || 'worker-dashboard')}&jobId=${encodeURIComponent(data.jobId)}`
+      : data.route
+      ? `/?route=${encodeURIComponent(data.route)}`
+      : '/?route=worker-dashboard');
   const isSilent = data.playSound === 'false';
-  const openActionTitle =
-    data.lang === 'mr' ? 'उघडा व पहा' : data.lang === 'hi' ? 'खोलें व देखें' : 'Open Now';
+  const openActionTitle = 'OPEN';
 
   return self.registration.showNotification(title, {
     body,
@@ -76,10 +81,10 @@ messaging.onBackgroundMessage((payload) => {
     requireInteraction: true,
     silent: isSilent,
     ...(isSilent ? {} : { vibrate: getSwToneVibration(toneType) }),
-    actions: [{ action: 'open_listen', title: openActionTitle }],
+    actions: [{ action: 'open', title: openActionTitle }],
     data: {
       clickUrl,
-      route: data.route || '',
+      route: data.route || 'worker-dashboard',
       jobId: data.jobId || '',
       demoJobId: data.demoJobId || '',
       voiceScript: data.voiceScript || '',
@@ -107,6 +112,10 @@ function extractNotificationData(notification) {
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const data = extractNotificationData(event.notification);
+  const fallbackRoute = data.route || (data.jobId ? 'worker-dashboard' : 'worker-dashboard');
+  const fallbackUrl = data.jobId
+    ? `/?route=${encodeURIComponent(fallbackRoute)}&jobId=${encodeURIComponent(data.jobId)}`
+    : `/?route=${encodeURIComponent(fallbackRoute)}`;
   const rawUrl =
     data.clickUrl ||
     (event.notification &&
@@ -114,8 +123,14 @@ self.addEventListener('notificationclick', (event) => {
       event.notification.data.FCM_MSG &&
       event.notification.data.FCM_MSG.fcmOptions &&
       event.notification.data.FCM_MSG.fcmOptions.link) ||
-    '/';
+    fallbackUrl;
   const targetUrlObj = new URL(rawUrl, self.location.origin);
+  if (data.route && !targetUrlObj.searchParams.has('route')) {
+    targetUrlObj.searchParams.set('route', String(data.route));
+  }
+  if (data.jobId && !targetUrlObj.searchParams.has('jobId')) {
+    targetUrlObj.searchParams.set('jobId', String(data.jobId));
+  }
   if (data.speak && !targetUrlObj.searchParams.has('speak')) {
     targetUrlObj.searchParams.set('speak', String(data.speak));
   }

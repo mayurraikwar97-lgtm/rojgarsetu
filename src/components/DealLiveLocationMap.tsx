@@ -407,10 +407,10 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
               <Navigation className="w-4 h-4" />
               {viewerRole === 'customer'
                 ? myShare?.sharingActive
-                  ? tr(lang, 'UPDATE EXACT LOCATION', 'सटीक लोकेशन अपडेट करें', 'अचूक लोकेशन अपडेट करा')
-                  : tr(lang, 'SHARE MY EXACT LOCATION', 'मेरी सटीक लोकेशन साझा करें', 'माझे अचूक लोकेशन शेअर करा')
+                  ? tr(lang, 'UPDATE MY LOCATION', 'लोकेशन अपडेट करें', 'लोकेशन अपडेट करा')
+                  : tr(lang, 'SHARE MY LOCATION', 'मेरी लोकेशन साझा करें', 'माझे लोकेशन शेअर करा')
                 : myShare?.sharingActive
-                ? tr(lang, 'STREAM LIVE LOCATION', 'लाइव लोकेशन चालू करें', 'लाइव्ह लोकेशन सुरू करा')
+                ? tr(lang, 'UPDATE MY LOCATION', 'लाइव लोकेशन अपडेट करें', 'लाइव्ह लोकेशन अपडेट करा')
                 : tr(lang, 'SHARE MY LOCATION', 'मेरी लोकेशन साझा करें', 'माझे लोकेशन शेअर करा')}
             </button>
           ) : (
@@ -455,7 +455,7 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
               className="min-h-[42px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md bg-[#0B3B75] text-white text-xs font-extrabold hover:bg-slate-800 shadow-sm"
             >
               <ExternalLink className="w-4 h-4" />
-              {tr(lang, 'GET DIRECTIONS', 'दिशा प्राप्त करें (Maps)', 'दिशा पहा (GET DIRECTIONS)')}
+              {tr(lang, 'Open in Google Maps', 'Google Maps में खोलें', 'Google Maps मध्ये उघडा')}
             </a>
           )}
         </div>

@@ -57,6 +57,7 @@
         "voiceAlertsEnabled": { "type": "boolean" },
         "completedJobsCount": { "type": "number" },
         "ratingAvg": { "type": "number" },
+        "lastRatedApplicationId": { "type": "string", "maxLength": 128 },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },

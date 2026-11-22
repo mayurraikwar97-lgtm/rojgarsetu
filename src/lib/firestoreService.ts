@@ -1407,6 +1407,23 @@ export async function respondToWorkerOffer(params: {
   const path = `applications/${app.id}`;
 
   try {
+    let isSingleWorkerOrder = true;
+    if (decision === 'accepted') {
+      const jobSnap = await getDoc(doc(db, 'jobs', app.jobId)).catch(() => null);
+      if (jobSnap?.exists()) {
+        const jobData = jobSnap.data() as JobPosting;
+        const requiredCount = Number(jobData.workersRequired) || 1;
+        isSingleWorkerOrder = requiredCount <= 1;
+        if (
+          isSingleWorkerOrder &&
+          jobData.acceptedApplicationId &&
+          jobData.acceptedApplicationId !== app.id
+        ) {
+          throw new Error('Another worker has already been accepted for this order.');
+        }
+      }
+    }
+
     await updateDoc(doc(db, 'applications', app.id), {
       status: decision,
       dealStatus: nextDealStatus,
@@ -1417,6 +1434,7 @@ export async function respondToWorkerOffer(params: {
             liveTrackingAuthorized: true,
           }
         : {
+            liveTrackingAuthorized: false,
             cancelledAt: serverTimestamp(),
             cancelledByUid: app.employerUid,
           }),
@@ -1431,6 +1449,35 @@ export async function respondToWorkerOffer(params: {
         acceptedWorkerUid: app.workerUid,
         updatedAt: serverTimestamp(),
       }).catch(() => undefined);
+
+      // For single-worker orders, automatically close/decline competing pending offers so multiple workers cannot be accepted
+      if (isSingleWorkerOrder) {
+        try {
+          const siblingSnap = await getDocs(
+            query(
+              collection(db, 'applications'),
+              where('employerUid', '==', app.employerUid),
+              where('jobId', '==', app.jobId)
+            )
+          );
+          for (const sibDoc of siblingSnap.docs) {
+            if (sibDoc.id === app.id) continue;
+            const sibData = sibDoc.data() as JobApplication;
+            if (sibData.status === 'applied' || sibData.status === 'invited') {
+              await updateDoc(doc(db, 'applications', sibDoc.id), {
+                status: 'declined',
+                dealStatus: 'REJECTED',
+                liveTrackingAuthorized: false,
+                cancelledAt: serverTimestamp(),
+                cancelledByUid: app.employerUid,
+                updatedAt: serverTimestamp(),
+              }).catch(() => undefined);
+            }
+          }
+        } catch {
+          // Non-blocking safeguard
+        }
+      }
 
       if (photoGrantContext?.customerPhotoDocId) {
         await grantAcceptedCustomerPhoto({
@@ -1488,7 +1535,7 @@ export async function respondToWorkerOffer(params: {
         toneType: 'deal_accepted',
         dealStatus: 'DEAL_CONFIRMED',
         title: `Offer Accepted: ${app.workerName}`,
-        body: `Confirmed "${app.jobTitle}" with ${app.workerName} at ₹${agreedPrice}. Tap "SHARE MY EXACT LOCATION" so the worker can navigate to you.`,
+        body: `Confirmed "${app.jobTitle}" with ${app.workerName} at ₹${agreedPrice}. Tap "SHARE MY LOCATION" so the worker can navigate to you.`,
         metadataLabel: `Offer Accepted · ₹${agreedPrice}`,
         targetRoute: 'employer-dashboard',
         targetJobId: app.jobId,
@@ -1503,6 +1550,9 @@ export async function respondToWorkerOffer(params: {
       }).catch(() => undefined);
     }
   } catch (err) {
+    if (err instanceof Error && err.message.includes('Another worker has already been accepted')) {
+      throw err;
+    }
     handleFirestoreError(err, OperationType.UPDATE, path);
   }
 }
@@ -1639,6 +1689,36 @@ export async function stopDealLocationSharing(applicationId: string): Promise<vo
   }
 }
 
+async function syncWorkerProfileRating(
+  workerUid: string,
+  applicationId: string,
+  rating: number
+): Promise<void> {
+  const clamped = Math.max(1, Math.min(5, Math.round(rating)));
+  try {
+    const workerRef = doc(db, 'publicWorkers', workerUid);
+    const snap = await getDoc(workerRef);
+    if (!snap.exists()) return;
+    const data = snap.data() as PublicWorkerProfile;
+    if (data.lastRatedApplicationId === applicationId) {
+      return;
+    }
+    const prevCount = Math.max(0, Number(data.completedJobsCount) || 0);
+    const prevAvg = Math.max(0, Math.min(5, Number(data.ratingAvg) || 0));
+    const nextCount = prevCount + 1;
+    const nextAvg = Math.round(((prevAvg * prevCount + clamped) / nextCount) * 100) / 100;
+
+    await updateDoc(workerRef, {
+      completedJobsCount: nextCount,
+      ratingAvg: Math.max(1, Math.min(5, nextAvg)),
+      lastRatedApplicationId: applicationId,
+      updatedAt: serverTimestamp(),
+    });
+  } catch {
+    // Non-blocking: rating is already persisted on applications/{applicationId}
+  }
+}
+
 export async function completeDeal(params: {
   app: JobApplication;
   actorUid: string;
@@ -1654,14 +1734,23 @@ export async function completeDeal(params: {
 }): Promise<void> {
   const { app, actorUid, actorRole, actorName, rating, feedback, photoGrantContext } = params;
   const path = `applications/${app.id}`;
+  const clampedRating =
+    typeof rating === 'number' && Number.isFinite(rating)
+      ? Math.max(1, Math.min(5, Math.round(rating)))
+      : undefined;
 
   try {
     await updateDoc(doc(db, 'applications', app.id), {
       status: 'work_completed',
       dealStatus: 'WORK_COMPLETED',
+      liveTrackingAuthorized: false,
       completedAt: serverTimestamp(),
-      ...(typeof rating === 'number' && actorRole === 'customer' ? { workerRating: rating } : {}),
-      ...(feedback?.trim() && actorRole === 'customer' ? { employerFeedback: feedback.trim().slice(0, 500) } : {}),
+      ...(typeof clampedRating === 'number' && actorRole === 'customer'
+        ? { workerRating: clampedRating }
+        : {}),
+      ...(feedback?.trim() && actorRole === 'customer'
+        ? { employerFeedback: feedback.trim().slice(0, 500) }
+        : {}),
       updatedAt: serverTimestamp(),
     });
 
@@ -1670,6 +1759,10 @@ export async function completeDeal(params: {
       dealStatus: 'WORK_COMPLETED',
       updatedAt: serverTimestamp(),
     }).catch(() => undefined);
+
+    if (actorRole === 'customer' && typeof clampedRating === 'number') {
+      await syncWorkerProfileRating(app.workerUid, app.id, clampedRating);
+    }
 
     // Immediately turn off live location sharing on deal completion
     await stopDealLocationSharing(app.id);
@@ -1697,9 +1790,20 @@ export async function completeDeal(params: {
       eventType: 'work_completed',
       toneType: 'deal_completed',
       dealStatus: 'WORK_COMPLETED',
-      title: `Work Completed: ${app.jobTitle}`,
-      body: `${actorName} marked "${app.jobTitle}" as completed. Live location sharing has been automatically stopped.`,
-      metadataLabel: 'Work Completed · Live location stopped',
+      title:
+        actorRole === 'worker'
+          ? `Work Done: ${app.jobTitle}`
+          : `Work Completed: ${app.jobTitle}`,
+      body:
+        actorRole === 'worker'
+          ? `${actorName} marked "${app.jobTitle}" as WORK DONE. Tap OPEN to rate the worker (1–5 stars).`
+          : `${actorName} marked "${app.jobTitle}" as completed${
+              typeof clampedRating === 'number' ? ` with a ${clampedRating}/5 rating` : ''
+            }. Live location sharing has stopped.`,
+      metadataLabel:
+        actorRole === 'worker'
+          ? 'Work Done · Please Rate Worker'
+          : 'Work Completed · Live location stopped',
       targetRoute: counterpartyRoute,
       targetJobId: app.jobId,
       targetApplicationId: app.id,
@@ -1709,6 +1813,67 @@ export async function completeDeal(params: {
         jobTitle: app.jobTitle,
       },
     });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, path);
+  }
+}
+
+export async function submitCustomerRating(params: {
+  app: JobApplication;
+  customerUid: string;
+  customerName: string;
+  rating: number;
+  feedback?: string;
+}): Promise<void> {
+  const { app, customerUid, customerName, rating, feedback } = params;
+  const clampedRating = Math.max(1, Math.min(5, Math.round(rating)));
+  const cleanFeedback = feedback?.trim().slice(0, 500);
+
+  if (app.status !== 'work_completed') {
+    await completeDeal({
+      app,
+      actorUid: customerUid,
+      actorRole: 'customer',
+      actorName: customerName,
+      rating: clampedRating,
+      feedback: cleanFeedback,
+    });
+    return;
+  }
+
+  const path = `applications/${app.id}`;
+  try {
+    await updateDoc(doc(db, 'applications', app.id), {
+      workerRating: clampedRating,
+      ...(cleanFeedback ? { employerFeedback: cleanFeedback } : {}),
+      updatedAt: serverTimestamp(),
+    });
+
+    await syncWorkerProfileRating(app.workerUid, app.id, clampedRating);
+
+    await dispatchTwoWayDealNotification({
+      recipientUid: app.workerUid,
+      recipientRole: 'worker',
+      senderUid: customerUid,
+      senderName: customerName,
+      category: 'bookingNotifications',
+      eventType: 'work_completed',
+      toneType: 'deal_completed',
+      dealStatus: 'WORK_COMPLETED',
+      title: `New ${clampedRating}/5 Rating Received`,
+      body: `${customerName} rated you ${clampedRating}/5 for "${app.jobTitle}"${
+        cleanFeedback ? `: “${cleanFeedback}”` : '.'
+      }`,
+      metadataLabel: `Rated ${clampedRating}/5`,
+      targetRoute: 'worker-dashboard',
+      targetJobId: app.jobId,
+      targetApplicationId: app.id,
+      dedupeKey: sanitizeSafeId(`rating_${app.id}_${Date.now()}`),
+      pushPayload: {
+        workerName: customerName,
+        jobTitle: app.jobTitle,
+      },
+    }).catch(() => undefined);
   } catch (err) {
     handleFirestoreError(err, OperationType.UPDATE, path);
   }
@@ -1728,9 +1893,9 @@ export async function cancelDeal(params: {
     await updateDoc(doc(db, 'applications', app.id), {
       status: 'declined',
       dealStatus: 'CANCELLED',
+      liveTrackingAuthorized: false,
       cancelledAt: serverTimestamp(),
       cancelledByUid: actorUid,
-      ...(actorRole === 'worker' ? { liveTrackingAuthorized: false } : {}),
       ...(reason?.trim() && actorRole === 'worker' ? { note: reason.trim().slice(0, 600) } : {}),
       ...(reason?.trim() && actorRole === 'customer' ? { employerFeedback: reason.trim().slice(0, 500) } : {}),
       updatedAt: serverTimestamp(),

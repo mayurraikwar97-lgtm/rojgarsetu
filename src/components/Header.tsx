@@ -460,9 +460,14 @@ export const Header: React.FC<HeaderProps> = ({
                               <span className="text-[10px] font-mono-tabular font-bold uppercase text-[#C25E00]">
                                 {item.dealStatus || item.eventType || item.category}
                               </span>
-                              {!item.read && (
-                                <span className="w-2 h-2 rounded-full bg-[#E06D1B] shrink-0" />
-                              )}
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                {!item.read && (
+                                  <span className="w-2 h-2 rounded-full bg-[#E06D1B]" />
+                                )}
+                                <span className="px-2 py-0.5 rounded bg-[#0B3B75] text-white text-[10px] font-extrabold">
+                                  OPEN
+                                </span>
+                              </div>
                             </div>
                             <div className="text-xs font-bold text-[#0B3B75] leading-snug">
                               {item.title}

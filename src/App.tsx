@@ -636,9 +636,9 @@ const AppShell: React.FC = () => {
                     target.demoJobId
                   );
                 }}
-                className="min-h-[40px] px-3 py-1.5 rounded bg-[#0B3B75] text-white text-xs font-bold hover:bg-slate-800 cursor-pointer"
+                className="min-h-[40px] px-4 py-1.5 rounded bg-[#0B3B75] text-white text-xs font-extrabold hover:bg-slate-800 cursor-pointer"
               >
-                {foregroundPush.jobId ? 'Open & Send Offer' : 'Open'}
+                OPEN
               </button>
             </div>
           </div>
@@ -776,6 +776,8 @@ const AppShell: React.FC = () => {
             unreadNotificationsCount={unreadNotificationsCount}
             onNavigate={navigate}
             onNavigateToTarget={navigateToTarget}
+            highlightedJobId={highlightedJobId}
+            onClearHighlightedJob={() => setHighlightedJobId('')}
           />
         )}
         {route === 'admin' && (

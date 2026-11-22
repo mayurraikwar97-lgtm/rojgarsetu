@@ -66,7 +66,7 @@ import {
   markNotificationRead,
   respondToHiringInvite,
   saveCustomerDefaultLocation,
-  startWorkByWorker,
+  submitCustomerRating,
   submitWorkerOffer,
   subscribeAdminAuditLogs,
   subscribeAdminEnquiries,
@@ -119,6 +119,30 @@ import type {
 
 function tr(lang: Language, en: string, hi: string, mr: string): string {
   return lang === 'hi' ? hi : lang === 'mr' ? mr : en;
+}
+
+function formatRequestDateTime(job?: JobPosting, app?: JobApplication): string {
+  const datePart = app?.jobDate || job?.jobDate || '';
+  const timePart = app?.startTime || job?.startTime || '';
+  if (datePart || timePart) {
+    return `${datePart}${datePart && timePart ? ' · ' : ''}${timePart}`;
+  }
+  const rawTs = (job?.createdAt || app?.createdAt) as
+    | { toDate?: () => Date; seconds?: number }
+    | undefined;
+  let d: Date | null = null;
+  if (rawTs && typeof rawTs.toDate === 'function') {
+    d = rawTs.toDate();
+  } else if (rawTs && typeof rawTs.seconds === 'number') {
+    d = new Date(rawTs.seconds * 1000);
+  }
+  if (!d || Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString('en-IN', {
+    day: '2-digit',
+    month: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 function downloadCsv(filename: string, headers: string[], rows: (string | number | boolean | undefined)[][]) {
@@ -375,20 +399,6 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
     }
   };
 
-  const handleWorkerStartWork = async (app: JobApplication) => {
-    if (!workerProfile) return;
-    setBusyActionId(app.id);
-    try {
-      await startWorkByWorker({
-        app,
-        workerName: workerProfile.displayName,
-      });
-      setFeedbackBanner(tr(lang, 'Work marked In Progress! Customer notified.', 'कार्य शुरू चिह्नित किया गया!', 'काम सुरू झाले म्हणून नोंदवले!'));
-    } finally {
-      setBusyActionId(null);
-    }
-  };
-
   const handleWorkerCompleteDeal = async (app: JobApplication) => {
     if (!user || !workerProfile) return;
     setBusyActionId(app.id);
@@ -636,79 +646,7 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
       : t.common.pending;
 
   return (
-    <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-8">
-      {/* Header & Registration Card */}
-      <div className="bg-white border border-slate-200 rounded-lg p-6 sm:p-8 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-        <div className="flex items-start gap-4">
-          <SecureAvatar
-            name={workerProfile.displayName}
-            photoDocId={workerProfile.photoDocId || workerPrivate?.photoDocId}
-            sizeClass="w-16 h-16"
-            textSizeClass="text-xl"
-          />
-          <div className="space-y-2">
-            <p className="text-xs font-mono-tabular font-semibold text-[#C25E00]">
-              {t.workerForm.uniqueIdLabel}: {workerProfile.registrationId} · {t.dashboards.profileStatus}:{' '}
-              <span
-                className={
-                  workerProfile.verificationStatus === 'verified'
-                    ? 'text-[#15803D]'
-                    : workerProfile.verificationStatus === 'suspended'
-                    ? 'text-red-700'
-                    : 'text-amber-700'
-                }
-              >
-                {verStatusLabel}
-              </span>
-            </p>
-            <h1 className="font-display text-2xl sm:text-3xl font-bold text-[#0B3B75]">
-              {workerProfile.displayName}
-            </h1>
-            <p className="text-sm text-slate-600">
-              {workerProfile.primarySkill} · {workerProfile.cityOrVillage}, {workerProfile.district}, {workerProfile.state} ·{' '}
-              <span className="font-mono-tabular font-semibold text-[#0B3B75]">
-                ₹{workerProfile.expectedWage.toLocaleString('en-IN')} / {workerProfile.wageUnit}
-              </span>
-            </p>
-            <p className="text-xs text-slate-500">
-              {tr(lang, 'Skills', 'कौशल', 'कौशल्ये')}: {workerProfile.skills.join(' · ')}
-            </p>
-          </div>
-        </div>
-
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3">
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1">
-              {t.workerForm.availability}
-            </label>
-            <select
-              value={workerProfile.availabilityStatus}
-              disabled={availUpdating || workerProfile.verificationStatus === 'suspended'}
-              onChange={(e) => handleAvailabilityChange(e.target.value as PublicWorkerProfile['availabilityStatus'])}
-              className="px-3 py-2 border border-slate-300 rounded-md text-sm bg-white font-medium text-slate-800"
-            >
-              <option value="available">{tr(lang, 'Available for Work', 'काम के लिए उपलब्ध', 'कामासाठी उपलब्ध')}</option>
-              <option value="busy">{tr(lang, 'Currently Busy', 'व्यस्त', 'व्यस्त')}</option>
-              <option value="offline">{tr(lang, 'Offline / On Break', 'ऑफलाइन', 'ऑफलाइन')}</option>
-            </select>
-          </div>
-          <button
-            type="button"
-            onClick={() => onNavigate('register-worker')}
-            className="px-4 py-2 rounded-md border border-slate-300 bg-white text-sm font-semibold text-[#0B3B75] hover:bg-slate-50 cursor-pointer self-end"
-          >
-            {t.workerForm.updateBtn}
-          </button>
-          <button
-            type="button"
-            onClick={() => onNavigate('find-work')}
-            className="px-4 py-2 rounded-md bg-[#0B3B75] text-white text-sm font-semibold hover:bg-slate-800 cursor-pointer self-end"
-          >
-            {t.nav.findWork}
-          </button>
-        </div>
-      </div>
-
+    <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
       {feedbackBanner && (
         <div className="p-3 rounded-md bg-emerald-50 border border-emerald-200 text-sm text-emerald-900 font-medium">
           {feedbackBanner}
@@ -729,111 +667,7 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
         </div>
       )}
 
-      {/* Quick Metrics */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        <div className="bg-white border border-slate-200 rounded-lg p-4">
-          <div className="font-mono-tabular text-2xl font-bold text-[#0B3B75]">{applications.length}</div>
-          <div className="text-xs text-slate-600 mt-1">{t.dashboards.myApplications}</div>
-        </div>
-        <div className="bg-white border border-slate-200 rounded-lg p-4">
-          <div className="font-mono-tabular text-2xl font-bold text-[#15803D]">
-            {applications.filter((a) => a.status === 'accepted').length}
-          </div>
-          <div className="text-xs text-slate-600 mt-1">{tr(lang, 'Active Bookings', 'सक्रिय बुकिंग', 'सक्रिय बुकिंग')}</div>
-        </div>
-        <div className="bg-white border border-slate-200 rounded-lg p-4">
-          <div className="font-mono-tabular text-2xl font-bold text-[#0B3B75]">
-            {workerProfile.completedJobsCount}
-          </div>
-          <div className="text-xs text-slate-600 mt-1">{t.impact.metrics.completed}</div>
-        </div>
-        <div className="bg-white border border-slate-200 rounded-lg p-4">
-          <div className="font-mono-tabular text-2xl font-bold text-[#C25E00]">
-            {workerProfile.ratingAvg > 0 ? workerProfile.ratingAvg.toFixed(1) : '0.0'}
-          </div>
-          <div className="text-xs text-slate-600 mt-1">{tr(lang, 'Average Rating', 'औसत रेटिंग', 'सरासरी रेटिंग')}</div>
-        </div>
-      </div>
-
-      {/* Official Digital Registration Card (ID Card & Document Format) */}
-      <section className="bg-white border border-slate-200 rounded-lg p-6 space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div>
-            <h2 className="font-display text-lg font-bold text-[#0B3B75]">
-              {tr(lang, 'Digital Worker Registration Card', 'डिजिटल कामगार पंजीकरण कार्ड', 'डिजिटल कामगार नोंदणी कार्ड')}
-            </h2>
-            <p className="text-xs text-slate-500">
-              {tr(
-                lang,
-                'Issued under ROJGAR SETU (ABUJMAD FOUNDATION) for identification on work requests.',
-                'कार्य अवसरों पर पहचान के लिए रोजगार सेतु (ABUJMAD FOUNDATION) द्वारा जारी।',
-                'कामाच्या ठिकाणी ओळखीसाठी रोजगार सेतु (ABUJMAD FOUNDATION) अंतर्गत जारी.'
-              )}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => window.print()}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md border border-slate-300 bg-white text-xs font-semibold text-[#0B3B75] hover:bg-slate-50 cursor-pointer self-start sm:self-center print:hidden"
-          >
-            <Printer className="w-3.5 h-3.5" />
-            {tr(lang, 'Print ID Card', 'आईडी कार्ड प्रिंट करें', 'आयडी कार्ड प्रिंट करा')}
-          </button>
-        </div>
-
-        <div className="max-w-xl rounded-lg border-2 border-[#0B3B75] overflow-hidden bg-white">
-          <div className="h-1.5 w-full grid grid-cols-3" aria-hidden="true">
-            <div className="bg-[#E06D1B]" />
-            <div className="bg-slate-100" />
-            <div className="bg-[#15803D]" />
-          </div>
-          <div className="p-4 sm:p-5 bg-slate-50/70 border-b border-slate-200 flex items-center justify-between gap-4">
-            <RojgarSetuLogo variant="horizontal" className="scale-[0.82] origin-left" />
-            <div className="text-right shrink-0">
-              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                {tr(lang, 'Worker ID', 'कामगार आईडी', 'कामगार आयडी')}
-              </div>
-              <div className="font-mono-tabular text-xs sm:text-sm font-extrabold text-[#0B3B75]">
-                {workerProfile.registrationId}
-              </div>
-            </div>
-          </div>
-          <div className="p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center gap-4">
-            <SecureAvatar
-              name={workerProfile.displayName}
-              photoDocId={workerProfile.photoDocId || workerPrivate?.photoDocId}
-              sizeClass="w-16 h-16"
-              textSizeClass="text-lg"
-            />
-            <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs w-full">
-              <div>
-                <div className="text-slate-500 font-medium">{tr(lang, 'Name', 'नाम', 'नाव')}</div>
-                <div className="font-display text-sm font-bold text-[#0B3B75] mt-0.5">{workerProfile.displayName}</div>
-              </div>
-              <div>
-                <div className="text-slate-500 font-medium">{tr(lang, 'Primary Skill', 'मुख्य कौशल', 'मुख्य कौशल्य')}</div>
-                <div className="font-semibold text-slate-800 mt-0.5">{workerProfile.primarySkill}</div>
-              </div>
-              <div>
-                <div className="text-slate-500 font-medium">{tr(lang, 'District & State', 'जिला व राज्य', 'जिल्हा व राज्य')}</div>
-                <div className="font-semibold text-slate-800 mt-0.5">
-                  {workerProfile.cityOrVillage}, {workerProfile.district}, {workerProfile.state}
-                </div>
-              </div>
-              <div>
-                <div className="text-slate-500 font-medium">{t.dashboards.profileStatus}</div>
-                <div className="font-semibold text-[#15803D] mt-0.5">{verStatusLabel}</div>
-              </div>
-            </div>
-          </div>
-          <div className="px-4 sm:px-5 py-2 bg-[#072A54] text-[10px] text-blue-100 flex items-center justify-between">
-            <span>ABUJMAD FOUNDATION · Social-Impact Workforce Initiative</span>
-            <span>Not a Government ID</span>
-          </div>
-        </div>
-      </section>
-
-      {/* Real-Time Unread Notification Alert Banner */}
+      {/* Real-Time Unread Notification Alert Banner with direct OPEN action */}
       {unreadNotificationsCount > 0 && (
         <section className="bg-amber-50 border-2 border-[#E06D1B] rounded-lg p-4 space-y-2.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -858,306 +692,311 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
               .map((n) => (
                 <div
                   key={n.id}
-                  onClick={() => void markNotificationRead(n.id)}
-                  className="bg-white border border-amber-200 rounded px-3 py-2 flex items-start justify-between gap-2 cursor-pointer hover:bg-amber-50/50"
+                  className="bg-white border border-amber-200 rounded px-3 py-2 flex items-center justify-between gap-3 hover:bg-amber-50/50"
                 >
-                  <div>
+                  <div className="min-w-0">
                     <div className="text-xs font-bold text-[#0B3B75]">{n.title}</div>
                     <p className="text-[11px] text-slate-600">{n.body}</p>
                   </div>
-                  <span className="text-[10px] font-bold text-[#C25E00] shrink-0">
-                    {n.dealStatus
-                      ? getVisibleDealStatusLabel(n.dealStatus, lang)
-                      : getToneChannelConfig(getToneTypeForEvent(n)).label[lang]}
-                  </span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="hidden sm:inline text-[10px] font-bold text-[#C25E00]">
+                      {n.dealStatus
+                        ? getVisibleDealStatusLabel(n.dealStatus, lang)
+                        : getToneChannelConfig(getToneTypeForEvent(n)).label[lang]}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void markNotificationRead(n.id);
+                        if (onNavigateToTarget) {
+                          onNavigateToTarget('worker-dashboard', n.targetJobId, n.targetDemoJobId);
+                        }
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                      }}
+                      className="px-3 py-1.5 rounded bg-[#0B3B75] text-white text-xs font-extrabold hover:bg-slate-800 cursor-pointer"
+                    >
+                      OPEN
+                    </button>
+                  </div>
                 </div>
               ))}
           </div>
         </section>
       )}
 
-      {/* Smart Voice Job Alert Spotlight (Deep-Linked from Push / In-App Notification) */}
-      {spotlightJob && (
-        <section className="bg-amber-50 border-2 border-[#E06D1B] rounded-lg p-5 space-y-3 shadow-sm">
-          <div className="flex flex-wrap items-start justify-between gap-2">
-            <div>
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-[#E06D1B] text-white text-[10px] font-mono-tabular font-bold uppercase">
-                <BellRing className="w-3 h-3" />
-                {tr(lang, 'SMART VOICE JOB ALERT', 'स्मार्ट वॉइस जॉब अलर्ट', 'स्मार्ट व्हॉइस जॉब अलर्ट')} · {spotlightJob.category}
+      {/* FIRST SECTION AT VERY TOP: OFFERS / CUSTOMER REQUESTS */}
+      <section className="bg-white border-2 border-[#0B3B75] rounded-lg p-5 sm:p-6 space-y-5 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">
+          <div>
+            <h1 className="font-display text-lg sm:text-xl font-extrabold text-[#0B3B75] flex items-center gap-2">
+              <Zap className="w-5 h-5 text-[#E06D1B]" />
+              <span>
+                {tr(
+                  lang,
+                  'OFFERS / CUSTOMER REQUESTS',
+                  'ऑफ़र / ग्राहक अनुरोध (OFFERS / CUSTOMER REQUESTS)',
+                  'ऑफर्स / ग्राहक विनंत्या (OFFERS / CUSTOMER REQUESTS)'
+                )}{' '}
+                ({(spotlightJob ? 1 : 0) + incomingInvites.length + matchingJobs.length})
               </span>
-              <h2 className="font-display text-lg font-bold text-[#0B3B75] mt-1">{spotlightJob.title}</h2>
-              <p className="text-xs font-semibold text-slate-700">
-                {tr(lang, 'Customer:', 'ग्राहक:', 'ग्राहक:')} {spotlightJob.employerName}
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => handleListenJobVoice(spotlightJob)}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#0B3B75] text-white text-xs font-bold hover:bg-slate-800 cursor-pointer"
-              >
-                {speakingJobId === spotlightJob.id ? (
-                  <VolumeX className="w-3.5 h-3.5" />
-                ) : (
-                  <Volume2 className="w-3.5 h-3.5 text-amber-300" />
-                )}
-                <span>
-                  {speakingJobId === spotlightJob.id
-                    ? tr(lang, 'Stop Voice', 'रोकें', 'थांबवा')
-                    : tr(lang, 'Listen Voice Alert', 'वॉइस अलर्ट सुनें', 'व्हॉइस अलर्ट ऐका')}
+            </h1>
+            <p className="text-xs text-slate-600 mt-0.5">
+              {tr(
+                lang,
+                `Showing requests for your category (${workerProfile.primarySkill}). Review photos, approximate area, and send your price offer.`,
+                `आपकी श्रेणी (${workerProfile.primarySkill}) के लिए नए अनुरोध। फोटो व अनुमानित स्थान देखें और अपना ऑफर भेजें।`,
+                `तुमच्या श्रेणीसाठी (${workerProfile.primarySkill}) नवीन ग्राहक विनंत्या. फोटो व अंदाजे परिसर पाहून तुमचा ऑफर पाठवा.`
+              )}
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <select
+              value={workerProfile.availabilityStatus}
+              disabled={availUpdating || workerProfile.verificationStatus === 'suspended'}
+              onChange={(e) => handleAvailabilityChange(e.target.value as PublicWorkerProfile['availabilityStatus'])}
+              aria-label={t.workerForm.availability}
+              className="px-2.5 py-1.5 border border-slate-300 rounded-md text-xs bg-white font-semibold text-slate-800"
+            >
+              <option value="available">{tr(lang, 'Available', 'उपलब्ध', 'उपलब्ध')}</option>
+              <option value="busy">{tr(lang, 'Busy', 'व्यस्त', 'व्यस्त')}</option>
+              <option value="offline">{tr(lang, 'Offline', 'ऑफलाइन', 'ऑफलाइन')}</option>
+            </select>
+            <button
+              type="button"
+              onClick={() => onNavigate('find-work', workerProfile.primarySkill)}
+              className="text-xs font-semibold text-[#C25E00] hover:underline cursor-pointer whitespace-nowrap"
+            >
+              {t.nav.findWork} →
+            </button>
+          </div>
+        </div>
+
+        {/* Deep-Linked Customer Request Spotlight (from Notification OPEN) */}
+        {spotlightJob && (
+          <div className="bg-amber-50 border-2 border-[#E06D1B] rounded-lg p-5 space-y-3 shadow-sm">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <div>
+                <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-[#E06D1B] text-white text-[10px] font-mono-tabular font-bold uppercase">
+                  <BellRing className="w-3 h-3" />
+                  {tr(lang, 'CUSTOMER REQUEST', 'ग्राहक अनुरोध', 'ग्राहक विनंती')} · {spotlightJob.category}
                 </span>
-              </button>
-              {onClearHighlightedJob && (
+                <h2 className="font-display text-lg font-bold text-[#0B3B75] mt-1">{spotlightJob.title}</h2>
+                <p className="text-xs font-semibold text-slate-700">
+                  {tr(lang, 'Customer:', 'ग्राहक:', 'ग्राहक:')} {spotlightJob.employerName}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
-                  onClick={onClearHighlightedJob}
-                  className="px-2.5 py-1.5 rounded border border-slate-300 bg-white text-xs font-semibold text-slate-600 hover:bg-slate-50 cursor-pointer"
+                  onClick={() => handleListenJobVoice(spotlightJob)}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#0B3B75] text-white text-xs font-bold hover:bg-slate-800 cursor-pointer"
                 >
-                  {tr(lang, 'Dismiss', 'बंद करें', 'बंद करा')}
-                </button>
-              )}
-            </div>
-          </div>
-
-          <p className="text-xs text-slate-700 bg-white border border-amber-200 rounded p-2.5">
-            {spotlightJob.description}
-          </p>
-
-          {spotlightJob.orderKind === 'bike_transport' && (
-            <div className="bg-white border border-blue-200 rounded-md p-2.5 text-xs text-slate-700 space-y-1">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#0B3B75] text-white text-[10px] font-bold">
-                  <Bike className="w-3 h-3" />
-                  {tr(lang, 'Bike / Transport Order', 'बाइक / ट्रांसपोर्ट ऑर्डर', 'बाईक / ट्रान्सपोर्ट ऑर्डर')}
-                </span>
-                {spotlightJob.transportItemType && (
-                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 text-[#C25E00] text-[10px] font-bold">
-                    <Package className="w-3 h-3" />
-                    {spotlightJob.transportItemType === 'goods'
-                      ? tr(lang, 'Goods / Parcel Delivery', 'सामान / पार्सल डिलीवरी', 'सामान / पार्सल ने-आण')
-                      : tr(lang, 'Person Ride', 'यात्री सवारी', 'व्यक्ती प्रवास')}
+                  {speakingJobId === spotlightJob.id ? (
+                    <VolumeX className="w-3.5 h-3.5" />
+                  ) : (
+                    <Volume2 className="w-3.5 h-3.5 text-amber-300" />
+                  )}
+                  <span>
+                    {speakingJobId === spotlightJob.id
+                      ? tr(lang, 'Stop Voice', 'रोकें', 'थांबवा')
+                      : tr(lang, 'Listen Voice Alert', 'वॉइस अलर्ट सुनें', 'व्हॉइस अलर्ट ऐका')}
                   </span>
+                </button>
+                {onClearHighlightedJob && (
+                  <button
+                    type="button"
+                    onClick={onClearHighlightedJob}
+                    className="px-2.5 py-1.5 rounded border border-slate-300 bg-white text-xs font-semibold text-slate-600 hover:bg-slate-50 cursor-pointer"
+                  >
+                    {tr(lang, 'Dismiss', 'बंद करें', 'बंद करा')}
+                  </button>
                 )}
               </div>
-              {spotlightJob.pickupLocationLabel && (
-                <p>
-                  <strong>{tr(lang, 'Pickup:', 'पिकअप:', 'पिकअप:')}</strong> {spotlightJob.pickupLocationLabel}
-                </p>
-              )}
-              {spotlightJob.destinationLocationLabel && (
-                <p>
-                  <strong>{tr(lang, 'Destination:', 'गंतव्य:', 'जाण्याचे ठिकाण:')}</strong>{' '}
-                  {spotlightJob.destinationLocationLabel}
-                </p>
-              )}
             </div>
-          )}
 
-          {(() => {
-            const spotlightPhotos = getJobPhotoUrls(spotlightJob);
-            if (spotlightPhotos.length === 0) return null;
-            return (
-              <div className="space-y-1.5">
-                <p className="text-[11px] font-bold text-[#0B3B75] inline-flex items-center gap-1">
-                  <Camera className="w-3.5 h-3.5 text-[#E06D1B]" />
-                  <span>
-                    {tr(
-                      lang,
-                      `Customer Uploaded Photos (${spotlightPhotos.length}) — Tap to Zoom`,
-                      `ग्राहक द्वारा अपलोड फोटो (${spotlightPhotos.length}) — बड़ा देखने हेतु टैप करें`,
-                      `ग्राहकाने अपलोड केलेले फोटो (${spotlightPhotos.length}) — मोठे पाहण्यासाठी टॅप करा`
-                    )}
-                  </span>
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  {spotlightPhotos.map((photoUrl, idx) => (
-                    <button
-                      key={`spot-photo-${idx}`}
-                      type="button"
-                      onClick={() => setLightboxPhotoUrl(photoUrl)}
-                      className="w-20 h-20 rounded-md overflow-hidden border-2 border-amber-300 bg-white hover:opacity-90 cursor-pointer"
-                    >
-                      <img
-                        src={photoUrl}
-                        alt={`Work order photo ${idx + 1}`}
-                        className="w-full h-full object-cover"
-                      />
-                    </button>
-                  ))}
-                </div>
-              </div>
-            );
-          })()}
+            <p className="text-xs text-slate-700 bg-white border border-amber-200 rounded p-2.5">
+              {spotlightJob.description}
+            </p>
 
-          {(() => {
-            const distKm = calculateValidDistanceKm(
-              spotlightJob.lat,
-              spotlightJob.lng,
-              workerProfile.approxLat,
-              workerProfile.approxLng
-            );
-            return (
-              <>
-                <div className="flex flex-wrap items-center gap-4 text-xs text-slate-700">
-                  <span className="inline-flex items-center gap-1">
-                    <MapPin className="w-3.5 h-3.5 text-[#E06D1B]" />
-                    <strong>{tr(lang, 'Approximate Area:', 'अनुमानित क्षेत्र:', 'अंदाजे परिसर:')}</strong>{' '}
-                    {getPublicJobLocationText(spotlightJob, false)}
-                  </span>
-                  {distKm !== null && (
-                    <span className="font-mono-tabular font-bold text-[#0B3B75]">~{distKm} km away</span>
-                  )}
-                  {(spotlightJob.jobDate || spotlightJob.startTime) && (
-                    <span className="font-mono-tabular">
-                      {spotlightJob.jobDate} {spotlightJob.startTime}
+            {(() => {
+              const spotlightPhotos = getJobPhotoUrls(spotlightJob);
+              if (spotlightPhotos.length === 0) return null;
+              return (
+                <div className="space-y-1.5">
+                  <p className="text-[11px] font-bold text-[#0B3B75] inline-flex items-center gap-1">
+                    <Camera className="w-3.5 h-3.5 text-[#E06D1B]" />
+                    <span>
+                      {tr(
+                        lang,
+                        `Customer Uploaded Photos (${spotlightPhotos.length}) — Tap to Zoom`,
+                        `ग्राहक द्वारा अपलोड फोटो (${spotlightPhotos.length}) — बड़ा देखने हेतु टैप करें`,
+                        `ग्राहकाने अपलोड केलेले फोटो (${spotlightPhotos.length}) — मोठे पाहण्यासाठी टॅप करा`
+                      )}
                     </span>
-                  )}
-                  {spotlightJob.offeredWage > 0 && (
-                    <span className="font-mono-tabular font-bold text-[#15803D]">
-                      ₹{spotlightJob.offeredWage.toLocaleString('en-IN')} / {spotlightJob.wageUnit}
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    {spotlightPhotos.map((photoUrl, idx) => (
+                      <button
+                        key={`spot-photo-${idx}`}
+                        type="button"
+                        onClick={() => setLightboxPhotoUrl(photoUrl)}
+                        className="w-20 h-20 rounded-md overflow-hidden border-2 border-amber-300 bg-white hover:opacity-90 cursor-pointer"
+                      >
+                        <img
+                          src={photoUrl}
+                          alt={`Work order photo ${idx + 1}`}
+                          className="w-full h-full object-cover"
+                        />
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              );
+            })()}
+
+            {(() => {
+              const distKm = calculateValidDistanceKm(
+                spotlightJob.lat,
+                spotlightJob.lng,
+                workerProfile.approxLat,
+                workerProfile.approxLng
+              );
+              const reqDateTime = formatRequestDateTime(spotlightJob);
+              return (
+                <>
+                  <div className="flex flex-wrap items-center gap-4 text-xs text-slate-700">
+                    <span className="inline-flex items-center gap-1">
+                      <MapPin className="w-3.5 h-3.5 text-[#E06D1B]" />
+                      <strong>{tr(lang, 'Approximate Area:', 'अनुमानित क्षेत्र:', 'अंदाजे परिसर:')}</strong>{' '}
+                      {getPublicJobLocationText(spotlightJob, false)}
                     </span>
-                  )}
-                </div>
-
-                <ApproximateJobLocationMap job={spotlightJob} distanceKm={distKm} />
-              </>
-            );
-          })()}
-
-          {!applications.some((a) => a.jobId === spotlightJob.id) && (
-            <div className="flex flex-wrap gap-2 pt-1">
-              <button
-                type="button"
-                onClick={() => handleOpenOfferEditor(`spotlight_${spotlightJob.id}`, spotlightJob.offeredWage)}
-                className="min-h-[48px] px-5 py-2.5 rounded-md bg-[#0B3B75] text-white text-sm font-extrabold hover:bg-slate-800 whitespace-nowrap cursor-pointer"
-              >
-                {tr(lang, 'SEND OFFER', 'ऑफर भेजें', 'ऑफर पाठवा')}
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setDismissedJobIds((prev) => [...prev, spotlightJob.id]);
-                  if (onClearHighlightedJob) onClearHighlightedJob();
-                }}
-                className="min-h-[48px] px-4 py-2.5 rounded-md border border-slate-300 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap cursor-pointer"
-              >
-                {tr(lang, 'Decline', 'छोड़ें', 'नाकारा')}
-              </button>
-            </div>
-          )}
-
-          {offerDraftTargetId === `spotlight_${spotlightJob.id}` && (
-            <form
-              onSubmit={(e) => handleSubmitOfferForJob(e, spotlightJob)}
-              className="bg-white border-2 border-[#0B3B75] rounded-md p-3.5 space-y-2.5"
-            >
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                <div>
-                  <label className="block text-[11px] font-bold text-slate-700 mb-1">
-                    {tr(lang, 'Enter Your Price (₹) *', 'अपना दर दर्ज करें (₹) *', 'तुमचा दर टाका (₹) *')}
-                  </label>
-                  <input
-                    type="number"
-                    required
-                    min={1}
-                    value={offerPriceInput}
-                    onChange={(e) => setOfferPriceInput(e.target.value)}
-                    placeholder={tr(lang, 'Enter Your Price (₹)', 'दर (₹)', 'दर (₹)')}
-                    className="w-full min-h-[44px] px-3 py-2 border border-slate-300 rounded text-sm font-mono-tabular font-bold"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                    {tr(
-                      lang,
-                      'Travel Charges (₹, Optional)',
-                      'यात्रा शुल्क (₹, वैकल्पिक)',
-                      'प्रवास खर्च (₹, ऐच्छिक)'
+                    {distKm !== null && (
+                      <span className="font-mono-tabular font-bold text-[#0B3B75]">~{distKm} km away</span>
                     )}
-                  </label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={offerTravelInput}
-                    onChange={(e) => setOfferTravelInput(e.target.value)}
-                    placeholder={tr(lang, '0 (Optional)', '0 (वैकल्पिक)', '0 (ऐच्छिक)')}
-                    className="w-full min-h-[44px] px-3 py-2 border border-slate-300 rounded text-sm font-mono-tabular"
-                  />
-                </div>
-              </div>
-              <div>
-                <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                  {tr(lang, 'Message (Optional)', 'संदेश (वैकल्पिक)', 'संदेश (ऐच्छिक)')}
-                </label>
-                <input
-                  type="text"
-                  value={offerMsgInput}
-                  onChange={(e) => setOfferMsgInput(e.target.value)}
-                  placeholder={tr(
-                    lang,
-                    'Message to customer (optional)',
-                    'ग्राहक के लिए संदेश (वैकल्पिक)',
-                    'ग्राहकासाठी संदेश (ऐच्छिक)'
-                  )}
-                  className="w-full min-h-[44px] px-3 py-2 border border-slate-300 rounded text-xs"
-                />
-              </div>
-              <div className="flex flex-wrap gap-2">
+                    {reqDateTime && (
+                      <span className="font-mono-tabular text-slate-600">{reqDateTime}</span>
+                    )}
+                    {spotlightJob.offeredWage > 0 && (
+                      <span className="font-mono-tabular font-bold text-[#15803D]">
+                        ₹{spotlightJob.offeredWage.toLocaleString('en-IN')} / {spotlightJob.wageUnit}
+                      </span>
+                    )}
+                  </div>
+
+                  <ApproximateJobLocationMap job={spotlightJob} distanceKm={distKm} />
+                </>
+              );
+            })()}
+
+            {!applications.some((a) => a.jobId === spotlightJob.id) && (
+              <div className="flex flex-wrap gap-2 pt-1">
                 <button
-                  type="submit"
-                  disabled={busyActionId === spotlightJob.id}
-                  className="flex-1 min-h-[48px] px-5 py-2.5 rounded-md bg-[#0B3B75] text-white text-sm font-extrabold hover:bg-slate-800 disabled:opacity-60 cursor-pointer"
+                  type="button"
+                  onClick={() => handleOpenOfferEditor(`spotlight_${spotlightJob.id}`, spotlightJob.offeredWage)}
+                  className="min-h-[48px] px-5 py-2.5 rounded-md bg-[#0B3B75] text-white text-sm font-extrabold hover:bg-slate-800 whitespace-nowrap cursor-pointer"
                 >
                   {tr(lang, 'SEND OFFER', 'ऑफर भेजें', 'ऑफर पाठवा')}
                 </button>
                 <button
                   type="button"
-                  onClick={() => setOfferDraftTargetId(null)}
-                  className="min-h-[48px] px-4 py-2.5 rounded-md border border-slate-300 text-xs font-semibold text-slate-700 cursor-pointer"
+                  onClick={() => {
+                    setDismissedJobIds((prev) => [...prev, spotlightJob.id]);
+                    if (onClearHighlightedJob) onClearHighlightedJob();
+                  }}
+                  className="min-h-[48px] px-4 py-2.5 rounded-md border border-slate-300 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 whitespace-nowrap cursor-pointer"
                 >
-                  {t.common.cancel}
+                  {tr(lang, 'Decline', 'छोड़ें', 'नाकारा')}
                 </button>
               </div>
-            </form>
-          )}
-        </section>
-      )}
+            )}
 
-      {/* Incoming Customer Hiring Requests & Matching Category Broadcasts (Accept / Reject / Send Offer) */}
-      {(incomingInvites.length > 0 || matchingJobs.length > 0) && (
-        <section className="bg-white border-2 border-[#0B3B75] rounded-lg p-6 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <h2 className="font-display text-lg font-bold text-[#0B3B75] flex items-center gap-2">
-                <Zap className="w-5 h-5 text-[#E06D1B]" />
-                <span>
-                  {tr(
-                    lang,
-                    'Incoming Hiring Requests & Service Leads',
-                    'नए कार्य अनुरोध एवं अवसर',
-                    'नवीन कामाच्या विनंत्या व संधी'
-                  )}{' '}
-                  ({incomingInvites.length + matchingJobs.length})
-                </span>
-              </h2>
-              <p className="text-xs text-slate-600">
-                {tr(
-                  lang,
-                  'Check customer photos, approximate area and distance before quoting your price.',
-                  'दर भेजने से पहले ग्राहक के फोटो, अनुमानित क्षेत्र और दूरी देखें।',
-                  'तुमचा दर पाठवण्यापूर्वी ग्राहकाचे फोटो, अंदाजे परिसर आणि अंतर पहा.'
-                )}
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={() => onNavigate('find-work', workerProfile.primarySkill)}
-              className="text-xs font-semibold text-[#C25E00] hover:underline cursor-pointer"
-            >
-              {t.nav.findWork} →
-            </button>
+            {offerDraftTargetId === `spotlight_${spotlightJob.id}` && (
+              <form
+                onSubmit={(e) => handleSubmitOfferForJob(e, spotlightJob)}
+                className="bg-white border-2 border-[#0B3B75] rounded-md p-3.5 space-y-2.5"
+              >
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 mb-1">
+                      {tr(lang, 'Enter Your Price (₹) *', 'अपना दर दर्ज करें (₹) *', 'तुमचा दर टाका (₹) *')}
+                    </label>
+                    <input
+                      type="number"
+                      required
+                      min={1}
+                      value={offerPriceInput}
+                      onChange={(e) => setOfferPriceInput(e.target.value)}
+                      placeholder={tr(lang, 'Enter Your Price (₹)', 'दर (₹)', 'दर (₹)')}
+                      className="w-full min-h-[44px] px-3 py-2 border border-slate-300 rounded text-sm font-mono-tabular font-bold"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                      {tr(
+                        lang,
+                        'Travel Charges (₹, Optional)',
+                        'यात्रा शुल्क (₹, वैकल्पिक)',
+                        'प्रवास खर्च (₹, ऐच्छिक)'
+                      )}
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={offerTravelInput}
+                      onChange={(e) => setOfferTravelInput(e.target.value)}
+                      placeholder={tr(lang, '0 (Optional)', '0 (वैकल्पिक)', '0 (ऐच्छिक)')}
+                      className="w-full min-h-[44px] px-3 py-2 border border-slate-300 rounded text-sm font-mono-tabular"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    {tr(lang, 'Message (Optional)', 'संदेश (वैकल्पिक)', 'संदेश (ऐच्छिक)')}
+                  </label>
+                  <input
+                    type="text"
+                    value={offerMsgInput}
+                    onChange={(e) => setOfferMsgInput(e.target.value)}
+                    placeholder={tr(
+                      lang,
+                      'Message to customer (optional)',
+                      'ग्राहक के लिए संदेश (वैकल्पिक)',
+                      'ग्राहकासाठी संदेश (ऐच्छिक)'
+                    )}
+                    className="w-full min-h-[44px] px-3 py-2 border border-slate-300 rounded text-xs"
+                  />
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="submit"
+                    disabled={busyActionId === spotlightJob.id}
+                    className="flex-1 min-h-[48px] px-5 py-2.5 rounded-md bg-[#0B3B75] text-white text-sm font-extrabold hover:bg-slate-800 disabled:opacity-60 cursor-pointer"
+                  >
+                    {tr(lang, 'SEND OFFER', 'ऑफर भेजें', 'ऑफर पाठवा')}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setOfferDraftTargetId(null)}
+                    className="min-h-[48px] px-4 py-2.5 rounded-md border border-slate-300 text-xs font-semibold text-slate-700 cursor-pointer"
+                  >
+                    {t.common.cancel}
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
+        )}
 
+        {!spotlightJob && incomingInvites.length === 0 && matchingJobs.length === 0 ? (
+          <p className="text-sm text-slate-500 py-2">
+            {tr(
+              lang,
+              `No new customer requests for ${workerProfile.primarySkill} right now. You will be alerted immediately when a customer sends a request.`,
+              `अभी ${workerProfile.primarySkill} के लिए कोई नया ग्राहक अनुरोध नहीं है। नया अनुरोध आते ही आपको तुरंत सूचना मिलेगी।`,
+              `सध्या ${workerProfile.primarySkill} साठी नवीन ग्राहक विनंती नाही. नवीन विनंती आल्यावर तुम्हाला तात्काळ सूचना मिळेल.`
+            )}
+          </p>
+        ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Direct Invites First */}
             {incomingInvites.map((app) => {
@@ -1445,8 +1284,7 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
                       <MapPin className="w-3 h-3 inline text-[#E06D1B] mr-0.5" />
                       {approxLoc}
                       {distKm !== null ? ` (~${distKm} km)` : ''}
-                      {job.jobDate ? ` · ${job.jobDate}` : ''}
-                      {job.startTime ? ` ${job.startTime}` : ''}
+                      {formatRequestDateTime(job) ? ` · ${formatRequestDateTime(job)}` : ''}
                     </span>
                     <button
                       type="button"
@@ -1557,8 +1395,8 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
               );
             })}
           </div>
-        </section>
-      )}
+        )}
+      </section>
 
       {/* Applications, Active Deals, Two-Way Chat & Live Location */}
       <section className="bg-white border border-slate-200 rounded-lg p-6 space-y-4">
@@ -1688,25 +1526,16 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
                         </>
                       )}
 
-                      {(dealStatus === 'DEAL_CONFIRMED' || dealStatus === 'OFFER_ACCEPTED') && (
-                        <button
-                          type="button"
-                          disabled={busyActionId === app.id}
-                          onClick={() => handleWorkerStartWork(app)}
-                          className="min-h-[44px] px-4 py-2 rounded-md bg-[#0B3B75] text-white text-xs font-bold hover:bg-slate-800 whitespace-nowrap cursor-pointer"
-                        >
-                          {tr(lang, 'Start Work', 'काम शुरू करें', 'काम सुरू करा')}
-                        </button>
-                      )}
-
-                      {dealStatus === 'WORK_IN_PROGRESS' && (
+                      {(dealStatus === 'DEAL_CONFIRMED' ||
+                        dealStatus === 'OFFER_ACCEPTED' ||
+                        dealStatus === 'WORK_IN_PROGRESS') && (
                         <button
                           type="button"
                           disabled={busyActionId === app.id}
                           onClick={() => handleWorkerCompleteDeal(app)}
-                          className="min-h-[44px] px-4 py-2 rounded-md bg-[#15803D] text-white text-xs font-bold hover:bg-emerald-800 whitespace-nowrap cursor-pointer"
+                          className="min-h-[46px] px-5 py-2 rounded-md bg-[#15803D] text-white text-xs sm:text-sm font-extrabold hover:bg-emerald-800 whitespace-nowrap cursor-pointer"
                         >
-                          {tr(lang, 'Work Completed', 'काम पूरा हुआ', 'काम पूर्ण झाले')}
+                          {tr(lang, 'WORK DONE', 'काम पूरा हुआ (WORK DONE)', 'काम पूर्ण झाले (WORK DONE)')}
                         </button>
                       )}
 
@@ -1738,6 +1567,166 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
             })}
           </div>
         )}
+      </section>
+
+      {/* Worker Profile Summary & Quick Metrics (below Offers & Active Work) */}
+      <div className="bg-white border border-slate-200 rounded-lg p-6 sm:p-8 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+        <div className="flex items-start gap-4">
+          <SecureAvatar
+            name={workerProfile.displayName}
+            photoDocId={workerProfile.photoDocId || workerPrivate?.photoDocId}
+            sizeClass="w-16 h-16"
+            textSizeClass="text-xl"
+          />
+          <div className="space-y-2">
+            <p className="text-xs font-mono-tabular font-semibold text-[#C25E00]">
+              {t.workerForm.uniqueIdLabel}: {workerProfile.registrationId} · {t.dashboards.profileStatus}:{' '}
+              <span
+                className={
+                  workerProfile.verificationStatus === 'verified'
+                    ? 'text-[#15803D]'
+                    : workerProfile.verificationStatus === 'suspended'
+                    ? 'text-red-700'
+                    : 'text-amber-700'
+                }
+              >
+                {verStatusLabel}
+              </span>
+            </p>
+            <h2 className="font-display text-2xl font-bold text-[#0B3B75]">
+              {workerProfile.displayName}
+            </h2>
+            <p className="text-sm text-slate-600">
+              {workerProfile.primarySkill} · {workerProfile.cityOrVillage}, {workerProfile.district}, {workerProfile.state} ·{' '}
+              <span className="font-mono-tabular font-semibold text-[#0B3B75]">
+                ₹{workerProfile.expectedWage.toLocaleString('en-IN')} / {workerProfile.wageUnit}
+              </span>
+            </p>
+            <p className="text-xs text-slate-500">
+              {tr(lang, 'Skills', 'कौशल', 'कौशल्ये')}: {workerProfile.skills.join(' · ')}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => onNavigate('register-worker')}
+            className="px-4 py-2 rounded-md border border-slate-300 bg-white text-sm font-semibold text-[#0B3B75] hover:bg-slate-50 cursor-pointer"
+          >
+            {t.workerForm.updateBtn}
+          </button>
+          <button
+            type="button"
+            onClick={() => onNavigate('find-work')}
+            className="px-4 py-2 rounded-md bg-[#0B3B75] text-white text-sm font-semibold hover:bg-slate-800 cursor-pointer"
+          >
+            {t.nav.findWork}
+          </button>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <div className="bg-white border border-slate-200 rounded-lg p-4">
+          <div className="font-mono-tabular text-2xl font-bold text-[#0B3B75]">{applications.length}</div>
+          <div className="text-xs text-slate-600 mt-1">{t.dashboards.myApplications}</div>
+        </div>
+        <div className="bg-white border border-slate-200 rounded-lg p-4">
+          <div className="font-mono-tabular text-2xl font-bold text-[#15803D]">
+            {applications.filter((a) => a.status === 'accepted').length}
+          </div>
+          <div className="text-xs text-slate-600 mt-1">{tr(lang, 'Active Bookings', 'सक्रिय बुकिंग', 'सक्रिय बुकिंग')}</div>
+        </div>
+        <div className="bg-white border border-slate-200 rounded-lg p-4">
+          <div className="font-mono-tabular text-2xl font-bold text-[#0B3B75]">
+            {workerProfile.completedJobsCount}
+          </div>
+          <div className="text-xs text-slate-600 mt-1">{t.impact.metrics.completed}</div>
+        </div>
+        <div className="bg-white border border-slate-200 rounded-lg p-4">
+          <div className="font-mono-tabular text-2xl font-bold text-[#C25E00]">
+            {workerProfile.ratingAvg > 0 ? workerProfile.ratingAvg.toFixed(1) : '0.0'}
+          </div>
+          <div className="text-xs text-slate-600 mt-1">{tr(lang, 'Average Rating', 'औसत रेटिंग', 'सरासरी रेटिंग')}</div>
+        </div>
+      </div>
+
+      {/* Official Digital Registration Card (ID Card & Document Format) */}
+      <section className="bg-white border border-slate-200 rounded-lg p-6 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h2 className="font-display text-lg font-bold text-[#0B3B75]">
+              {tr(lang, 'Digital Worker Registration Card', 'डिजिटल कामगार पंजीकरण कार्ड', 'डिजिटल कामगार नोंदणी कार्ड')}
+            </h2>
+            <p className="text-xs text-slate-500">
+              {tr(
+                lang,
+                'Issued under ROJGAR SETU (ABUJMAD FOUNDATION) for identification on work requests.',
+                'कार्य अवसरों पर पहचान के लिए रोजगार सेतु (ABUJMAD FOUNDATION) द्वारा जारी।',
+                'कामाच्या ठिकाणी ओळखीसाठी रोजगार सेतु (ABUJMAD FOUNDATION) अंतर्गत जारी.'
+              )}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => window.print()}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md border border-slate-300 bg-white text-xs font-semibold text-[#0B3B75] hover:bg-slate-50 cursor-pointer self-start sm:self-center print:hidden"
+          >
+            <Printer className="w-3.5 h-3.5" />
+            {tr(lang, 'Print ID Card', 'आईडी कार्ड प्रिंट करें', 'आयडी कार्ड प्रिंट करा')}
+          </button>
+        </div>
+
+        <div className="max-w-xl rounded-lg border-2 border-[#0B3B75] overflow-hidden bg-white">
+          <div className="h-1.5 w-full grid grid-cols-3" aria-hidden="true">
+            <div className="bg-[#E06D1B]" />
+            <div className="bg-slate-100" />
+            <div className="bg-[#15803D]" />
+          </div>
+          <div className="p-4 sm:p-5 bg-slate-50/70 border-b border-slate-200 flex items-center justify-between gap-4">
+            <RojgarSetuLogo variant="horizontal" className="scale-[0.82] origin-left" />
+            <div className="text-right shrink-0">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                {tr(lang, 'Worker ID', 'कामगार आईडी', 'कामगार आयडी')}
+              </div>
+              <div className="font-mono-tabular text-xs sm:text-sm font-extrabold text-[#0B3B75]">
+                {workerProfile.registrationId}
+              </div>
+            </div>
+          </div>
+          <div className="p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center gap-4">
+            <SecureAvatar
+              name={workerProfile.displayName}
+              photoDocId={workerProfile.photoDocId || workerPrivate?.photoDocId}
+              sizeClass="w-16 h-16"
+              textSizeClass="text-lg"
+            />
+            <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs w-full">
+              <div>
+                <div className="text-slate-500 font-medium">{tr(lang, 'Name', 'नाम', 'नाव')}</div>
+                <div className="font-display text-sm font-bold text-[#0B3B75] mt-0.5">{workerProfile.displayName}</div>
+              </div>
+              <div>
+                <div className="text-slate-500 font-medium">{tr(lang, 'Primary Skill', 'मुख्य कौशल', 'मुख्य कौशल्य')}</div>
+                <div className="font-semibold text-slate-800 mt-0.5">{workerProfile.primarySkill}</div>
+              </div>
+              <div>
+                <div className="text-slate-500 font-medium">{tr(lang, 'District & State', 'जिला व राज्य', 'जिल्हा व राज्य')}</div>
+                <div className="font-semibold text-slate-800 mt-0.5">
+                  {workerProfile.cityOrVillage}, {workerProfile.district}, {workerProfile.state}
+                </div>
+              </div>
+              <div>
+                <div className="text-slate-500 font-medium">{t.dashboards.profileStatus}</div>
+                <div className="font-semibold text-[#15803D] mt-0.5">{verStatusLabel}</div>
+              </div>
+            </div>
+          </div>
+          <div className="px-4 sm:px-5 py-2 bg-[#072A54] text-[10px] text-blue-100 flex items-center justify-between">
+            <span>ABUJMAD FOUNDATION · Social-Impact Workforce Initiative</span>
+            <span>Not a Government ID</span>
+          </div>
+        </div>
       </section>
 
       {/* Listed Vehicles & Incoming Auto/Car Bookings (if owner has listed any) */}
@@ -1871,6 +1860,8 @@ interface EmployerDashboardProps {
   unreadNotificationsCount?: number;
   onNavigate: (route: PageRoute, categoryFilter?: string) => void;
   onNavigateToTarget?: (route: PageRoute, jobId?: string, demoJobId?: string) => void;
+  highlightedJobId?: string;
+  onClearHighlightedJob?: () => void;
 }
 
 export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
@@ -1880,6 +1871,8 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
   unreadNotificationsCount = 0,
   onNavigate,
   onNavigateToTarget,
+  highlightedJobId = '',
+  onClearHighlightedJob,
 }) => {
   const { lang, t } = useLanguage();
   const { user, employerProfile, employerPrivate, customerPreference, signInWithGoogle } = useAuth();
@@ -1890,6 +1883,8 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
   const [completingAppId, setCompletingAppId] = useState<string | null>(null);
   const [ratingVal, setRatingVal] = useState<number>(5);
   const [feedbackVal, setFeedbackVal] = useState('');
+  const [postRatings, setPostRatings] = useState<Record<string, number>>({});
+  const [postFeedbacks, setPostFeedbacks] = useState<Record<string, string>>({});
   const [gpsUpdating, setGpsUpdating] = useState(false);
   const [locNotice, setLocNotice] = useState('');
   const [actionNotice, setActionNotice] = useState('');
@@ -2059,9 +2054,48 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
       setActionNotice(
         tr(
           lang,
-          `Offer accepted with ${app.workerName}! Both sides notified — you can now share your exact location and chat below.`,
-          `${app.workerName} का ऑफर स्वीकार हो गया! दोनों को सूचना भेजी गई है — अब नीचे सटीक लोकेशन व चैट शुरू करें।`,
-          `${app.workerName} ची ऑफर स्वीकारली! दोघांनाही सूचना पाठवली आहे — आता खाली अचूक लोकेशन आणि चॅट वापरा.`
+          `Offer accepted with ${app.workerName}! Both sides notified — tap "SHARE MY LOCATION" below so the worker can navigate to you.`,
+          `${app.workerName} का ऑफर स्वीकार हो गया! दोनों को सूचना भेजी गई है — अब नीचे "मेरी लोकेशन साझा करें" पर टैप करें।`,
+          `${app.workerName} ची ऑफर स्वीकारली! दोघांनाही सूचना पाठवली आहे — आता खाली "माझे लोकेशन शेअर करा" वर टॅप करा.`
+        )
+      );
+    } catch (err) {
+      setActionNotice(
+        err instanceof Error
+          ? err.message
+          : tr(
+              lang,
+              'Could not accept this offer. Another worker may already be confirmed for this order.',
+              'यह ऑफर स्वीकार नहीं हो सका। संभव है इस ऑर्डर के लिए दूसरा कामगार पहले ही चुना गया हो।',
+              'ही ऑफर स्वीकारता आली नाही. या ऑर्डरसाठी दुसरा कामगार आधीच निश्चित झाला असू शकतो.'
+            )
+      );
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleSubmitPostCompletionRating = async (e: React.FormEvent, app: JobApplication) => {
+    e.preventDefault();
+    if (!user) return;
+    const chosenRating = postRatings[app.id] ?? 5;
+    const chosenFeedback = (postFeedbacks[app.id] || '').trim();
+    setBusyId(app.id);
+    setActionNotice('');
+    try {
+      await submitCustomerRating({
+        app,
+        customerUid: user.uid,
+        customerName: customerDisplayName,
+        rating: chosenRating,
+        feedback: chosenFeedback || undefined,
+      });
+      setActionNotice(
+        tr(
+          lang,
+          `Thank you! Saved ${chosenRating}/5 rating for ${app.workerName}.`,
+          `धन्यवाद! ${app.workerName} के लिए ${chosenRating}/5 रेटिंग सहेजी गई।`,
+          `धन्यवाद! ${app.workerName} साठी ${chosenRating}/5 रेटिंग जतन केली आहे.`
         )
       );
     } finally {
@@ -2113,9 +2147,9 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
       setActionNotice(
         tr(
           lang,
-          'Work marked completed! Both dashboards synced and live location sharing automatically stopped.',
-          'कार्य पूर्ण! लाइव लोकेशन साझाकरण बंद कर दिया गया है।',
-          'काम पूर्ण झाले! दोन्ही डॅशबोर्ड अपडेट झाले व लाइव्ह लोकेशन बंद केले.'
+          'Work marked completed! Rating saved and live location sharing automatically stopped.',
+          'कार्य पूर्ण! रेटिंग सहेजी गई और लाइव लोकेशन बंद कर दी गई।',
+          'काम पूर्ण झाले! रेटिंग जतन झाली व लाइव्ह लोकेशन बंद केले.'
         )
       );
     } finally {
@@ -2214,9 +2248,9 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
           <p className="text-sm text-slate-600">
             {tr(
               lang,
-              'Hire workers or book local transport in one step, or register your company/contractor unit.',
-              'तुरंत एक चरण में कामगार हायर करें या लोकल ट्रांसपोर्ट बुक करें, या अपना व्यवसाय पंजीकृत करें।',
-              'तात्काळ एका पायरीत कामगार हायर करा किंवा लोकल ट्रान्सपोर्ट बुक करा.'
+              'Hire verified local workers directly in one step, or register your company/contractor unit.',
+              'तुरंत एक चरण में सत्यापित स्थानीय कामगार हायर करें, या अपना व्यवसाय पंजीकृत करें।',
+              'तात्काळ एका पायरीत स्थानिक कामगार हायर करा किंवा तुमचा व्यवसाय नोंदवा.'
             )}
           </p>
           <div className="flex flex-wrap gap-3">
@@ -2227,14 +2261,6 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
             >
               <Zap className="w-4 h-4" />
               {tr(lang, 'Hire Workers Now', 'तुरंत कामगार हायर करें', 'तात्काळ कामगार हायर करा')}
-            </button>
-            <button
-              type="button"
-              onClick={() => onNavigate('transport')}
-              className="inline-flex items-center gap-1.5 px-5 py-2.5 rounded-md bg-[#15803D] text-white text-sm font-semibold hover:bg-emerald-800 cursor-pointer"
-            >
-              <Bike className="w-4 h-4" />
-              {tr(lang, 'Local Transport & Bike Taxi', 'लोकल ट्रांसपोर्ट व बाइक टैक्सी', 'लोकल ट्रान्सपोर्ट व बाईक टॅक्सी')}
             </button>
             <button
               type="button"
@@ -2267,394 +2293,18 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
       .filter(Boolean)
       .join(', ');
 
+  const sortedApplications = [...applications].sort((a, b) => {
+    if (highlightedJobId) {
+      const aMatch = a.jobId === highlightedJobId ? 1 : 0;
+      const bMatch = b.jobId === highlightedJobId ? 1 : 0;
+      if (aMatch !== bMatch) return bMatch - aMatch;
+    }
+    return 0;
+  });
+
   return (
-    <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-10 space-y-6">
-      {/* PINNED AT VERY TOP: Frequent Customer Profile, Saved Location & 1-Tap Re-Order */}
-      <section className="bg-white border-2 border-[#0B3B75] rounded-lg overflow-hidden shadow-sm">
-        <div className="bg-[#0B3B75] px-5 py-3 flex flex-wrap items-center justify-between gap-2 text-white border-b-2 border-[#E06D1B]">
-          <div className="flex items-center gap-2">
-            <History className="w-4 h-4 text-amber-300" />
-            <h2 className="font-display text-sm sm:text-base font-bold">
-              {tr(
-                lang,
-                'Frequent Customer Profile · Saved Location & 1-Click Re-Order',
-                'नियमित ग्राहक प्रोफ़ाइल · सहेजा गया पता व 1-क्लिक री-ऑर्डर',
-                'नियमित ग्राहक प्रोफाईल · पत्ता व १-क्लिक पुन्हा ऑर्डर (सर्वात वर)'
-              )}
-            </h2>
-          </div>
-          <div className="flex items-center gap-2 text-xs font-mono-tabular">
-            <span className="px-2 py-0.5 rounded bg-white/15 text-amber-200 font-bold">
-              {frequentStats.totalOrders}{' '}
-              {tr(lang, 'Orders', 'ऑर्डर', 'ऑर्डर')}
-            </span>
-            {frequentStats.totalOrders >= 2 && (
-              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#15803D] text-white font-bold">
-                <BookmarkCheck className="w-3.5 h-3.5" />
-                {tr(lang, 'Frequent Customer', 'नियमित ग्राहक', 'नियमित ग्राहक')}
-              </span>
-            )}
-          </div>
-        </div>
-
-        <div className="p-5 space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
-            <div className="md:col-span-7 space-y-1">
-              <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                {tr(lang, 'Saved Work / Pickup Location', 'सहेजा गया कार्य / पिकअप पता', 'जतन केलेला पत्ता (कामाचे ठिकाण)')}
-              </div>
-              <div className="flex items-center gap-2 text-sm font-bold text-[#0B3B75]">
-                <MapPin className="w-4 h-4 text-[#E06D1B] shrink-0" />
-                <span>
-                  {savedLocDisplay ||
-                    tr(
-                      lang,
-                      'No default GPS location saved yet',
-                      'अभी तक कोई डिफ़ॉल्ट GPS पता नहीं सहेजा गया',
-                      'अद्याप डीफॉल्ट GPS पत्ता जतन केलेला नाही'
-                    )}
-                </span>
-              </div>
-              {frequentStats.latestOrderTitle && (
-                <p className="text-xs text-slate-600">
-                  {tr(lang, 'Last Order:', 'पिछला ऑर्डर:', 'शेवटची ऑर्डर:')}{' '}
-                  <strong className="text-slate-800">{frequentStats.latestOrderTitle}</strong>
-                </p>
-              )}
-            </div>
-
-            <div className="md:col-span-5 flex flex-wrap md:justify-end gap-2">
-              <button
-                type="button"
-                disabled={gpsUpdating}
-                onClick={handleUpdateSavedGps}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded border border-slate-300 bg-slate-50 text-xs font-bold text-[#0B3B75] hover:bg-slate-100 cursor-pointer disabled:opacity-60"
-              >
-                <Crosshair className="w-3.5 h-3.5 text-[#15803D]" />
-                {gpsUpdating
-                  ? tr(lang, 'Detecting GPS...', 'GPS खोज रहे हैं...', 'GPS शोधत आहे...')
-                  : tr(lang, 'Update GPS Pin', 'GPS लोकेशन अपडेट करें', 'GPS पत्ता अपडेट करा')}
-              </button>
-              <button
-                type="button"
-                onClick={() => onNavigate('hire')}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded bg-[#E06D1B] text-white text-xs font-bold hover:bg-[#c55b10] cursor-pointer"
-              >
-                <Zap className="w-3.5 h-3.5" />
-                {tr(lang, 'Hire Worker', 'कामगार हायर', 'कामगार हायर')}
-              </button>
-              <button
-                type="button"
-                onClick={() => onNavigate('transport')}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded bg-[#15803D] text-white text-xs font-bold hover:bg-emerald-800 cursor-pointer"
-              >
-                <Bike className="w-3.5 h-3.5" />
-                {tr(lang, 'Book Transport', 'वाहन बुक करें', 'वाहन बुक करा')}
-              </button>
-            </div>
-          </div>
-
-          {locNotice && (
-            <div className="px-3 py-2 rounded bg-blue-50 border border-blue-200 text-xs font-medium text-[#0B3B75]">
-              {locNotice}
-            </div>
-          )}
-
-          {(frequentStats.workerCats.length > 0 || frequentStats.vehicleTypes.length > 0) && (
-            <div className="pt-3 border-t border-slate-200 grid grid-cols-1 md:grid-cols-2 gap-4">
-              {frequentStats.workerCats.length > 0 && (
-                <div className="space-y-1.5">
-                  <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                    {tr(lang, 'Frequently Hired Workers (1-Click Re-Hire):', 'अक्सर हायर किए जाने वाले कामगार:', 'वारंवार हायर केलेले कामगार (पुन्हा ऑर्डर):')}
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {frequentStats.workerCats.map((cat) => (
-                      <button
-                        key={cat}
-                        type="button"
-                        onClick={() => onNavigate('hire', cat)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded bg-amber-50 border border-amber-300 text-xs font-bold text-[#0B3B75] hover:bg-amber-100 cursor-pointer"
-                      >
-                        <Zap className="w-3 h-3 text-[#E06D1B]" />
-                        {cat}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-
-              {frequentStats.vehicleTypes.length > 0 && (
-                <div className="space-y-1.5">
-                  <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
-                    {tr(lang, 'Frequent Local Transport (1-Click Re-Book):', 'अक्सर बुक किए जाने वाले वाहन:', 'वारंवार बुक केलेली वाहने (पुन्हा ऑर्डर):')}
-                  </div>
-                  <div className="flex flex-wrap gap-1.5">
-                    {frequentStats.vehicleTypes.map((vt) => (
-                      <button
-                        key={vt}
-                        type="button"
-                        onClick={() => onNavigate('transport', vt)}
-                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded bg-emerald-50 border border-emerald-300 text-xs font-bold text-[#15803D] hover:bg-emerald-100 cursor-pointer"
-                      >
-                        <Car className="w-3 h-3" />
-                        {getVehicleTypeLabel(vt, lang)}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      </section>
-
-      <div className="bg-white border border-slate-200 rounded-lg p-6 sm:p-8 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
-        <div className="flex items-start gap-4">
-          <SecureAvatar
-            name={employerProfile?.businessName || user.displayName || 'Customer'}
-            photoDocId={employerPrivate?.photoDocId}
-            sizeClass="w-16 h-16"
-            textSizeClass="text-xl"
-          />
-          <div className="space-y-1.5">
-            <p className="text-xs font-mono-tabular font-semibold text-[#C25E00]">
-              {employerProfile ? `ID: ${employerProfile.registrationId} · ` : ''}
-              {t.dashboards.profileStatus}:{' '}
-              <span
-                className={
-                  employerProfile?.verificationStatus === 'verified'
-                    ? 'text-[#15803D]'
-                    : employerProfile?.verificationStatus === 'suspended'
-                    ? 'text-red-700'
-                    : 'text-amber-700'
-                }
-              >
-                {verStatusLabel}
-              </span>
-            </p>
-            <h1 className="font-display text-2xl sm:text-3xl font-bold text-[#0B3B75]">
-              {employerProfile?.businessName || user.displayName || user.email}
-            </h1>
-            <p className="text-sm text-slate-600">
-              {employerProfile
-                ? `${employerProfile.businessType} · ${employerProfile.industryCategory} · ${employerProfile.district}, ${employerProfile.state}`
-                : tr(
-                    lang,
-                    'Instant Hire Customer · Active Bookings & Worker Responses',
-                    'त्वरित हायर ग्राहक · सक्रिय बुकिंग एवं कामगार प्रतिक्रिया',
-                    'तात्काळ हायर ग्राहक · सक्रिय बुकिंग व कामगारांचे प्रतिसाद'
-                  )}
-            </p>
-          </div>
-        </div>
-
-        <div className="flex flex-wrap items-center gap-3">
-          <button
-            type="button"
-            onClick={() => onNavigate('hire')}
-            className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-md bg-[#E06D1B] text-white text-sm font-semibold hover:bg-[#c55b10] cursor-pointer"
-          >
-            <Zap className="w-4 h-4" />
-            {tr(lang, 'Hire Workers', 'कामगार हायर करें', 'कामगार हायर करा')}
-          </button>
-          <button
-            type="button"
-            onClick={() => onNavigate('transport')}
-            className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-md bg-[#15803D] text-white text-sm font-semibold hover:bg-emerald-800 cursor-pointer"
-          >
-            <Bike className="w-4 h-4" />
-            {tr(lang, 'Local Transport', 'लोकल ट्रांसपोर्ट', 'लोकल ट्रान्सपोर्ट')}
-          </button>
-          <button
-            type="button"
-            onClick={() => onNavigate(employerProfile ? 'post-job' : 'register-employer')}
-            className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-md bg-[#0B3B75] text-white text-sm font-semibold hover:bg-slate-800 cursor-pointer"
-          >
-            <PlusCircle className="w-4 h-4" />
-            {employerProfile ? t.jobs.postTitle : t.nav.employerReg}
-          </button>
-          {employerProfile && (
-            <button
-              type="button"
-              onClick={() => onNavigate('register-employer')}
-              className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-md border border-slate-300 bg-white text-xs font-semibold text-[#0B3B75] hover:bg-slate-50 cursor-pointer"
-            >
-              {tr(lang, 'Update Profile / Photo', 'प्रोफ़ाइल / फोटो बदलें', 'प्रोफाईल / फोटो बदला')}
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={handleExportEmployerReport}
-            className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-md border border-slate-300 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
-          >
-            <Download className="w-3.5 h-3.5" />
-            {t.dashboards.exportCsv}
-          </button>
-        </div>
-      </div>
-
-      {/* Official Digital Employer Registration Certificate (when registered as formal employer) */}
-      {employerProfile && (
-      <section className="bg-white border border-slate-200 rounded-lg p-6 space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div>
-            <h2 className="font-display text-lg font-bold text-[#0B3B75]">
-              {tr(lang, 'Employer Registration Certificate', 'नियोक्ता पंजीकरण प्रमाणपत्र', 'नियोक्ता नोंदणी प्रमाणपत्र')}
-            </h2>
-            <p className="text-xs text-slate-500">
-              {tr(
-                lang,
-                'Verified digital identification for ROJGAR SETU job postings and workforce outreach.',
-                'रोजगार सेतु पर कार्य पोस्टिंग के लिए डिजिटल पहचान प्रमाण।',
-                'रोजगार सेतुवर कामाच्या जाहिरातींसाठी डिजिटल ओळख प्रमाणपत्र.'
-              )}
-            </p>
-          </div>
-          <button
-            type="button"
-            onClick={() => window.print()}
-            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md border border-slate-300 bg-white text-xs font-semibold text-[#0B3B75] hover:bg-slate-50 cursor-pointer self-start sm:self-center print:hidden"
-          >
-            <Printer className="w-3.5 h-3.5" />
-            {tr(lang, 'Print Certificate', 'प्रमाणपत्र प्रिंट करें', 'प्रमाणपत्र प्रिंट करा')}
-          </button>
-        </div>
-
-        <div className="max-w-xl rounded-lg border-2 border-[#0B3B75] overflow-hidden bg-white">
-          <div className="h-1.5 w-full grid grid-cols-3" aria-hidden="true">
-            <div className="bg-[#E06D1B]" />
-            <div className="bg-slate-100" />
-            <div className="bg-[#15803D]" />
-          </div>
-          <div className="p-4 sm:p-5 bg-slate-50/70 border-b border-slate-200 flex items-center justify-between gap-4">
-            <RojgarSetuLogo variant="horizontal" className="scale-[0.82] origin-left" />
-            <div className="text-right shrink-0">
-              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                {tr(lang, 'Employer ID', 'नियोक्ता आईडी', 'नियोक्ता आयडी')}
-              </div>
-              <div className="font-mono-tabular text-xs sm:text-sm font-extrabold text-[#0B3B75]">
-                {employerProfile.registrationId}
-              </div>
-            </div>
-          </div>
-          <div className="p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center gap-4">
-            <SecureAvatar
-              name={employerProfile.businessName}
-              photoDocId={employerPrivate?.photoDocId}
-              sizeClass="w-14 h-14"
-              textSizeClass="text-base"
-            />
-            <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs w-full">
-              <div>
-                <div className="text-slate-500 font-medium">{tr(lang, 'Organisation / Business', 'संस्था / व्यवसाय', 'संस्था / व्यवसाय')}</div>
-                <div className="font-display text-sm font-bold text-[#0B3B75] mt-0.5">{employerProfile.businessName}</div>
-              </div>
-              <div>
-                <div className="text-slate-500 font-medium">{tr(lang, 'Category', 'श्रेणी', 'श्रेणी')}</div>
-                <div className="font-semibold text-slate-800 mt-0.5">
-                  {employerProfile.businessType} · {employerProfile.industryCategory}
-                </div>
-              </div>
-              <div>
-                <div className="text-slate-500 font-medium">{tr(lang, 'Location', 'स्थान', 'ठिकाण')}</div>
-                <div className="font-semibold text-slate-800 mt-0.5">
-                  {employerProfile.district}, {employerProfile.state}
-                </div>
-              </div>
-              <div>
-                <div className="text-slate-500 font-medium">{t.dashboards.profileStatus}</div>
-                <div className="font-semibold text-[#15803D] mt-0.5">{verStatusLabel}</div>
-              </div>
-            </div>
-          </div>
-          <div className="px-4 sm:px-5 py-2 bg-[#072A54] text-[10px] text-blue-100 flex items-center justify-between">
-            <span>ABUJMAD FOUNDATION · Social-Impact Workforce Initiative</span>
-            <span>Not a Government Document</span>
-          </div>
-        </div>
-      </section>
-      )}
-
-      {/* Posted Jobs */}
-      <section className="bg-white border border-slate-200 rounded-lg p-6 space-y-4">
-        <h2 className="font-display text-lg font-bold text-[#0B3B75]">
-          {t.dashboards.postedJobs} ({myJobs.length})
-        </h2>
-
-        {myJobs.length === 0 ? (
-          <p className="text-sm text-slate-500 py-3">{t.common.noRecords}</p>
-        ) : (
-          <div className="divide-y divide-slate-200">
-            {myJobs.map((job) => {
-              const currentRadiusKm = normalizeRadiusKm(job.currentRadiusKm ?? job.initialRadiusKm ?? 5, 5);
-              const nextRadiusKm = getNextRadiusStage(currentRadiusKm);
-              const notifiedCount = Array.isArray(job.notifiedWorkerUids) ? job.notifiedWorkerUids.length : 0;
-              return (
-                <div key={job.id} className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="space-y-1">
-                    <p className="text-xs font-mono-tabular text-slate-500 flex flex-wrap items-center gap-2">
-                      <span>
-                        {job.category} · <strong className="uppercase text-[#0B3B75]">{job.status}</strong> ·{' '}
-                        {job.applicationsCount} {tr(lang, 'applications', 'आवेदन', 'अर्ज')}
-                      </span>
-                      <span className="px-2 py-0.5 rounded bg-blue-50 text-[#0B3B75] font-bold">
-                        Radius: {currentRadiusKm} km · {notifiedCount} alerted
-                      </span>
-                    </p>
-                    <h3 className="font-display text-base font-bold text-[#0B3B75]">{job.title}</h3>
-                    <p className="text-xs text-slate-600">
-                      {job.workLocationLabel}, {job.district} · ₹{job.offeredWage.toLocaleString('en-IN')} / {job.wageUnit} ·{' '}
-                      {job.workersRequired} {t.jobs.workersUnit}
-                    </p>
-                  </div>
-                  {job.status === 'open' && (
-                    <div className="flex flex-wrap gap-2 self-start sm:self-center">
-                      {nextRadiusKm && (
-                        <button
-                          type="button"
-                          disabled={expandingJobId === job.id}
-                          onClick={() => void handleExpandJobRadius(job)}
-                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-[#E06D1B] text-white text-xs font-bold hover:bg-[#c55b10] disabled:opacity-60 cursor-pointer"
-                        >
-                          <Radar className="w-3.5 h-3.5" />
-                          <span>
-                            {expandingJobId === job.id
-                              ? tr(lang, 'Expanding...', 'बढ़ा रहे हैं...', 'वाढवत आहे...')
-                              : tr(
-                                  lang,
-                                  `Expand Radius → ${nextRadiusKm} km`,
-                                  `दायरा बढ़ाएं → ${nextRadiusKm} किमी`,
-                                  `परिसर वाढवा → ${nextRadiusKm} किमी`
-                                )}
-                          </span>
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        disabled={busyId === job.id}
-                        onClick={() => handleUpdateJobStatus(job, 'completed')}
-                        className="px-3 py-1.5 rounded-md bg-[#15803D] text-white text-xs font-semibold hover:bg-emerald-800 cursor-pointer"
-                      >
-                        {tr(lang, 'Mark Completed', 'पूर्ण चिह्नित करें', 'पूर्ण नोंदवा')}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={busyId === job.id}
-                        onClick={() => handleUpdateJobStatus(job, 'cancelled')}
-                        className="px-3 py-1.5 rounded-md border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
-                      >
-                        {t.common.cancel}
-                      </button>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </section>
-
-      {/* Real-Time Unread Notification Alert Banner */}
+    <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
+      {/* Real-Time Unread Notification Alert Banner with OPEN button */}
       {unreadNotificationsCount > 0 && (
         <section className="bg-amber-50 border-2 border-[#E06D1B] rounded-lg p-4 space-y-2.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
@@ -2679,18 +2329,32 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
               .map((n) => (
                 <div
                   key={n.id}
-                  onClick={() => void markNotificationRead(n.id)}
-                  className="bg-white border border-amber-200 rounded px-3 py-2 flex items-start justify-between gap-2 cursor-pointer hover:bg-amber-50/50"
+                  className="bg-white border border-amber-200 rounded px-3 py-2 flex items-center justify-between gap-3 hover:bg-amber-50/50"
                 >
-                  <div>
+                  <div className="min-w-0">
                     <div className="text-xs font-bold text-[#0B3B75]">{n.title}</div>
                     <p className="text-[11px] text-slate-600">{n.body}</p>
                   </div>
-                  <span className="text-[10px] font-bold text-[#C25E00] shrink-0">
-                    {n.dealStatus
-                      ? getVisibleDealStatusLabel(n.dealStatus, lang)
-                      : getToneChannelConfig(getToneTypeForEvent(n)).label[lang]}
-                  </span>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <span className="hidden sm:inline text-[10px] font-bold text-[#C25E00]">
+                      {n.dealStatus
+                        ? getVisibleDealStatusLabel(n.dealStatus, lang)
+                        : getToneChannelConfig(getToneTypeForEvent(n)).label[lang]}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        void markNotificationRead(n.id);
+                        if (onNavigateToTarget) {
+                          onNavigateToTarget('employer-dashboard', n.targetJobId, n.targetDemoJobId);
+                        }
+                        window.scrollTo({ top: 0, behavior: 'smooth' });
+                      }}
+                      className="px-3 py-1.5 rounded bg-[#0B3B75] text-white text-xs font-extrabold hover:bg-slate-800 cursor-pointer"
+                    >
+                      OPEN
+                    </button>
+                  </div>
                 </div>
               ))}
           </div>
@@ -2703,25 +2367,46 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
         </div>
       )}
 
-      {/* Received Offers & Applications */}
-      <section className="bg-white border border-slate-200 rounded-lg p-6 space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <h2 className="font-display text-lg font-bold text-[#0B3B75]">
-            {tr(lang, 'Worker Offers & Active Work', 'प्राप्त ऑफर एवं सक्रिय कार्य', 'आलेल्या ऑफर्स व सक्रिय काम')} ({applications.length})
-          </h2>
-          {applications.some((a) => a.status === 'applied') && (
-            <span className="px-2.5 py-1 rounded-full bg-amber-100 text-[#C25E00] text-xs font-bold">
-              {applications.filter((a) => a.status === 'applied').length}{' '}
-              {tr(lang, 'awaiting confirmation', 'पुष्टि बाकी', 'निश्चिती बाकी')}
-            </span>
-          )}
+      {/* TOP SECTION: Received Worker Offers, Active Work, Location Sharing, Chat & Post-Completion Rating */}
+      <section className="bg-white border-2 border-[#0B3B75] rounded-lg p-5 sm:p-6 space-y-4 shadow-sm">
+        <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="font-display text-lg sm:text-xl font-extrabold text-[#0B3B75]">
+              {tr(lang, 'Worker Offers & Active Work', 'प्राप्त ऑफर एवं सक्रिय कार्य', 'आलेल्या ऑफर्स व सक्रिय काम')} ({applications.length})
+            </h1>
+            {applications.some((a) => a.status === 'applied') && (
+              <span className="px-2.5 py-1 rounded-full bg-amber-100 text-[#C25E00] text-xs font-bold">
+                {applications.filter((a) => a.status === 'applied').length}{' '}
+                {tr(lang, 'awaiting acceptance', 'स्वीकृति बाकी', 'स्वीकृती बाकी')}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {highlightedJobId && onClearHighlightedJob && (
+              <button
+                type="button"
+                onClick={onClearHighlightedJob}
+                className="px-2.5 py-1.5 rounded border border-slate-300 text-xs font-semibold text-slate-600 hover:bg-slate-50 cursor-pointer"
+              >
+                {tr(lang, 'Show All', 'सभी दिखाएं', 'सर्व पहा')}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => onNavigate('hire')}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md bg-[#E06D1B] text-white text-xs font-extrabold hover:bg-[#c55b10] cursor-pointer"
+            >
+              <Zap className="w-3.5 h-3.5" />
+              {tr(lang, 'Hire', 'हायर करें', 'हायर करा')}
+            </button>
+          </div>
         </div>
 
-        {applications.length === 0 ? (
+        {sortedApplications.length === 0 ? (
           <p className="text-sm text-slate-500 py-3">{t.common.noRecords}</p>
         ) : (
           <div className="divide-y divide-slate-200">
-            {applications.map((app) => {
+            {sortedApplications.map((app) => {
               const dealStatus = getEffectiveDealStatus(app);
               const visibleStage = toVisibleDealStage(app);
               const visibleLabel = getVisibleDealStatusLabel(app, lang);
@@ -2733,8 +2418,21 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
                 workerInfo?.approxLat,
                 workerInfo?.approxLng
               );
+              const isSingleWorkerJob = (job?.workersRequired || 1) <= 1;
+              const anotherWorkerAlreadyAccepted =
+                isSingleWorkerJob &&
+                Boolean(job?.acceptedApplicationId) &&
+                job?.acceptedApplicationId !== app.id;
+              const isHighlighted = Boolean(highlightedJobId && app.jobId === highlightedJobId);
+              const selectedPostRating = postRatings[app.id] ?? 5;
+
               return (
-                <div key={app.id} className="py-4 space-y-3">
+                <div
+                  key={app.id}
+                  className={`py-4 space-y-3 ${
+                    isHighlighted ? 'bg-amber-50/60 -mx-3 px-3 rounded-lg border border-amber-300' : ''
+                  }`}
+                >
                   <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
                     <div className="flex items-start gap-3">
                       <SecureAvatar
@@ -2827,16 +2525,27 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
                             <MessageSquare className="w-4 h-4" />
                             <span>{tr(lang, 'CHAT', 'चैट', 'चॅट')}</span>
                           </button>
-                          <button
-                            type="button"
-                            disabled={busyId === app.id}
-                            onClick={() => void handleConfirmWorkOffer(app)}
-                            className="min-h-[48px] px-5 py-2.5 rounded-md bg-[#15803D] text-white text-sm font-extrabold hover:bg-emerald-800 disabled:opacity-60 whitespace-nowrap cursor-pointer"
-                          >
-                            {busyId === app.id
-                              ? tr(lang, 'Accepting...', 'स्वीकार हो रहा है...', 'स्वीकारत आहे...')
-                              : tr(lang, 'ACCEPT OFFER', 'ऑफर स्वीकारें', 'ऑफर स्वीकारा')}
-                          </button>
+                          {anotherWorkerAlreadyAccepted ? (
+                            <span className="px-3 py-2 rounded-md bg-slate-100 border border-slate-300 text-xs font-semibold text-slate-600">
+                              {tr(
+                                lang,
+                                'Worker Already Selected',
+                                'कामगार पहले ही चुना जा चुका है',
+                                'कामगार आधीच निवडला आहे'
+                              )}
+                            </span>
+                          ) : (
+                            <button
+                              type="button"
+                              disabled={busyId === app.id}
+                              onClick={() => void handleConfirmWorkOffer(app)}
+                              className="min-h-[48px] px-5 py-2.5 rounded-md bg-[#15803D] text-white text-sm font-extrabold hover:bg-emerald-800 disabled:opacity-60 whitespace-nowrap cursor-pointer"
+                            >
+                              {busyId === app.id
+                                ? tr(lang, 'Accepting...', 'स्वीकार हो रहा है...', 'स्वीकारत आहे...')
+                                : tr(lang, 'ACCEPT OFFER', 'ऑफर स्वीकारें', 'ऑफर स्वीकारा')}
+                            </button>
+                          )}
                         </>
                       )}
 
@@ -2845,9 +2554,9 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
                           <button
                             type="button"
                             onClick={() => setCompletingAppId(app.id)}
-                            className="min-h-[48px] px-4 py-2.5 rounded-md bg-[#15803D] text-white text-xs font-bold hover:bg-emerald-800 whitespace-nowrap cursor-pointer"
+                            className="min-h-[46px] px-4 py-2 rounded-md bg-[#15803D] text-white text-xs font-extrabold hover:bg-emerald-800 whitespace-nowrap cursor-pointer"
                           >
-                            {t.dashboards.completeBtn}
+                            {tr(lang, 'WORK DONE & RATE', 'काम पूर्ण व रेटिंग', 'काम पूर्ण व रेटिंग')}
                           </button>
                         )}
 
@@ -2856,20 +2565,107 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
                           type="button"
                           disabled={busyId === app.id}
                           onClick={() => void handleCustomerCancelDeal(app)}
-                          className="min-h-[48px] px-4 py-2.5 rounded-md border border-red-300 text-xs font-semibold text-red-700 hover:bg-red-50 whitespace-nowrap cursor-pointer"
+                          className="min-h-[46px] px-4 py-2 rounded-md border border-red-300 text-xs font-semibold text-red-700 hover:bg-red-50 whitespace-nowrap cursor-pointer"
                         >
                           {tr(lang, 'Cancel', 'रद्द करें', 'रद्द करा')}
                         </button>
                       )}
 
-                      {app.status === 'work_completed' && (
-                        <span className="text-xs font-semibold text-[#15803D] inline-flex items-center gap-1">
+                      {app.status === 'work_completed' && typeof app.workerRating === 'number' && (
+                        <span className="px-3 py-1.5 rounded-md bg-emerald-50 border border-emerald-300 text-xs font-bold text-[#15803D] inline-flex items-center gap-1">
                           <CheckCircle2 className="w-4 h-4" />
-                          {app.workerRating || 5}/5
+                          {tr(lang, 'COMPLETED', 'पूर्ण', 'पूर्ण')} · ★ {app.workerRating}/5
                         </span>
                       )}
                     </div>
                   </div>
+
+                  {/* Customer Rating Form shown automatically after Worker clicks WORK DONE */}
+                  {app.status === 'work_completed' && typeof app.workerRating !== 'number' && (
+                    <form
+                      onSubmit={(e) => handleSubmitPostCompletionRating(e, app)}
+                      className="bg-amber-50 border-2 border-[#E06D1B] rounded-lg p-4 space-y-3"
+                    >
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <div className="text-sm font-extrabold text-[#0B3B75]">
+                            {tr(
+                              lang,
+                              `Work Done! Rate ${app.workerName}`,
+                              `काम पूर्ण हुआ! ${app.workerName} को रेटिंग दें`,
+                              `काम पूर्ण झाले! ${app.workerName} ला रेटिंग द्या`
+                            )}
+                          </div>
+                          <p className="text-xs text-slate-600">
+                            {tr(
+                              lang,
+                              'Select 1 to 5 stars and optional feedback to save on the worker profile.',
+                              'कामगार के प्रोफ़ाइल पर सहेजने के लिए 1 से 5 स्टार और वैकल्पिक फीडबैक दें।',
+                              'कामगाराच्या प्रोफाईलवर जतन करण्यासाठी 1 ते 5 स्टार आणि ऐच्छिक अभिप्राय द्या.'
+                            )}
+                          </p>
+                        </div>
+                        <span className="px-2.5 py-0.5 rounded bg-[#0B3B75] text-white text-[11px] font-bold">
+                          {tr(lang, 'COMPLETED', 'पूर्ण', 'पूर्ण')}
+                        </span>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        {[1, 2, 3, 4, 5].map((starNum) => (
+                          <button
+                            key={`star-${app.id}-${starNum}`}
+                            type="button"
+                            onClick={() =>
+                              setPostRatings((prev) => ({ ...prev, [app.id]: starNum }))
+                            }
+                            className={`min-h-[42px] px-3 py-1.5 rounded-md border text-xs font-extrabold inline-flex items-center gap-1 cursor-pointer ${
+                              selectedPostRating >= starNum
+                                ? 'bg-amber-400 border-amber-500 text-[#072A54]'
+                                : 'bg-white border-slate-300 text-slate-600 hover:bg-slate-50'
+                            }`}
+                          >
+                            <Star className="w-3.5 h-3.5" />
+                            <span>{starNum}</span>
+                          </button>
+                        ))}
+                        <span className="text-xs font-bold text-[#0B3B75] ml-1">
+                          {selectedPostRating} / 5
+                        </span>
+                      </div>
+
+                      <div className="flex flex-col sm:flex-row gap-2">
+                        <input
+                          type="text"
+                          value={postFeedbacks[app.id] || ''}
+                          onChange={(e) =>
+                            setPostFeedbacks((prev) => ({ ...prev, [app.id]: e.target.value }))
+                          }
+                          placeholder={tr(
+                            lang,
+                            'Optional feedback about work quality...',
+                            'काम की गुणवत्ता के बारे में वैकल्पिक फीडबैक...',
+                            'कामाच्या गुणवत्तेबद्दल ऐच्छिक अभिप्राय...'
+                          )}
+                          className="flex-1 min-h-[44px] px-3 py-2 border border-slate-300 rounded-md text-xs bg-white"
+                        />
+                        <button
+                          type="submit"
+                          disabled={busyId === app.id}
+                          className="min-h-[44px] px-5 py-2 rounded-md bg-[#15803D] text-white text-xs sm:text-sm font-extrabold hover:bg-emerald-800 disabled:opacity-60 cursor-pointer whitespace-nowrap"
+                        >
+                          {busyId === app.id
+                            ? tr(lang, 'Saving...', 'सहेजा जा रहा है...', 'जतन करत आहे...')
+                            : tr(lang, 'SUBMIT RATING', 'रेटिंग सबमिट करें', 'रेटिंग सबमिट करा')}
+                        </button>
+                      </div>
+                    </form>
+                  )}
+
+                  {app.status === 'work_completed' && app.employerFeedback && (
+                    <p className="text-xs text-slate-700 bg-slate-50 border border-slate-200 rounded px-3 py-2">
+                      <strong>{tr(lang, 'Your Feedback:', 'आपकी प्रतिक्रिया:', 'तुमचा अभिप्राय:')}</strong> “{app.employerFeedback}”
+                    </p>
+                  )}
 
                   {completingAppId === app.id && (
                     <form
@@ -2936,24 +2732,357 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
         )}
       </section>
 
-      {/* Customer Local Transport Bookings */}
-      <section className="bg-white border border-slate-200 rounded-lg p-6 space-y-4">
-        <div className="flex items-center justify-between">
-          <h2 className="font-display text-lg font-bold text-[#0B3B75]">
-            {tr(lang, 'My Local Transport & Bike Taxi Bookings', 'मेरी स्थानीय वाहन व बाइक टैक्सी बुकिंग', 'माझी लोकल ट्रान्सपोर्ट व बाईक टॅक्सी बुकिंग')} ({customerVehicleBookings.length})
-          </h2>
+      {/* Customer Profile Header (Normal Hiring Only — No Bike/Transport Hire buttons) */}
+      <div className="bg-white border border-slate-200 rounded-lg p-6 sm:p-8 flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+        <div className="flex items-start gap-4">
+          <SecureAvatar
+            name={employerProfile?.businessName || user.displayName || 'Customer'}
+            photoDocId={employerPrivate?.photoDocId}
+            sizeClass="w-16 h-16"
+            textSizeClass="text-xl"
+          />
+          <div className="space-y-1.5">
+            <p className="text-xs font-mono-tabular font-semibold text-[#C25E00]">
+              {employerProfile ? `ID: ${employerProfile.registrationId} · ` : ''}
+              {t.dashboards.profileStatus}:{' '}
+              <span
+                className={
+                  employerProfile?.verificationStatus === 'verified'
+                    ? 'text-[#15803D]'
+                    : employerProfile?.verificationStatus === 'suspended'
+                    ? 'text-red-700'
+                    : 'text-amber-700'
+                }
+              >
+                {verStatusLabel}
+              </span>
+            </p>
+            <h2 className="font-display text-2xl sm:text-3xl font-bold text-[#0B3B75]">
+              {employerProfile?.businessName || user.displayName || user.email}
+            </h2>
+            <p className="text-sm text-slate-600">
+              {employerProfile
+                ? `${employerProfile.businessType} · ${employerProfile.industryCategory} · ${employerProfile.district}, ${employerProfile.state}`
+                : tr(
+                    lang,
+                    'Instant Hire Customer · Active Bookings & Worker Responses',
+                    'त्वरित हायर ग्राहक · सक्रिय बुकिंग एवं कामगार प्रतिक्रिया',
+                    'तात्काळ हायर ग्राहक · सक्रिय बुकिंग व कामगारांचे प्रतिसाद'
+                  )}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
-            onClick={() => onNavigate('transport')}
-            className="text-xs font-semibold text-[#15803D] hover:underline cursor-pointer"
+            onClick={() => onNavigate('hire')}
+            className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-md bg-[#E06D1B] text-white text-sm font-semibold hover:bg-[#c55b10] cursor-pointer"
           >
-            {tr(lang, 'Book Another Vehicle', 'नया वाहन बुक करें', 'नवीन वाहन बुक करा')} →
+            <Zap className="w-4 h-4" />
+            {tr(lang, 'Hire Workers', 'कामगार हायर करें', 'कामगार हायर करा')}
+          </button>
+          <button
+            type="button"
+            onClick={() => onNavigate(employerProfile ? 'post-job' : 'register-employer')}
+            className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-md bg-[#0B3B75] text-white text-sm font-semibold hover:bg-slate-800 cursor-pointer"
+          >
+            <PlusCircle className="w-4 h-4" />
+            {employerProfile ? t.jobs.postTitle : t.nav.employerReg}
+          </button>
+          {employerProfile && (
+            <button
+              type="button"
+              onClick={() => onNavigate('register-employer')}
+              className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-md border border-slate-300 bg-white text-xs font-semibold text-[#0B3B75] hover:bg-slate-50 cursor-pointer"
+            >
+              {tr(lang, 'Update Profile / Photo', 'प्रोफ़ाइल / फोटो बदलें', 'प्रोफाईल / फोटो बदला')}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={handleExportEmployerReport}
+            className="inline-flex items-center gap-1.5 px-3 py-2.5 rounded-md border border-slate-300 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+          >
+            <Download className="w-3.5 h-3.5" />
+            {t.dashboards.exportCsv}
+          </button>
+        </div>
+      </div>
+
+      {/* Saved Location & 1-Click Re-Hire (Normal Worker Services Only) */}
+      <section className="bg-white border border-slate-200 rounded-lg overflow-hidden shadow-sm">
+        <div className="bg-[#0B3B75] px-5 py-3 flex flex-wrap items-center justify-between gap-2 text-white border-b-2 border-[#E06D1B]">
+          <div className="flex items-center gap-2">
+            <History className="w-4 h-4 text-amber-300" />
+            <h2 className="font-display text-sm sm:text-base font-bold">
+              {tr(
+                lang,
+                'Saved Location & 1-Click Re-Hire',
+                'सहेजा गया पता व 1-क्लिक री-हायर',
+                'जतन केलेला पत्ता व १-क्लिक पुन्हा हायर'
+              )}
+            </h2>
+          </div>
+          <div className="flex items-center gap-2 text-xs font-mono-tabular">
+            <span className="px-2 py-0.5 rounded bg-white/15 text-amber-200 font-bold">
+              {frequentStats.totalOrders}{' '}
+              {tr(lang, 'Orders', 'ऑर्डर', 'ऑर्डर')}
+            </span>
+            {frequentStats.totalOrders >= 2 && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#15803D] text-white font-bold">
+                <BookmarkCheck className="w-3.5 h-3.5" />
+                {tr(lang, 'Frequent Customer', 'नियमित ग्राहक', 'नियमित ग्राहक')}
+              </span>
+            )}
+          </div>
+        </div>
+
+        <div className="p-5 space-y-4">
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-center">
+            <div className="md:col-span-7 space-y-1">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                {tr(lang, 'Saved Work Location', 'सहेजा गया कार्य पता', 'जतन केलेला कामाचा पत्ता')}
+              </div>
+              <div className="flex items-center gap-2 text-sm font-bold text-[#0B3B75]">
+                <MapPin className="w-4 h-4 text-[#E06D1B] shrink-0" />
+                <span>
+                  {savedLocDisplay ||
+                    tr(
+                      lang,
+                      'No default GPS location saved yet',
+                      'अभी तक कोई डिफ़ॉल्ट GPS पता नहीं सहेजा गया',
+                      'अद्याप डीफॉल्ट GPS पत्ता जतन केलेला नाही'
+                    )}
+                </span>
+              </div>
+              {frequentStats.latestOrderTitle && (
+                <p className="text-xs text-slate-600">
+                  {tr(lang, 'Last Order:', 'पिछला ऑर्डर:', 'शेवटची ऑर्डर:')}{' '}
+                  <strong className="text-slate-800">{frequentStats.latestOrderTitle}</strong>
+                </p>
+              )}
+            </div>
+
+            <div className="md:col-span-5 flex flex-wrap md:justify-end gap-2">
+              <button
+                type="button"
+                disabled={gpsUpdating}
+                onClick={handleUpdateSavedGps}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded border border-slate-300 bg-slate-50 text-xs font-bold text-[#0B3B75] hover:bg-slate-100 cursor-pointer disabled:opacity-60"
+              >
+                <Crosshair className="w-3.5 h-3.5 text-[#15803D]" />
+                {gpsUpdating
+                  ? tr(lang, 'Detecting GPS...', 'GPS खोज रहे हैं...', 'GPS शोधत आहे...')
+                  : tr(lang, 'Update GPS Pin', 'GPS लोकेशन अपडेट करें', 'GPS पत्ता अपडेट करा')}
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigate('hire')}
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded bg-[#E06D1B] text-white text-xs font-bold hover:bg-[#c55b10] cursor-pointer"
+              >
+                <Zap className="w-3.5 h-3.5" />
+                {tr(lang, 'Hire Worker', 'कामगार हायर', 'कामगार हायर')}
+              </button>
+            </div>
+          </div>
+
+          {locNotice && (
+            <div className="px-3 py-2 rounded bg-blue-50 border border-blue-200 text-xs font-medium text-[#0B3B75]">
+              {locNotice}
+            </div>
+          )}
+
+          {frequentStats.workerCats.length > 0 && (
+            <div className="pt-3 border-t border-slate-200 space-y-1.5">
+              <div className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                {tr(lang, 'Frequently Hired Workers (1-Click Re-Hire):', 'अक्सर हायर किए जाने वाले कामगार:', 'वारंवार हायर केलेले कामगार (पुन्हा ऑर्डर):')}
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {frequentStats.workerCats.map((cat) => (
+                  <button
+                    key={cat}
+                    type="button"
+                    onClick={() => onNavigate('hire', cat)}
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded bg-amber-50 border border-amber-300 text-xs font-bold text-[#0B3B75] hover:bg-amber-100 cursor-pointer"
+                  >
+                    <Zap className="w-3 h-3 text-[#E06D1B]" />
+                    {cat}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* Posted Jobs */}
+      <section className="bg-white border border-slate-200 rounded-lg p-6 space-y-4">
+        <h2 className="font-display text-lg font-bold text-[#0B3B75]">
+          {t.dashboards.postedJobs} ({myJobs.length})
+        </h2>
+
+        {myJobs.length === 0 ? (
+          <p className="text-sm text-slate-500 py-3">{t.common.noRecords}</p>
+        ) : (
+          <div className="divide-y divide-slate-200">
+            {myJobs.map((job) => {
+              const currentRadiusKm = normalizeRadiusKm(job.currentRadiusKm ?? job.initialRadiusKm ?? 5, 5);
+              const nextRadiusKm = getNextRadiusStage(currentRadiusKm);
+              const notifiedCount = Array.isArray(job.notifiedWorkerUids) ? job.notifiedWorkerUids.length : 0;
+              return (
+                <div key={job.id} className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="space-y-1">
+                    <p className="text-xs font-mono-tabular text-slate-500 flex flex-wrap items-center gap-2">
+                      <span>
+                        {job.category} · <strong className="uppercase text-[#0B3B75]">{job.status}</strong> ·{' '}
+                        {job.applicationsCount} {tr(lang, 'applications', 'आवेदन', 'अर्ज')}
+                      </span>
+                      <span className="px-2 py-0.5 rounded bg-blue-50 text-[#0B3B75] font-bold">
+                        Radius: {currentRadiusKm} km · {notifiedCount} alerted
+                      </span>
+                    </p>
+                    <h3 className="font-display text-base font-bold text-[#0B3B75]">{job.title}</h3>
+                    <p className="text-xs text-slate-600">
+                      {job.workLocationLabel}, {job.district} · ₹{job.offeredWage.toLocaleString('en-IN')} / {job.wageUnit} ·{' '}
+                      {job.workersRequired} {t.jobs.workersUnit}
+                    </p>
+                  </div>
+                  {job.status === 'open' && (
+                    <div className="flex flex-wrap gap-2 self-start sm:self-center">
+                      {nextRadiusKm && (
+                        <button
+                          type="button"
+                          disabled={expandingJobId === job.id}
+                          onClick={() => void handleExpandJobRadius(job)}
+                          className="inline-flex items-center gap-1 px-3 py-1.5 rounded-md bg-[#E06D1B] text-white text-xs font-bold hover:bg-[#c55b10] disabled:opacity-60 cursor-pointer"
+                        >
+                          <Radar className="w-3.5 h-3.5" />
+                          <span>
+                            {expandingJobId === job.id
+                              ? tr(lang, 'Expanding...', 'बढ़ा रहे हैं...', 'वाढवत आहे...')
+                              : tr(
+                                  lang,
+                                  `Expand Radius → ${nextRadiusKm} km`,
+                                  `दायरा बढ़ाएं → ${nextRadiusKm} किमी`,
+                                  `परिसर वाढवा → ${nextRadiusKm} किमी`
+                                )}
+                          </span>
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        disabled={busyId === job.id}
+                        onClick={() => handleUpdateJobStatus(job, 'completed')}
+                        className="px-3 py-1.5 rounded-md bg-[#15803D] text-white text-xs font-semibold hover:bg-emerald-800 cursor-pointer"
+                      >
+                        {tr(lang, 'Mark Completed', 'पूर्ण चिह्नित करें', 'पूर्ण नोंदवा')}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={busyId === job.id}
+                        onClick={() => handleUpdateJobStatus(job, 'cancelled')}
+                        className="px-3 py-1.5 rounded-md border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                      >
+                        {t.common.cancel}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </section>
+
+      {/* Official Digital Employer Registration Certificate (when registered as formal employer) */}
+      {employerProfile && (
+      <section className="bg-white border border-slate-200 rounded-lg p-6 space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div>
+            <h2 className="font-display text-lg font-bold text-[#0B3B75]">
+              {tr(lang, 'Employer Registration Certificate', 'नियोक्ता पंजीकरण प्रमाणपत्र', 'नियोक्ता नोंदणी प्रमाणपत्र')}
+            </h2>
+            <p className="text-xs text-slate-500">
+              {tr(
+                lang,
+                'Verified digital identification for ROJGAR SETU job postings and workforce outreach.',
+                'रोजगार सेतु पर कार्य पोस्टिंग के लिए डिजिटल पहचान प्रमाण।',
+                'रोजगार सेतुवर कामाच्या जाहिरातींसाठी डिजिटल ओळख प्रमाणपत्र.'
+              )}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => window.print()}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md border border-slate-300 bg-white text-xs font-semibold text-[#0B3B75] hover:bg-slate-50 cursor-pointer self-start sm:self-center print:hidden"
+          >
+            <Printer className="w-3.5 h-3.5" />
+            {tr(lang, 'Print Certificate', 'प्रमाणपत्र प्रिंट करें', 'प्रमाणपत्र प्रिंट करा')}
           </button>
         </div>
 
-        {customerVehicleBookings.length === 0 ? (
-          <p className="text-sm text-slate-500 py-2">{t.common.noRecords}</p>
-        ) : (
+        <div className="max-w-xl rounded-lg border-2 border-[#0B3B75] overflow-hidden bg-white">
+          <div className="h-1.5 w-full grid grid-cols-3" aria-hidden="true">
+            <div className="bg-[#E06D1B]" />
+            <div className="bg-slate-100" />
+            <div className="bg-[#15803D]" />
+          </div>
+          <div className="p-4 sm:p-5 bg-slate-50/70 border-b border-slate-200 flex items-center justify-between gap-4">
+            <RojgarSetuLogo variant="horizontal" className="scale-[0.82] origin-left" />
+            <div className="text-right shrink-0">
+              <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                {tr(lang, 'Employer ID', 'नियोक्ता आईडी', 'नियोक्ता आयडी')}
+              </div>
+              <div className="font-mono-tabular text-xs sm:text-sm font-extrabold text-[#0B3B75]">
+                {employerProfile.registrationId}
+              </div>
+            </div>
+          </div>
+          <div className="p-4 sm:p-5 flex flex-col sm:flex-row items-start sm:items-center gap-4">
+            <SecureAvatar
+              name={employerProfile.businessName}
+              photoDocId={employerPrivate?.photoDocId}
+              sizeClass="w-14 h-14"
+              textSizeClass="text-base"
+            />
+            <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs w-full">
+              <div>
+                <div className="text-slate-500 font-medium">{tr(lang, 'Organisation / Business', 'संस्था / व्यवसाय', 'संस्था / व्यवसाय')}</div>
+                <div className="font-display text-sm font-bold text-[#0B3B75] mt-0.5">{employerProfile.businessName}</div>
+              </div>
+              <div>
+                <div className="text-slate-500 font-medium">{tr(lang, 'Category', 'श्रेणी', 'श्रेणी')}</div>
+                <div className="font-semibold text-slate-800 mt-0.5">
+                  {employerProfile.businessType} · {employerProfile.industryCategory}
+                </div>
+              </div>
+              <div>
+                <div className="text-slate-500 font-medium">{tr(lang, 'Location', 'स्थान', 'ठिकाण')}</div>
+                <div className="font-semibold text-slate-800 mt-0.5">
+                  {employerProfile.district}, {employerProfile.state}
+                </div>
+              </div>
+              <div>
+                <div className="text-slate-500 font-medium">{t.dashboards.profileStatus}</div>
+                <div className="font-semibold text-[#15803D] mt-0.5">{verStatusLabel}</div>
+              </div>
+            </div>
+          </div>
+          <div className="px-4 sm:px-5 py-2 bg-[#072A54] text-[10px] text-blue-100 flex items-center justify-between">
+            <span>ABUJMAD FOUNDATION · Social-Impact Workforce Initiative</span>
+            <span>Not a Government Document</span>
+          </div>
+        </div>
+      </section>
+      )}
+
+      {/* Existing Vehicle Bookings (shown ONLY if customer actually has standalone transport bookings) */}
+      {customerVehicleBookings.length > 0 && (
+        <section className="bg-white border border-slate-200 rounded-lg p-6 space-y-4">
+          <h2 className="font-display text-lg font-bold text-[#0B3B75]">
+            {tr(lang, 'Existing Vehicle Bookings', 'मौजूदा वाहन बुकिंग', 'असलेली वाहन बुकिंग')} ({customerVehicleBookings.length})
+          </h2>
           <div className="divide-y divide-slate-200">
             {customerVehicleBookings.map((b) => (
               <div key={b.id} className="py-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3">
@@ -2992,8 +3121,8 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
               </div>
             ))}
           </div>
-        )}
-      </section>
+        </section>
+      )}
 
       <UserNotificationCenter
         mode="employer"

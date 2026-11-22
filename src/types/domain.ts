@@ -113,6 +113,7 @@ export interface PublicWorkerProfile {
   voiceAlertsEnabled?: boolean;
   completedJobsCount: number;
   ratingAvg: number;
+  lastRatedApplicationId?: string;
   createdAt?: unknown;
   updatedAt?: unknown;
 }

@@ -88,7 +88,7 @@ service cloud.firestore {
           'approxLat', 'approxLng', 'languagesKnown', 'gender', 'education',
           'verificationStatus', 'isWomenEnterprise', 'photoDocId',
           'preferredLanguage', 'preferredRadiusKm', 'voiceAlertsEnabled',
-          'completedJobsCount', 'ratingAvg', 'createdAt', 'updatedAt'
+          'completedJobsCount', 'ratingAvg', 'lastRatedApplicationId', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.ownerUid)
         && data.registrationId is string && data.registrationId.size() >= 5 && data.registrationId.size() <= 40
@@ -116,6 +116,7 @@ service cloud.firestore {
         && (!('voiceAlertsEnabled' in data) || data.voiceAlertsEnabled is bool)
         && data.completedJobsCount is number && data.completedJobsCount >= 0 && data.completedJobsCount <= 100000
         && data.ratingAvg is number && data.ratingAvg >= 0 && data.ratingAvg <= 5
+        && (!('lastRatedApplicationId' in data) || isValidId(data.lastRatedApplicationId))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -1096,6 +1097,22 @@ service cloud.firestore {
               'languagesKnown', 'gender', 'education', 'isWomenEnterprise', 'photoDocId',
               'preferredLanguage', 'preferredRadiusKm', 'voiceAlertsEnabled', 'updatedAt'
             ])
+          ) ||
+          (
+            existing().verificationStatus != 'suspended'
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'ratingAvg', 'completedJobsCount', 'lastRatedApplicationId', 'updatedAt'
+            ])
+            && 'lastRatedApplicationId' in incoming()
+            && isValidId(incoming().lastRatedApplicationId)
+            && (!('lastRatedApplicationId' in existing()) || incoming().lastRatedApplicationId != existing().lastRatedApplicationId)
+            && exists(/databases/$(database)/documents/applications/$(incoming().lastRatedApplicationId))
+            && get(/databases/$(database)/documents/applications/$(incoming().lastRatedApplicationId)).data.employerUid == request.auth.uid
+            && get(/databases/$(database)/documents/applications/$(incoming().lastRatedApplicationId)).data.workerUid == workerId
+            && get(/databases/$(database)/documents/applications/$(incoming().lastRatedApplicationId)).data.status == 'work_completed'
+            && 'workerRating' in get(/databases/$(database)/documents/applications/$(incoming().lastRatedApplicationId)).data
+            && incoming().completedJobsCount >= existing().completedJobsCount
+            && incoming().completedJobsCount <= existing().completedJobsCount + 1
           )
         );
       allow delete: if isValidId(workerId) && isAdmin();
@@ -1306,6 +1323,18 @@ service cloud.firestore {
             ])
             && incoming().status in ['invited', 'accepted', 'declined', 'work_completed']
             && (!('liveTrackingAuthorized' in incoming()) || !incoming().liveTrackingAuthorized || incoming().status == 'accepted')
+          ) ||
+          (
+            existing().status == 'work_completed'
+            && !('workerRating' in existing())
+            && isOwner(existing().employerUid)
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'workerRating', 'employerFeedback', 'updatedAt'
+            ])
+            && 'workerRating' in incoming()
+            && incoming().workerRating is number
+            && incoming().workerRating >= 1
+            && incoming().workerRating <= 5
           )
         );
       allow delete: if isValidId(applicationId) && isAdmin();

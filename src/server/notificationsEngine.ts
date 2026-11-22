@@ -872,6 +872,7 @@ async function dispatchAndRecordTargets(params: {
             requireInteraction: true,
             silent: !soundActive,
             ...(soundActive ? { vibrate: toneCfg.vibratePattern } : {}),
+            actions: [{ action: 'open', title: 'OPEN' }],
             data: sharedDataPayload,
           },
           fcmOptions: {
