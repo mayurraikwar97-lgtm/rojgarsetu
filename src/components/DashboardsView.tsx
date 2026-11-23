@@ -37,6 +37,7 @@ import { UserNotificationCenter } from './UserNotificationCenter';
 import { AdminNotificationDemoPanel } from './AdminNotificationDemoPanel';
 import { AdminAdsManagementPanel } from './AdminAdsManagementPanel';
 import { AdminReferralsPanel } from './AdminReferralsPanel';
+import { PaymentStatusBadge } from './WorkerCertificateAndReceipt';
 import { ApproximateJobLocationMap } from './ApproximateJobLocationMap';
 import { DealCoordinationPanel, getDealStatusBadgeStyle } from './DealCoordinationPanel';
 import { OrderChatBox } from './OrderChatBox';
@@ -108,6 +109,15 @@ import {
   stopVoiceAlert,
   unlockAudioOnUserGesture,
 } from '../lib/voiceAlertEngine';
+import {
+  DEFAULT_REFERRAL_CONFIG,
+  subscribeAdminReferralsData,
+  subscribeReferralConfig,
+} from '../lib/adsReferralService';
+import {
+  adminVerifyWorkerRegistrationPayment,
+  subscribeAdminFinanceData,
+} from '../lib/workerPaymentService';
 import type {
   AppNotificationRecord,
   AuditLog,
@@ -120,12 +130,16 @@ import type {
   PageRoute,
   PartnershipEnquiry,
   PlatformAnnouncement,
+  PlatformReferralConfig,
   PublicEmployerProfile,
   PublicWorkerProfile,
+  ReferralRewardRecord,
   ServiceRadiusKm,
   VehicleBooking,
   VehicleListing,
   VehicleType,
+  WorkerReferralRecord,
+  WorkerRegistrationPayment,
 } from '../types/domain';
 
 function tr(lang: Language, en: string, hi: string, mr: string): string {
@@ -3889,6 +3903,11 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
   const [grievances, setGrievances] = useState<GrievanceReport[]>([]);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [employerPrivateMap, setEmployerPrivateMap] = useState<Record<string, EmployerPrivateInfo>>({});
+  const [workerPayments, setWorkerPayments] = useState<WorkerRegistrationPayment[]>([]);
+  const [adminReferrals, setAdminReferrals] = useState<WorkerReferralRecord[]>([]);
+  const [adminRewards, setAdminRewards] = useState<ReferralRewardRecord[]>([]);
+  const [referralConfig, setReferralConfig] = useState<PlatformReferralConfig>(DEFAULT_REFERRAL_CONFIG);
+  const [workerApprovalMessage, setWorkerApprovalMessage] = useState('');
   const [grievanceNotes, setGrievanceNotes] = useState<Record<string, string>>({});
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -3907,6 +3926,17 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
     const u2 = subscribeAdminEnquiries(setEnquiries);
     const u3 = subscribeAdminGrievances(setGrievances);
     const u4 = subscribeAdminAuditLogs(setAuditLogs);
+    const u5 = subscribeAdminFinanceData({
+      onPayments: setWorkerPayments,
+      onWithdrawals: () => undefined,
+      onLedger: () => undefined,
+    });
+    const u6 = subscribeAdminReferralsData({
+      onReferrals: setAdminReferrals,
+      onRewards: setAdminRewards,
+      onPayouts: () => undefined,
+    });
+    const u7 = subscribeReferralConfig(setReferralConfig);
     let mounted = true;
     void adminFetchAllEmployerPrivate().then((map) => {
       if (mounted) setEmployerPrivateMap(map);
@@ -3917,8 +3947,19 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
       u2();
       u3();
       u4();
+      u5();
+      u6();
+      u7();
     };
   }, [isAdmin]);
+
+  const paymentByWorkerUid = useMemo(() => {
+    const map: Record<string, WorkerRegistrationPayment> = {};
+    for (const p of workerPayments) {
+      map[p.workerUid] = p;
+    }
+    return map;
+  }, [workerPayments]);
 
   if (!user) {
     return (
@@ -4146,15 +4187,36 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
       {/* Tab Content */}
       {tab === 'workers' && (
         <div className="bg-white border border-slate-200 rounded-lg p-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="font-display text-lg font-bold text-[#0B3B75]">Registered Workers</h2>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="font-display text-lg font-bold text-[#0B3B75]">
+                ABUJMAD FOUNDATION — Registered Workers
+              </h2>
+              <p className="text-xs text-slate-500">
+                Review ₹250 Razorpay payment status and approve registrations to generate Worker ID Card &amp; Registration Certificate.
+              </p>
+            </div>
             <button
               type="button"
               onClick={() =>
                 downloadCsv(
                   'rojgar-setu-workers.csv',
-                  ['Registration ID', 'Name', 'Primary Skill', 'State', 'District', 'Wage', 'Status'],
-                  workers.map((w) => [w.registrationId, w.displayName, w.primarySkill, w.state, w.district, w.expectedWage, w.verificationStatus])
+                  ['Registration ID', 'Name', 'Primary Skill', 'State', 'District', 'Wage', '₹250 Payment Status', 'Payment ID', 'Approval Status'],
+                  workers.map((w) => {
+                    const pay = paymentByWorkerUid[w.id];
+                    const payStatus = pay?.status || w.registrationPaymentStatus || 'pending';
+                    return [
+                      w.registrationId,
+                      w.displayName,
+                      w.primarySkill,
+                      w.state,
+                      w.district,
+                      w.expectedWage,
+                      payStatus === 'verified' ? 'PAID' : payStatus.toUpperCase(),
+                      pay?.gatewayPaymentId || pay?.utrOrGatewayRef || '',
+                      w.verificationStatus,
+                    ];
+                  })
                 )
               }
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
@@ -4163,6 +4225,18 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
               {t.dashboards.exportCsv}
             </button>
           </div>
+          {workerApprovalMessage && (
+            <div className="rounded-lg bg-emerald-50 border border-emerald-200 px-3.5 py-2.5 text-xs font-semibold text-[#15803D] flex items-center justify-between gap-2">
+              <span>{workerApprovalMessage}</span>
+              <button
+                type="button"
+                onClick={() => setWorkerApprovalMessage('')}
+                className="text-slate-500 hover:text-slate-800 cursor-pointer"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
           {workers.length === 0 ? (
             <p className="text-sm text-slate-500">{t.common.noRecords}</p>
           ) : (
@@ -4174,14 +4248,21 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
                     <th className="py-2 pr-4">Name</th>
                     <th className="py-2 pr-4">Primary Skill</th>
                     <th className="py-2 pr-4">District</th>
+                    <th className="py-2 pr-4">₹250 Fee Status</th>
                     <th className="py-2 pr-4">Availability</th>
-                    <th className="py-2 pr-4">Status</th>
+                    <th className="py-2 pr-4">Approval Status</th>
                     <th className="py-2">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
                   {workers.map((w) => {
                     const isAvailable = (w.availabilityStatus || 'available') !== 'offline';
+                    const pay = paymentByWorkerUid[w.id];
+                    const effectivePayStatus = pay?.status || w.registrationPaymentStatus || 'pending';
+                    const paymentIdRef = pay?.gatewayPaymentId || pay?.utrOrGatewayRef || '';
+                    const isPaidAwaitingAdmin =
+                      effectivePayStatus === 'verified' &&
+                      (w.verificationStatus !== 'verified' || !w.paidBenefitsActive);
                     return (
                     <tr key={w.id}>
                       <td className="py-3 pr-4 font-mono-tabular text-xs">{w.registrationId}</td>
@@ -4199,6 +4280,16 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
                       <td className="py-3 pr-4 text-slate-600">{w.primarySkill}</td>
                       <td className="py-3 pr-4 text-slate-600">{w.district}, {w.state}</td>
                       <td className="py-3 pr-4">
+                        <div className="flex flex-col items-start gap-1">
+                          <PaymentStatusBadge status={effectivePayStatus} />
+                          {paymentIdRef && (
+                            <span className="font-mono-tabular text-[10px] text-slate-500">
+                              {paymentIdRef}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td className="py-3 pr-4">
                         <span
                           className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-bold uppercase ${
                             isAvailable
@@ -4209,7 +4300,23 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
                           {isAvailable ? 'Available' : 'Offline'}
                         </span>
                       </td>
-                      <td className="py-3 pr-4 font-semibold uppercase text-xs">{w.verificationStatus}</td>
+                      <td className="py-3 pr-4">
+                        <div className="flex flex-col items-start gap-0.5">
+                          <span className="font-semibold uppercase text-xs text-slate-800">
+                            {w.verificationStatus}
+                          </span>
+                          {isPaidAwaitingAdmin && (
+                            <span className="text-[10px] font-bold text-[#9A3412] bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">
+                              Awaiting Admin Approval
+                            </span>
+                          )}
+                          {w.verificationStatus === 'verified' && w.certificateNo && (
+                            <span className="font-mono-tabular text-[10px] text-[#15803D]">
+                              {w.certificateNo}
+                            </span>
+                          )}
+                        </div>
+                      </td>
                       <td className="py-3 flex flex-wrap gap-2">
                         <button
                           type="button"
@@ -4235,18 +4342,39 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
                         >
                           {isAvailable ? 'Set Offline' : 'Set Available'}
                         </button>
-                        {w.verificationStatus !== 'verified' && (
+                        {(w.verificationStatus !== 'verified' || isPaidAwaitingAdmin) && (
                           <button
                             type="button"
                             disabled={busyId === w.id}
                             onClick={async () => {
                               setBusyId(w.id);
-                              await adminUpdateVerification('publicWorkers', w.id, 'verified', user.uid, adminEmail);
-                              setBusyId(null);
+                              setWorkerApprovalMessage('');
+                              try {
+                                if (pay && (!pay.verifiedWorkerId || !pay.certificateNo)) {
+                                  const res = await adminVerifyWorkerRegistrationPayment({
+                                    payment: pay,
+                                    config: referralConfig,
+                                    allReferrals: adminReferrals,
+                                    allRewards: adminRewards,
+                                    adminUid: user.uid,
+                                    adminEmail,
+                                    adminNotes: 'Approved from ABUJMAD FOUNDATION Registered Workers table.',
+                                    autoApproveReferral: true,
+                                  });
+                                  setWorkerApprovalMessage(
+                                    `Approved ${w.displayName}! Generated Worker ID ${res.verifiedWorkerId} & Certificate ${res.certificateNo}.`
+                                  );
+                                } else {
+                                  await adminUpdateVerification('publicWorkers', w.id, 'verified', user.uid, adminEmail);
+                                  setWorkerApprovalMessage(`Verified ${w.displayName}.`);
+                                }
+                              } finally {
+                                setBusyId(null);
+                              }
                             }}
                             className="px-2.5 py-1 rounded bg-[#15803D] text-white text-xs font-semibold cursor-pointer"
                           >
-                            {t.dashboards.adminVerify}
+                            {isPaidAwaitingAdmin ? 'Approve & Issue ID/Cert' : t.dashboards.adminVerify}
                           </button>
                         )}
                         {w.verificationStatus !== 'suspended' ? (

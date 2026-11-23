@@ -672,11 +672,18 @@ async function activateWorkerRegistrationOnServer(params: {
   razorpayOrderId: string;
   razorpayPaymentId: string;
   orderRef?: string;
+  registrationId?: string;
+  workerName?: string;
+  workerSkill?: string;
+  workerLocation?: string;
+  workerMobileMasked?: string;
   payerVpaOrMethod?: string;
   source: 'verify_api' | 'razorpay_webhook';
 }): Promise<{
   activated: boolean;
   alreadyVerified: boolean;
+  adminApprovalPending: boolean;
+  provisionalAppId?: string;
   verifiedWorkerId?: string;
   receiptNo?: string;
   certificateNo?: string;
@@ -687,8 +694,10 @@ async function activateWorkerRegistrationOnServer(params: {
     return {
       activated: false,
       alreadyVerified: false,
+      adminApprovalPending: true,
+      provisionalAppId: params.registrationId,
       referralCredited: false,
-      referralMessage: 'FIREBASE_SERVICE_ACCOUNT_JSON not configured on server; server Firestore activation skipped.',
+      referralMessage: 'FIREBASE_SERVICE_ACCOUNT_JSON not configured on server; server Firestore sync skipped.',
     };
   }
 
@@ -703,15 +712,29 @@ async function activateWorkerRegistrationOnServer(params: {
   const existingPub = pubSnap.exists ? (pubSnap.data() as Record<string, unknown>) : null;
   const existingPriv = privSnap.exists ? (privSnap.data() as Record<string, unknown>) : null;
 
+  const alreadyAdminApproved = Boolean(
+    existingPub?.verificationStatus === 'verified' &&
+      existingPub?.paidBenefitsActive === true &&
+      String(existingPub?.registrationId || '').startsWith('RS-W-')
+  );
+
   if (existingPay?.status === 'verified') {
     return {
       activated: true,
       alreadyVerified: true,
-      verifiedWorkerId: String(existingPay.verifiedWorkerId || existingPub?.registrationId || ''),
+      adminApprovalPending: !alreadyAdminApproved,
+      provisionalAppId: String(existingPay.provisionalAppId || existingPub?.registrationId || params.registrationId || ''),
+      verifiedWorkerId: alreadyAdminApproved
+        ? String(existingPay.verifiedWorkerId || existingPub?.registrationId || '')
+        : undefined,
       receiptNo: String(existingPay.receiptNo || existingPub?.paymentReceiptNo || ''),
-      certificateNo: String(existingPay.certificateNo || existingPub?.certificateNo || ''),
+      certificateNo: alreadyAdminApproved
+        ? String(existingPay.certificateNo || existingPub?.certificateNo || '')
+        : undefined,
       referralCredited: false,
-      referralMessage: 'Registration payment was already verified (idempotent no-op).',
+      referralMessage: alreadyAdminApproved
+        ? 'Registration payment was already PAID and Admin-approved (idempotent no-op).'
+        : 'Registration payment is already PAID and awaiting ABUJMAD FOUNDATION Admin approval (idempotent no-op).',
     };
   }
 
@@ -726,25 +749,28 @@ async function activateWorkerRegistrationOnServer(params: {
       (d) => d.id !== workerUid && d.data()?.status === 'verified'
     );
     if (ownedByOther) {
-      throw new Error('DUPLICATE_PAYMENT_ID: This Razorpay Payment ID is already linked to another verified worker registration.');
+      throw new Error('DUPLICATE_PAYMENT_ID: This Razorpay Payment ID is already linked to another paid worker registration.');
     }
   }
 
   const existingRegId = String(existingPub?.registrationId || '');
-  const verifiedWorkerId = existingRegId.startsWith('RS-W-')
-    ? existingRegId
-    : buildServerVerifiedWorkerId(workerUid);
+  const provisionalAppId = String(
+    params.registrationId ||
+      existingPay?.provisionalAppId ||
+      existingRegId ||
+      `RS-APP-${workerUid.slice(0, 6).toUpperCase()}`
+  ).slice(0, 40);
   const receiptNo = String(existingPay?.receiptNo || '') || buildServerReceiptNo(workerUid);
-  const certificateNo = String(existingPay?.certificateNo || '') || buildServerCertificateNo(workerUid);
   const verifiedAtIso = new Date().toISOString();
-  const workerName = String(existingPay?.workerName || existingPub?.displayName || 'Registered Worker');
-  const workerSkill = String(existingPay?.workerSkill || existingPub?.primarySkill || 'General');
+  const workerName = String(params.workerName || existingPay?.workerName || existingPub?.displayName || 'Registered Worker');
+  const workerSkill = String(params.workerSkill || existingPay?.workerSkill || existingPub?.primarySkill || 'General');
   const workerLocation = String(
-    existingPay?.workerLocation ||
+    params.workerLocation ||
+      existingPay?.workerLocation ||
       [existingPub?.cityOrVillage, existingPub?.district, existingPub?.state].filter(Boolean).join(', ') ||
       'India'
   );
-  const provisionalAppId = String(existingPay?.provisionalAppId || existingRegId || `RS-APP-${workerUid.slice(0, 6).toUpperCase()}`);
+  const workerMobileMasked = String(params.workerMobileMasked || existingPay?.workerMobileMasked || 'XXXXXX').slice(0, 24);
   const otpVerified = Boolean(existingPay?.otpVerified ?? existingPriv?.mobileVerified ?? true);
 
   const batch = db.batch();
@@ -755,8 +781,8 @@ async function activateWorkerRegistrationOnServer(params: {
       workerName: workerName.slice(0, 120),
       workerSkill: workerSkill.slice(0, 80),
       workerLocation: workerLocation.slice(0, 160),
-      workerMobileMasked: String(existingPay?.workerMobileMasked || 'XXXXXX'),
-      provisionalAppId: provisionalAppId.slice(0, 40),
+      workerMobileMasked,
+      provisionalAppId,
       amountInr: WORKER_REGISTRATION_FEE_INR,
       paymentMethod: 'gateway',
       status: 'verified',
@@ -769,12 +795,11 @@ async function activateWorkerRegistrationOnServer(params: {
       refundPolicyAccepted: true,
       noEmploymentGuaranteeAccepted: true,
       otpVerified,
-      verifiedWorkerId,
       receiptNo,
-      certificateNo,
       verifiedByUid: params.source,
       verifiedAtIso,
-      adminNotes: `Auto-verified via Razorpay ${params.source} (captured ₹250).`,
+      adminNotes:
+        '₹250 PAID via Razorpay (signature & capture verified). Sent to ABUJMAD FOUNDATION Admin Dashboard for approval before Worker ID Card & Certificate generation.',
       updatedAt: FieldValue.serverTimestamp(),
       ...(paySnap.exists ? {} : { createdAt: FieldValue.serverTimestamp() }),
     },
@@ -783,13 +808,11 @@ async function activateWorkerRegistrationOnServer(params: {
 
   if (pubSnap.exists) {
     batch.update(pubRef, {
-      registrationId: verifiedWorkerId,
-      verificationStatus: 'verified',
       registrationPaymentStatus: 'verified',
-      paidBenefitsActive: true,
       paymentReceiptNo: receiptNo,
-      certificateNo,
-      verifiedAtIso,
+      // Worker ID Card (RS-W-...) and Registration Certificate unlock ONLY after ABUJMAD FOUNDATION Admin approval
+      verificationStatus: alreadyAdminApproved ? 'verified' : 'pending',
+      paidBenefitsActive: alreadyAdminApproved ? true : false,
       updatedAt: FieldValue.serverTimestamp(),
     });
   }
@@ -813,7 +836,7 @@ async function activateWorkerRegistrationOnServer(params: {
       workerName: workerName.slice(0, 120),
       referenceId: workerUid,
       paymentOrUtrRef: params.razorpayPaymentId.slice(0, 120),
-      description: `Razorpay captured ₹${WORKER_REGISTRATION_FEE_INR} worker registration (${verifiedWorkerId} · Receipt ${receiptNo})`,
+      description: `Razorpay PAID ₹${WORKER_REGISTRATION_FEE_INR} worker registration (${provisionalAppId} · Receipt ${receiptNo} · Awaiting Admin Approval)`,
       recordedByUid: params.source,
       recordedByEmail: 'system@rojgarsetu',
       createdAt: FieldValue.serverTimestamp(),
@@ -822,153 +845,17 @@ async function activateWorkerRegistrationOnServer(params: {
 
   await batch.commit();
 
-  // Ensure worker gets their own personal referral code once verified
-  if (pubSnap.exists && !existingPub?.referralCode) {
-    const personalCode = buildServerReferralCode(workerName, workerUid);
-    const codeDocRef = db.collection('referralCodes').doc(personalCode);
-    const codeSnap = await codeDocRef.get();
-    if (!codeSnap.exists) {
-      const codeBatch = db.batch();
-      codeBatch.set(codeDocRef, {
-        referralCode: personalCode,
-        ownerUid: workerUid,
-        workerName: workerName.slice(0, 120),
-        workerRegistrationId: verifiedWorkerId,
-        active: true,
-        createdAt: FieldValue.serverTimestamp(),
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-      codeBatch.update(pubRef, {
-        referralCode: personalCode,
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-      await codeBatch.commit().catch(() => undefined);
-    }
-  }
-
-  // Single-level ₹50 referral reward evaluation & idempotent credit
-  let referralCredited = false;
-  let referralMessage = 'No referral code attached to this registration.';
-  const refDocRef = db.collection('workerReferrals').doc(workerUid);
-  const refSnap = await refDocRef.get();
-  if (refSnap.exists) {
-    const referral = refSnap.data() as Record<string, unknown>;
-    const referrerUid = String(referral.referrerUid || '');
-    const referredMobileHash = String(referral.referredMobileHash || '');
-    const referralCode = String(referral.referralCode || '');
-    const referrerName = String(referral.referrerName || 'Referrer');
-    const referredWorkerName = String(referral.referredWorkerName || workerName);
-
-    const [allRefsSnap, allRewardsSnap] = await Promise.all([
-      db.collection('workerReferrals').get(),
-      db.collection('referralRewards').get(),
-    ]);
-
-    const otherMobileHashes = allRefsSnap.docs
-      .filter((d) => d.id !== workerUid && d.data()?.referredMobileHash)
-      .map((d) => String(d.data().referredMobileHash));
-    const existingRewardReferralIds = allRewardsSnap.docs
-      .map((d) => String(d.data()?.referralId || ''))
-      .filter(Boolean);
-
-    const decision = evaluateReferralRewardEligibility({
-      referrerUid,
-      referredUid: workerUid,
-      referredMobileHash,
-      existingReferredMobileHashes: otherMobileHashes,
-      existingRewardReferralIds,
-      referralId: workerUid,
-      registrationPaymentStatus: 'paid_verified',
-      registrationFeePaidInr: WORKER_REGISTRATION_FEE_INR,
-      paymentReference: params.razorpayPaymentId,
-      paidRegistrationEnabled: true,
-      configuredFeeInr: WORKER_REGISTRATION_FEE_INR,
-      configuredRewardInr: SINGLE_LEVEL_REFERRAL_REWARD_INR,
-      otpVerified,
-      referralLevel: 1,
-    });
-
-    if (!decision.eligible) {
-      await refDocRef.update({
-        registrationPaymentStatus: 'paid_verified',
-        registrationFeePaidInr: WORKER_REGISTRATION_FEE_INR,
-        paymentReference: params.razorpayPaymentId.slice(0, 120),
-        paymentId: workerUid,
-        otpVerified,
-        singleLevelVerified: true,
-        rewardStatus: 'rejected',
-        rewardAmountInr: 0,
-        fraudFlags: decision.fraudFlags,
-        adminNotes: decision.reason.slice(0, 500),
-        updatedAt: FieldValue.serverTimestamp(),
-      });
-      referralMessage = `Referral blocked by anti-fraud policy: ${decision.reason}`;
-    } else {
-      const rewardId = `rw_${workerUid}`;
-      const rewardRef = db.collection('referralRewards').doc(rewardId);
-      const rewardSnap = await rewardRef.get();
-      if (!rewardSnap.exists) {
-        const refBatch = db.batch();
-        refBatch.update(refDocRef, {
-          registrationPaymentStatus: 'paid_verified',
-          registrationFeePaidInr: WORKER_REGISTRATION_FEE_INR,
-          paymentReference: params.razorpayPaymentId.slice(0, 120),
-          paymentId: workerUid,
-          otpVerified,
-          singleLevelVerified: true,
-          rewardStatus: 'approved',
-          rewardAmountInr: decision.rewardAmountInr,
-          adminNotes: decision.reason.slice(0, 500),
-          updatedAt: FieldValue.serverTimestamp(),
-        });
-        refBatch.set(rewardRef, {
-          referralId: workerUid,
-          referrerUid,
-          referrerName,
-          referredUid: workerUid,
-          referredWorkerName,
-          referralCode,
-          registrationFeeInr: WORKER_REGISTRATION_FEE_INR,
-          rewardAmountInr: decision.rewardAmountInr,
-          status: 'approved',
-          eligibilityReason: decision.reason.slice(0, 300),
-          paymentId: workerUid,
-          paymentReference: params.razorpayPaymentId.slice(0, 120),
-          reviewedByUid: params.source,
-          createdAt: FieldValue.serverTimestamp(),
-          updatedAt: FieldValue.serverTimestamp(),
-        });
-        refBatch.set(db.collection('financialLedger').doc(`led_rw_${rewardId}`), {
-          entryType: 'referral_reward_credit',
-          direction: 'debit',
-          amountInr: decision.rewardAmountInr,
-          workerUid: referrerUid,
-          workerName: referrerName,
-          referenceId: rewardId,
-          paymentOrUtrRef: params.razorpayPaymentId.slice(0, 120),
-          description: `Single-level ₹${decision.rewardAmountInr} referral reward credited to ${referrerName} for ${referredWorkerName}`,
-          recordedByUid: params.source,
-          recordedByEmail: 'system@rojgarsetu',
-          createdAt: FieldValue.serverTimestamp(),
-        });
-        await refBatch.commit();
-        await recomputeReferrerWalletOnServer(db, referrerUid, referralCode);
-        referralCredited = true;
-        referralMessage = `Single-level ₹${decision.rewardAmountInr} referral reward credited to ${referrerName}.`;
-      } else {
-        referralMessage = 'Referral reward already recorded for this worker (duplicate prevented).';
-      }
-    }
-  }
-
   return {
     activated: true,
     alreadyVerified: false,
-    verifiedWorkerId,
+    adminApprovalPending: !alreadyAdminApproved,
+    provisionalAppId,
+    verifiedWorkerId: alreadyAdminApproved ? existingRegId : undefined,
     receiptNo,
-    certificateNo,
-    referralCredited,
-    referralMessage,
+    certificateNo: alreadyAdminApproved ? String(existingPub?.certificateNo || '') : undefined,
+    referralCredited: false,
+    referralMessage:
+      '₹250 payment verified as PAID and sent to ABUJMAD FOUNDATION Admin Dashboard. Worker ID Card, Certificate & any ₹50 referral reward activate after Admin approval.',
   };
 }
 
@@ -1471,6 +1358,7 @@ export function handlePaymentConfig(): { httpStatus: number; payload: Record<str
 
 export async function handleCreatePaymentOrder(params: {
   authHeader: string;
+  body?: Record<string, unknown>;
   rootDir: string;
   fetchImpl?: typeof fetch;
   runtimeOverride?: PaymentAdminRuntime;
@@ -1495,6 +1383,10 @@ export async function handleCreatePaymentOrder(params: {
     };
   }
 
+  const registrationId = String(params.body?.registrationId || params.body?.provisionalAppId || '')
+    .trim()
+    .slice(0, 40);
+
   // Prevent duplicate charges & duplicate activation when Admin Firestore is available
   const runtime = params.runtimeOverride ?? getPaymentAdminRuntime(params.rootDir);
   if (runtime.hasFirestoreCredentials) {
@@ -1508,16 +1400,16 @@ export async function handleCreatePaymentOrder(params: {
           httpStatus: 409,
           payload: {
             errorCode: 'ALREADY_VERIFIED',
-            error: 'Your ₹250 worker registration payment is already verified. Duplicate payment is blocked.',
+            error: 'Your ₹250 worker registration payment is already PAID. Duplicate payment is blocked.',
           },
         };
       }
-      if (pubSnap.exists && pubSnap.data()?.paidBenefitsActive === true && pubSnap.data()?.registrationPaymentStatus === 'verified') {
+      if (pubSnap.exists && pubSnap.data()?.registrationPaymentStatus === 'verified') {
         return {
           httpStatus: 409,
           payload: {
             errorCode: 'ALREADY_VERIFIED',
-            error: 'Your worker account is already activated and verified.',
+            error: 'Your ₹250 worker registration fee is already PAID. Duplicate payment is blocked.',
           },
         };
       }
@@ -1564,9 +1456,10 @@ export async function handleCreatePaymentOrder(params: {
           receipt: orderRef,
           notes: {
             workerUid: uid,
+            ...(registrationId ? { registrationId } : {}),
             orderRef,
             mode: 'test',
-            purpose: 'Rojgar Setu Worker Registration Fee',
+            purpose: 'ABUJMAD FOUNDATION Worker Registration Fee (ID Card & Certificate)',
           },
         }),
       });
@@ -1581,6 +1474,7 @@ export async function handleCreatePaymentOrder(params: {
               .set(
                 {
                   workerUid: uid,
+                  ...(registrationId ? { provisionalAppId: registrationId } : {}),
                   amountInr: cfg.registrationFeeInr,
                   paymentMethod: 'gateway',
                   status: 'pending',
@@ -1607,6 +1501,7 @@ export async function handleCreatePaymentOrder(params: {
               orderRef,
               orderToken,
               amountInr: cfg.registrationFeeInr,
+              amountPaise: WORKER_REGISTRATION_FEE_PAISE,
               officialUpiId: cfg.officialUpiId,
               officialUpiPayeeName: cfg.officialUpiPayeeName,
               upiUri,
@@ -1690,6 +1585,11 @@ export async function handleVerifyGatewayPayment(params: {
   const razorpayPaymentId = String(params.body.razorpayPaymentId || '').trim();
   const razorpaySignature = String(params.body.razorpaySignature || '').trim();
   const orderRef = String(params.body.orderRef || '').trim();
+  const registrationId = String(params.body.registrationId || params.body.provisionalAppId || '').trim();
+  const workerName = String(params.body.workerName || '').trim();
+  const workerSkill = String(params.body.workerSkill || '').trim();
+  const workerLocation = String(params.body.workerLocation || '').trim();
+  const workerMobileMasked = String(params.body.workerMobileMasked || '').trim();
 
   // Step 1: Cryptographic HMAC-SHA256 signature verification
   const sigResult = verifyRazorpayPaymentSignature({
@@ -1727,7 +1627,7 @@ export async function handleVerifyGatewayPayment(params: {
     };
   }
 
-  // Step 3: Atomically & idempotently activate worker account, issue RS-W ID & certificate, and credit single-level ₹50 referral
+  // Step 3: Record PAID status in DB & queue registration for ABUJMAD FOUNDATION Admin Dashboard approval
   const runtime = params.runtimeOverride ?? getPaymentAdminRuntime(params.rootDir);
   let activation: Awaited<ReturnType<typeof activateWorkerRegistrationOnServer>>;
   try {
@@ -1737,11 +1637,16 @@ export async function handleVerifyGatewayPayment(params: {
       razorpayOrderId,
       razorpayPaymentId,
       orderRef: orderRef || razorpayOrderId,
+      registrationId: registrationId || undefined,
+      workerName: workerName || undefined,
+      workerSkill: workerSkill || undefined,
+      workerLocation: workerLocation || undefined,
+      workerMobileMasked: workerMobileMasked || undefined,
       payerVpaOrMethod: captureCheck.vpa || captureCheck.method,
       source: 'verify_api',
     });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : 'Unable to activate worker account.';
+    const msg = err instanceof Error ? err.message : 'Unable to record paid worker registration.';
     if (msg.includes('DUPLICATE_PAYMENT_ID')) {
       return {
         httpStatus: 409,
@@ -1766,8 +1671,12 @@ export async function handleVerifyGatewayPayment(params: {
       verified: true,
       captured: true,
       razorpayMode: 'test',
-      paymentStatus: 'captured',
+      paymentStatus: 'PAID',
       amountInr: WORKER_REGISTRATION_FEE_INR,
+      gatewayOrderId: razorpayOrderId,
+      gatewayPaymentId: razorpayPaymentId,
+      provisionalAppId: activation.provisionalAppId,
+      adminApprovalPending: activation.adminApprovalPending,
       verifiedAtIso: new Date().toISOString(),
       verificationReceiptToken,
       activatedOnServer: activation.activated,
@@ -1778,8 +1687,8 @@ export async function handleVerifyGatewayPayment(params: {
       referralCredited: activation.referralCredited,
       referralMessage: activation.referralMessage,
       reason: activation.alreadyVerified
-        ? 'Razorpay payment was already verified and worker account is active (duplicate callback ignored idempotently).'
-        : 'Razorpay Test Mode signature and captured ₹250 payment verified on backend.',
+        ? 'Razorpay payment was already recorded as PAID (duplicate callback ignored idempotently).'
+        : 'Razorpay Test Mode signature and ₹250 capture verified on backend. Payment marked PAID and sent to ABUJMAD FOUNDATION Admin Dashboard for approval.',
     },
   };
 }
@@ -2245,6 +2154,7 @@ export function registerPaymentAndFinanceRoutes(app: Express, rootDir: string): 
     res.setHeader('Cache-Control', 'no-store');
     const out = await handleCreatePaymentOrder({
       authHeader: req.headers.authorization || '',
+      body: (req.body || {}) as Record<string, unknown>,
       rootDir,
     });
     res.status(out.httpStatus).json(out.payload);

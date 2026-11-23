@@ -44,6 +44,7 @@ import {
 } from '../lib/smartVoiceJobAlert';
 import {
   isWorkerPaidBenefitsActive,
+  isWorkerPaymentPaid,
   subscribeWorkerOwnPayment,
 } from '../lib/workerPaymentService';
 import type {
@@ -1084,23 +1085,43 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
         {activeTab === 'profile' && (
           <div className="space-y-5">
             {!isWorkerPaidBenefitsActive(workerProfile) && (
-              <div className="rounded-xl bg-amber-50 border border-amber-300 p-4 flex flex-wrap items-center justify-between gap-3 text-xs sm:text-sm text-amber-950">
+              <div
+                className={`rounded-xl border p-4 flex flex-wrap items-center justify-between gap-3 text-xs sm:text-sm ${
+                  isWorkerPaymentPaid(workerProfile, ownPayment)
+                    ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
+                    : 'bg-amber-50 border-amber-300 text-amber-950'
+                }`}
+              >
                 <div className="space-y-0.5">
                   <div className="font-extrabold text-[#0B3B75]">
-                    {tr(
-                      lang,
-                      '₹250 One-Time Registration Verification Required for Paid Benefits',
-                      'भुगतान लाभ सक्रिय करने के लिए ₹250 पंजीकरण सत्यापन आवश्यक है',
-                      'सत्यापित लाभ सुरू करण्यासाठी ₹250 नोंदणी सत्यापन आवश्यक आहे'
-                    )}
+                    {isWorkerPaymentPaid(workerProfile, ownPayment)
+                      ? tr(
+                          lang,
+                          '₹250 Fee PAID — Sent to ABUJMAD FOUNDATION Admin Dashboard for Approval',
+                          '₹250 शुल्क भुगतान पूर्ण (PAID) — ABUJMAD FOUNDATION एडमिन स्वीकृति लंबित',
+                          '₹250 नोंदणी शुल्क भरले (PAID) — ABUJMAD FOUNDATION अ‍ॅडमिन मंजुरी प्रलंबित'
+                        )
+                      : tr(
+                          lang,
+                          '₹250 One-Time Registration Fee Required for Worker ID Card & Certificate',
+                          'कामगार ID कार्ड और प्रमाणपत्र के लिए ₹250 पंजीकरण शुल्क आवश्यक है',
+                          'कामगार ID कार्ड व प्रमाणपत्रासाठी ₹250 नोंदणी शुल्क आवश्यक आहे'
+                        )}
                   </div>
                   <p className="text-xs text-slate-700">
-                    {tr(
-                      lang,
-                      'Complete or check your ₹250 payment below to unlock your Verified Worker ID (RS-W-...), Official Registration Certificate, and ₹50 Referral Rewards.',
-                      'अपना सत्यापित कामगार ID, पंजीकरण प्रमाणपत्र और ₹50 रेफरल पुरस्कार अनलॉक करने के लिए नीचे ₹250 भुगतान पूरा करें।',
-                      'सत्यापित कामगार ID, अधिकृत प्रमाणपत्र आणि ₹50 रेफरल बक्षीस सुरू करण्यासाठी खाली ₹250 पेमेंट पूर्ण करा.'
-                    )}
+                    {isWorkerPaymentPaid(workerProfile, ownPayment)
+                      ? tr(
+                          lang,
+                          'Your ₹250 registration payment is PAID and verified on our server. Your Official Worker ID Card (RS-W-...) and Registration Certificate will unlock automatically once Admin approves your registration.',
+                          'आपका ₹250 भुगतान सत्यापित (PAID) हो गया है। एडमिन स्वीकृति के बाद आपका कामगार ID कार्ड और प्रमाणपत्र यहाँ खुल जाएगा।',
+                          'तुमचे ₹250 पेमेंट यशस्वी (PAID) झाले आहे. अ‍ॅडमिन मंजुरीनंतर तुमचे अधिकृत कामगार ID कार्ड व प्रमाणपत्र येथे आपोआप सुरू होईल.'
+                        )
+                      : tr(
+                          lang,
+                          'Complete your ₹250 payment below to submit your registration to ABUJMAD FOUNDATION Admin for Worker ID Card & Certificate approval.',
+                          'अपना कामगार ID कार्ड और प्रमाणपत्र प्राप्त करने के लिए नीचे ₹250 भुगतान पूरा करें।',
+                          'कामगार ID कार्ड व प्रमाणपत्र मिळवण्यासाठी खाली ₹250 पेमेंट पूर्ण करा.'
+                        )}
                   </p>
                 </div>
                 <PaymentStatusBadge
@@ -1127,8 +1148,8 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
               }}
             />
 
-            {/* ₹250 Registration Payment Checkout (shown whenever payment is not verified) */}
-            {!isWorkerPaidBenefitsActive(workerProfile) && (
+            {/* ₹250 Registration Payment Checkout (shown ONLY if not yet PAID — prevents duplicate payment) */}
+            {!isWorkerPaymentPaid(workerProfile, ownPayment) && !isWorkerPaidBenefitsActive(workerProfile) && (
               <WorkerPaymentCheckoutCard
                 workerUid={user.uid}
                 workerName={workerProfile.displayName}

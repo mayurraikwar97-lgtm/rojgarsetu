@@ -1,4 +1,4 @@
-import { sendJson, type ServerlessRequest, type ServerlessResponse } from '../_utils.js';
+import { readJsonBody, sendJson, type ServerlessRequest, type ServerlessResponse } from '../_utils.js';
 import { handleCreatePaymentOrder } from '../../src/server/paymentReferralEngine.js';
 
 export default async function handler(req: ServerlessRequest, res: ServerlessResponse): Promise<void> {
@@ -6,9 +6,11 @@ export default async function handler(req: ServerlessRequest, res: ServerlessRes
     sendJson(res, 405, { error: 'METHOD_NOT_ALLOWED' });
     return;
   }
+  const body = await readJsonBody(req);
   const authHeader = typeof req.headers.authorization === 'string' ? req.headers.authorization : '';
   const out = await handleCreatePaymentOrder({
     authHeader,
+    body,
     rootDir: process.cwd(),
   });
   sendJson(res, out.httpStatus, out.payload);

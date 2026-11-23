@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertCircle, AlertTriangle, CheckCircle2, Compass, Gift, IndianRupee, MapPin, Plus, ShieldAlert, X } from 'lucide-react';
+import { AlertCircle, AlertTriangle, CheckCircle2, Compass, CreditCard, Gift, IndianRupee, Loader2, MapPin, Plus, ShieldAlert, ShieldCheck, X } from 'lucide-react';
 import { EMPLOYMENT_CATEGORIES } from '../data/categories';
 import { getDistrictCoordinates, INDIA_STATES_DISTRICTS } from '../data/indiaLocations';
 import { useAuth } from '../contexts/AuthContext';
@@ -20,8 +20,17 @@ import {
 } from '../lib/photoStorageService';
 import {
   WORKER_REGISTRATION_FEE_INR,
+  createServerRegistrationOrder,
+  fetchPaymentGatewayConfig,
   isWorkerPaidBenefitsActive,
+  isWorkerPaymentPaid,
+  loadRazorpayCheckoutScript,
+  maskMobileNumber,
+  recordGatewayAttemptOnServer,
+  submitWorkerRegistrationPaymentProof,
   subscribeWorkerOwnPayment,
+  verifyGatewaySignatureOnServer,
+  type PaymentGatewayPublicConfig,
 } from '../lib/workerPaymentService';
 import type {
   PageRoute,
@@ -95,12 +104,17 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
   const [ownPayment, setOwnPayment] = useState<WorkerRegistrationPayment | null>(null);
 
   const [saving, setSaving] = useState(false);
+  const [payingRazorpay, setPayingRazorpay] = useState(false);
+  const [paymentStatusMsg, setPaymentStatusMsg] = useState('');
+  const [paymentErrorMsg, setPaymentErrorMsg] = useState('');
+  const [gatewayConfig, setGatewayConfig] = useState<PaymentGatewayPublicConfig | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
   const [savedId, setSavedId] = useState('');
   const [showSuccessScreen, setShowSuccessScreen] = useState(false);
   const [gpsStatusMsg, setGpsStatusMsg] = useState('');
   const [gpsDetecting, setGpsDetecting] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
+  const verifyingPaymentRef = useRef(false);
 
   // Worker Referral Attribution State (100% Free Registration; optional referral code)
   const [referralCodeInput, setReferralCodeInput] = useState<string>(() =>
@@ -217,6 +231,21 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
     return subscribeWorkerOwnPayment(user.uid, setOwnPayment);
   }, [user]);
 
+  useEffect(() => {
+    let active = true;
+    void fetchPaymentGatewayConfig()
+      .then((cfg) => {
+        if (active) setGatewayConfig(cfg);
+      })
+      .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const isAlreadyPaid = isWorkerPaymentPaid(workerProfile, ownPayment);
+  const isAdminApproved = isWorkerPaidBenefitsActive(workerProfile);
+
   const currentStateObj = INDIA_STATES_DISTRICTS.find((s) => s.name === stateName);
 
   const handleStateChange = (nextState: string) => {
@@ -277,64 +306,67 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
     }, 20);
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const validateAndPersistRegistration = async (): Promise<{
+    regId: string;
+    workerLocation: string;
+  } | null> => {
     setErrorMsg('');
+    setPaymentErrorMsg('');
     clearAuthError();
 
     if (!user) {
       failValidation(
-        t.common.signInRequired || 'Please sign in with Google above or below before submitting registration.',
+        t.common.signInRequired || 'Please sign in with Google above or below before completing registration.',
         authBannerRef
       );
-      return;
+      return null;
     }
     if (!user.emailVerified) {
       failValidation(
         'Your Google account email is not verified. Please sign in with a verified Google account to register.',
         authBannerRef
       );
-      return;
+      return null;
     }
     if (fullName.trim().length < 2) {
       failValidation('Please enter your full name (minimum 2 characters).');
-      return;
+      return null;
     }
     if (!/^[6-9]\d{9}$/.test(mobile.trim())) {
       failValidation('Please enter a valid 10-digit Indian mobile number starting with 6–9.');
-      return;
+      return null;
     }
     if (!mobileVerified) {
       failValidation(
         'Please complete mobile OTP verification before submitting. (If live SMS is unavailable, use authorized Demo Registration Mode for pre-launch testing.)'
       );
-      return;
+      return null;
     }
     if (cityOrVillage.trim().length < 2) {
       failValidation('Please enter your city, town, or village (minimum 2 characters).');
-      return;
+      return null;
     }
     const expNum = Number(experienceYears);
     if (!Number.isFinite(expNum) || expNum < 0 || expNum > 70) {
       failValidation('Experience years must be between 0 and 70.');
-      return;
+      return null;
     }
     const wageNum = Number(expectedWage);
     if (!Number.isFinite(wageNum) || wageNum < 0 || wageNum > 500000) {
       failValidation('Expected wage must be between ₹0 and ₹5,00,000.');
-      return;
+      return null;
     }
     if (!ageConfirmed) {
       failValidation('Age confirmation (18+) is mandatory to register.');
-      return;
+      return null;
     }
     if (!privacyConsent) {
       failValidation('Please accept the privacy and worker guidelines consent.');
-      return;
+      return null;
     }
     if (!refundPolicyAccepted) {
-      failValidation('Please read and accept the ₹250 Registration Fee Refund Policy before submitting.');
-      return;
+      failValidation('Please read and accept the ₹250 Registration Fee Refund Policy before proceeding.');
+      return null;
     }
 
     const langs = languagesInput
@@ -345,155 +377,333 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
     if (langs.length === 0) langs.push('Hindi');
 
     const normalizedSkills = Array.from(new Set([primarySkill, ...skills])).slice(0, 15);
-    // New registrations receive a provisional RS-APP ID; verified RS-W ID is issued ONLY after ₹250 payment verification.
     const regId =
       workerProfile?.registrationId ||
+      savedId ||
       `RS-APP-${user.uid.slice(0, 6).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const workerLocation = `${cityOrVillage.trim()}, ${districtName}, ${stateName}`;
 
-    setSaving(true);
-    try {
-      const existingPhotoId = workerProfile?.photoDocId || workerPrivate?.photoDocId || '';
-      let resolvedPhotoDocId: string | undefined = existingPhotoId || undefined;
+    const existingPhotoId = workerProfile?.photoDocId || workerPrivate?.photoDocId || '';
+    let resolvedPhotoDocId: string | undefined = existingPhotoId || undefined;
 
-      if (selectedPhoto) {
-        const photoId = buildWorkerPhotoDocId(user.uid);
-        await uploadProfilePhotoRecord({
-          photoId,
-          ownerUid: user.uid,
-          subjectId: user.uid,
-          role: 'worker',
-          mimeType: selectedPhoto.mimeType,
-          sizeBytes: selectedPhoto.sizeBytes,
-          photoData: selectedPhoto.photoData,
+    if (selectedPhoto) {
+      const photoId = buildWorkerPhotoDocId(user.uid);
+      await uploadProfilePhotoRecord({
+        photoId,
+        ownerUid: user.uid,
+        subjectId: user.uid,
+        role: 'worker',
+        mimeType: selectedPhoto.mimeType,
+        sizeBytes: selectedPhoto.sizeBytes,
+        photoData: selectedPhoto.photoData,
+      });
+      resolvedPhotoDocId = photoId;
+    } else if (removePhoto && existingPhotoId) {
+      await deleteProfilePhotoRecord(existingPhotoId);
+      resolvedPhotoDocId = workerProfile ? '' : undefined;
+    }
+
+    const isNewWorker = !workerProfile;
+    const validReferrerForCreate =
+      isNewWorker && resolvedReferrer && resolvedReferrer.ownerUid !== user.uid
+        ? resolvedReferrer
+        : null;
+
+    const publicWorkerData = {
+      ownerUid: user.uid,
+      registrationId: regId,
+      displayName: fullName.trim().slice(0, 120),
+      primarySkill,
+      skills: normalizedSkills,
+      experienceYears: Number(experienceYears) || 0,
+      expectedWage: Number(expectedWage) || 0,
+      wageUnit,
+      preferredWorkType,
+      availabilityStatus,
+      state: stateName,
+      district: districtName,
+      cityOrVillage: cityOrVillage.trim().slice(0, 100),
+      approxLat,
+      approxLng,
+      languagesKnown: langs,
+      gender,
+      education: education.trim().slice(0, 100),
+      verificationStatus: workerProfile?.verificationStatus || 'pending',
+      isWomenEnterprise: gender === 'female',
+      ...(resolvedPhotoDocId !== undefined ? { photoDocId: resolvedPhotoDocId } : {}),
+      completedJobsCount: workerProfile?.completedJobsCount || 0,
+      ratingAvg: workerProfile?.ratingAvg || 0,
+      ...(workerProfile?.referralCode ? { referralCode: workerProfile.referralCode } : {}),
+      ...(workerProfile?.referredByCode
+        ? {
+            referredByCode: workerProfile.referredByCode,
+            ...(workerProfile.referredByUid ? { referredByUid: workerProfile.referredByUid } : {}),
+            ...(workerProfile.referredByName ? { referredByName: workerProfile.referredByName } : {}),
+          }
+        : validReferrerForCreate
+        ? {
+            referredByCode: validReferrerForCreate.referralCode,
+            referredByUid: validReferrerForCreate.ownerUid,
+            referredByName: validReferrerForCreate.workerName.slice(0, 120),
+          }
+        : {}),
+    };
+
+    const privateWorkerData = {
+      ownerUid: user.uid,
+      fullName: fullName.trim().slice(0, 120),
+      mobile: mobile.trim(),
+      mobileVerified,
+      ...(verificationMethod ? { verificationMethod } : {}),
+      ...(testPinHash ? { testPinHash } : {}),
+      email: email.trim().slice(0, 200),
+      ageConfirmed,
+      preferredWorkLocation: preferredWorkLocation.trim().slice(0, 160),
+      liveLocationConsent,
+      privacyConsent,
+      refundPolicyAccepted,
+      noEmploymentGuaranteeAccepted: true,
+      idVerificationStatus,
+      certificateNotes: certificateNotes.trim().slice(0, 500),
+      photoUrl: photoUrl.trim().slice(0, 1000),
+      ...(resolvedPhotoDocId !== undefined ? { photoDocId: resolvedPhotoDocId } : {}),
+      ...(workerPrivate?.referralCode ? { referralCode: workerPrivate.referralCode } : {}),
+      ...(workerPrivate?.referredByCode
+        ? {
+            referredByCode: workerPrivate.referredByCode,
+            ...(workerPrivate.referredByUid ? { referredByUid: workerPrivate.referredByUid } : {}),
+          }
+        : validReferrerForCreate
+        ? {
+            referredByCode: validReferrerForCreate.referralCode,
+            referredByUid: validReferrerForCreate.ownerUid,
+          }
+        : {}),
+    };
+
+    await saveWorkerRegistration(user.uid, Boolean(workerProfile), publicWorkerData, privateWorkerData);
+
+    if (isWorkerPaidBenefitsActive(workerProfile)) {
+      try {
+        const assignedCode = await ensureWorkerReferralCode(
+          { id: user.uid, ...publicWorkerData },
+          privateWorkerData
+        );
+        setMyGeneratedReferralCode(assignedCode);
+      } catch {
+        // Non-blocking
+      }
+    }
+
+    if (validReferrerForCreate) {
+      try {
+        await recordWorkerReferralAttribution({
+          referralCode: validReferrerForCreate.referralCode,
+          sourceChannel: capturedFromUrl ? 'url_link' : 'manual_code',
+          referredUid: user.uid,
+          referredWorkerName: fullName.trim().slice(0, 120),
+          referredRegistrationId: regId,
+          referredMobile: mobile.trim(),
         });
-        resolvedPhotoDocId = photoId;
-      } else if (removePhoto && existingPhotoId) {
-        await deleteProfilePhotoRecord(existingPhotoId);
-        resolvedPhotoDocId = workerProfile ? '' : undefined;
+      } catch {
+        // Non-blocking
+      }
+    }
+
+    setSelectedPhoto(null);
+    setRemovePhoto(false);
+    setSavedId(regId);
+    return { regId, workerLocation };
+  };
+
+  const handlePayAndCompleteRegistration = async () => {
+    if (payingRazorpay || saving) return;
+    setErrorMsg('');
+    setPaymentErrorMsg('');
+    setPaymentStatusMsg('');
+
+    // Prevent duplicate payment if already PAID
+    if (isAlreadyPaid) {
+      setSaving(true);
+      try {
+        const saved = await validateAndPersistRegistration();
+        if (!saved) return;
+        await refreshUserProfiles();
+        setShowSuccessScreen(true);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      } catch (err) {
+        setErrorMsg(formatUiError(err, 'Unable to update worker profile. Please try again.'));
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
+    setPayingRazorpay(true);
+    try {
+      // 1. Validate & save worker registration details linked to this user's UID
+      const saved = await validateAndPersistRegistration();
+      if (!saved || !user) {
+        setPayingRazorpay(false);
+        return;
       }
 
-      const isNewWorker = !workerProfile;
-      const validReferrerForCreate =
-        isNewWorker && resolvedReferrer && resolvedReferrer.ownerUid !== user.uid
-          ? resolvedReferrer
-          : null;
+      // 2. Create ₹250 (25000 paise) Razorpay order securely on backend
+      const order = await createServerRegistrationOrder({ registrationId: saved.regId });
+      if (order.mode !== 'gateway' || !order.razorpayKeyId || !order.gatewayOrderId) {
+        const missing = (order.missingGatewayEnvVars || gatewayConfig?.missingGatewayEnvVars || []).join(', ');
+        setPaymentErrorMsg(
+          order.configError ||
+            `Razorpay Test Mode checkout requires server payment gateway credentials${missing ? ` (${missing})` : ''}. Your registration draft (${saved.regId}) has been saved; complete payment below once gateway credentials are active.`
+        );
+        await refreshUserProfiles();
+        setShowSuccessScreen(true);
+        setPayingRazorpay(false);
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        return;
+      }
 
-      const publicWorkerData = {
-        ownerUid: user.uid,
-        registrationId: regId,
-        displayName: fullName.trim().slice(0, 120),
-        primarySkill,
-        skills: normalizedSkills,
-        experienceYears: Number(experienceYears) || 0,
-        expectedWage: Number(expectedWage) || 0,
-        wageUnit,
-        preferredWorkType,
-        availabilityStatus,
-        state: stateName,
-        district: districtName,
-        cityOrVillage: cityOrVillage.trim().slice(0, 100),
-        approxLat,
-        approxLng,
-        languagesKnown: langs,
-        gender,
-        education: education.trim().slice(0, 100),
-        verificationStatus: workerProfile?.verificationStatus || 'pending',
-        isWomenEnterprise: gender === 'female',
-        ...(resolvedPhotoDocId !== undefined ? { photoDocId: resolvedPhotoDocId } : {}),
-        completedJobsCount: workerProfile?.completedJobsCount || 0,
-        ratingAvg: workerProfile?.ratingAvg || 0,
-        ...(workerProfile?.referralCode ? { referralCode: workerProfile.referralCode } : {}),
-        ...(workerProfile?.referredByCode
-          ? {
-              referredByCode: workerProfile.referredByCode,
-              ...(workerProfile.referredByUid ? { referredByUid: workerProfile.referredByUid } : {}),
-              ...(workerProfile.referredByName ? { referredByName: workerProfile.referredByName } : {}),
-            }
-          : validReferrerForCreate
-          ? {
-              referredByCode: validReferrerForCreate.referralCode,
-              referredByUid: validReferrerForCreate.ownerUid,
-              referredByName: validReferrerForCreate.workerName.slice(0, 120),
-            }
-          : {}),
+      // 3. Load Razorpay Checkout script and open modal
+      const loaded = await loadRazorpayCheckoutScript();
+      type RazorpayCtorType = new (options: Record<string, unknown>) => {
+        open: () => void;
+        on: (
+          event: string,
+          cb: (resp: {
+            error?: { description?: string; reason?: string; metadata?: { order_id?: string; payment_id?: string } };
+          }) => void
+        ) => void;
       };
-
-      const privateWorkerData = {
-        ownerUid: user.uid,
-        fullName: fullName.trim().slice(0, 120),
-        mobile: mobile.trim(),
-        mobileVerified,
-        ...(verificationMethod ? { verificationMethod } : {}),
-        ...(testPinHash ? { testPinHash } : {}),
-        email: email.trim().slice(0, 200),
-        ageConfirmed,
-        preferredWorkLocation: preferredWorkLocation.trim().slice(0, 160),
-        liveLocationConsent,
-        privacyConsent,
-        refundPolicyAccepted,
-        noEmploymentGuaranteeAccepted: true,
-        idVerificationStatus,
-        certificateNotes: certificateNotes.trim().slice(0, 500),
-        photoUrl: photoUrl.trim().slice(0, 1000),
-        ...(resolvedPhotoDocId !== undefined ? { photoDocId: resolvedPhotoDocId } : {}),
-        ...(workerPrivate?.referralCode ? { referralCode: workerPrivate.referralCode } : {}),
-        ...(workerPrivate?.referredByCode
-          ? {
-              referredByCode: workerPrivate.referredByCode,
-              ...(workerPrivate.referredByUid ? { referredByUid: workerPrivate.referredByUid } : {}),
-            }
-          : validReferrerForCreate
-          ? {
-              referredByCode: validReferrerForCreate.referralCode,
-              referredByUid: validReferrerForCreate.ownerUid,
-            }
-          : {}),
-      };
-
-      await saveWorkerRegistration(user.uid, Boolean(workerProfile), publicWorkerData, privateWorkerData);
-
-      // Activate personal referral code ONLY if worker's paid registration is already verified
-      if (isWorkerPaidBenefitsActive(workerProfile)) {
-        try {
-          const assignedCode = await ensureWorkerReferralCode(
-            { id: user.uid, ...publicWorkerData },
-            privateWorkerData
-          );
-          setMyGeneratedReferralCode(assignedCode);
-        } catch {
-          // Non-blocking
-        }
+      const RazorpayCtor = (window as unknown as { Razorpay?: RazorpayCtorType }).Razorpay;
+      if (!loaded || !RazorpayCtor) {
+        setPaymentErrorMsg('Unable to load Razorpay Checkout. Please check your internet connection and retry.');
+        setPayingRazorpay(false);
+        return;
       }
 
-      if (validReferrerForCreate) {
-        try {
-          await recordWorkerReferralAttribution({
-            referralCode: validReferrerForCreate.referralCode,
-            sourceChannel: capturedFromUrl ? 'url_link' : 'manual_code',
-            referredUid: user.uid,
-            referredWorkerName: fullName.trim().slice(0, 120),
-            referredRegistrationId: regId,
-            referredMobile: mobile.trim(),
-          });
-        } catch {
-          // Non-blocking: registration itself succeeded cleanly
-        }
-      }
+      const rzp = new RazorpayCtor({
+        key: order.razorpayKeyId,
+        amount: 25000, // Exact ₹250 in paise
+        currency: 'INR',
+        name: 'ABUJMAD FOUNDATION · ROJGAR SETU',
+        description: 'Worker Registration Fee — Worker ID Card & Registration Certificate',
+        order_id: order.gatewayOrderId,
+        prefill: {
+          name: fullName.trim(),
+          email: email.trim() || user.email || undefined,
+          contact: mobile.replace(/\D/g, '').slice(-10),
+        },
+        notes: {
+          workerUid: user.uid,
+          registrationId: saved.regId,
+          orderRef: order.orderRef,
+        },
+        theme: { color: '#0B3B75' },
+        modal: {
+          ondismiss: () => {
+            setPayingRazorpay(false);
+            setPaymentErrorMsg(
+              'Payment was cancelled before completion. Your registration is NOT marked PAID. Click "Pay ₹250 & Complete Registration" to retry.'
+            );
+            void recordGatewayAttemptOnServer({
+              outcome: 'cancelled',
+              gatewayOrderId: order.gatewayOrderId,
+              orderRef: order.orderRef,
+              reason: 'Worker closed Razorpay Checkout before payment completion.',
+            }).finally(() => void refreshUserProfiles());
+          },
+        },
+        handler: async (response: {
+          razorpay_payment_id: string;
+          razorpay_order_id: string;
+          razorpay_signature: string;
+        }) => {
+          if (verifyingPaymentRef.current) return;
+          verifyingPaymentRef.current = true;
+          try {
+            // 4. Verify signature + captured ₹250 status on server
+            const verification = await verifyGatewaySignatureOnServer({
+              razorpayOrderId: response.razorpay_order_id,
+              razorpayPaymentId: response.razorpay_payment_id,
+              razorpaySignature: response.razorpay_signature,
+              orderRef: order.orderRef,
+              registrationId: saved.regId,
+              workerName: fullName.trim().slice(0, 120),
+              workerSkill: primarySkill,
+              workerLocation: saved.workerLocation,
+              workerMobileMasked: maskMobileNumber(mobile.trim()),
+            });
 
-      setSelectedPhoto(null);
-      setRemovePhoto(false);
-      await refreshUserProfiles();
-      setSavedId(regId);
-      setShowSuccessScreen(true);
-      window.scrollTo({ top: 0, behavior: 'smooth' });
+            // Fallback sync to Firestore if backend server has no Firebase Admin service account configured
+            if (!verification.activatedOnServer) {
+              await submitWorkerRegistrationPaymentProof({
+                workerUid: user.uid,
+                workerName: fullName.trim().slice(0, 120),
+                workerSkill: primarySkill,
+                workerLocation: saved.workerLocation,
+                workerMobile: mobile.trim(),
+                provisionalAppId: saved.regId,
+                paymentMethod: 'gateway',
+                orderRef: order.orderRef,
+                utrOrGatewayRef: response.razorpay_payment_id,
+                payerUpiOrName: 'Razorpay Server-Verified PAID',
+                gatewayOrderId: response.razorpay_order_id,
+                gatewayPaymentId: response.razorpay_payment_id,
+                refundPolicyAccepted: true,
+                noEmploymentGuaranteeAccepted: true,
+                otpVerified: mobileVerified,
+                referredByCode: workerProfile?.referredByCode || resolvedReferrer?.referralCode,
+                referredByUid: workerProfile?.referredByUid || resolvedReferrer?.ownerUid,
+              }).catch(() => undefined);
+            }
+
+            setPaymentStatusMsg(
+              `₹250 PAID & Verified! Payment ID: ${response.razorpay_payment_id}. Registration ${saved.regId} has been sent to the ABUJMAD FOUNDATION Admin Dashboard for approval.`
+            );
+            await refreshUserProfiles();
+            setShowSuccessScreen(true);
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          } catch (verifyErr) {
+            setPaymentErrorMsg(
+              verifyErr instanceof Error
+                ? verifyErr.message
+                : 'Server payment verification failed. Please retry or contact ABUJMAD FOUNDATION support.'
+            );
+          } finally {
+            verifyingPaymentRef.current = false;
+            setPayingRazorpay(false);
+          }
+        },
+      });
+
+      rzp.on('payment.failed', (failResp) => {
+        setPayingRazorpay(false);
+        const desc = failResp?.error?.description || failResp?.error?.reason || 'Payment failed at Razorpay.';
+        setPaymentErrorMsg(
+          `Payment Failed: ${desc}. Payment status has NOT been marked PAID. Please click "Retry Payment — Pay ₹250 & Complete Registration" to try again.`
+        );
+        void recordGatewayAttemptOnServer({
+          outcome: 'failed',
+          gatewayOrderId: failResp?.error?.metadata?.order_id || order.gatewayOrderId,
+          gatewayPaymentId: failResp?.error?.metadata?.payment_id,
+          orderRef: order.orderRef,
+          reason: desc,
+        }).finally(() => void refreshUserProfiles());
+      });
+
+      rzp.open();
     } catch (err) {
-      setErrorMsg(formatUiError(err, 'Unable to save worker registration. Please review your details and try again.'));
+      setPayingRazorpay(false);
+      setPaymentErrorMsg(formatUiError(err, 'Unable to initiate ₹250 Razorpay payment. Please try again.'));
       window.setTimeout(() => {
         errorBoxRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }, 20);
-    } finally {
-      setSaving(false);
     }
+  };
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await handlePayAndCompleteRegistration();
   };
 
   return (
@@ -616,23 +826,34 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
           <div className="bg-white border-2 border-[#15803D] rounded-xl overflow-hidden shadow-sm">
             <div
               className={`px-6 py-4 flex items-start gap-3 text-white ${
-                isWorkerPaidBenefitsActive(workerProfile) ? 'bg-[#15803D]' : 'bg-[#0B3B75]'
+                isAdminApproved ? 'bg-[#15803D]' : isAlreadyPaid ? 'bg-[#0B3B75]' : 'bg-[#0B3B75]'
               }`}
             >
               <CheckCircle2 className="w-7 h-7 text-amber-300 shrink-0 mt-0.5" />
               <div>
                 <h2 className="font-display text-xl sm:text-2xl font-extrabold">
-                  {isWorkerPaidBenefitsActive(workerProfile)
-                    ? 'Verified ROJGAR SETU Worker!'
-                    : 'Step 1 Saved — Complete ₹250 Registration Payment Below'}
+                  {isAdminApproved
+                    ? 'Admin Approved ROJGAR SETU Worker!'
+                    : isAlreadyPaid
+                    ? '₹250 PAID — Registration Sent to ABUJMAD FOUNDATION Admin Dashboard'
+                    : 'Registration Saved — Complete ₹250 Payment Below'}
                 </h2>
                 <p className="text-sm text-blue-50 font-semibold mt-0.5">
-                  {isWorkerPaidBenefitsActive(workerProfile)
+                  {isAdminApproved
                     ? 'आपकी कामगार प्रोफ़ाइल और ₹250 पंजीकरण सत्यापित है · “कामगार नाही, आपलीच माणसं!”'
-                    : 'तुमची माहिती जतन झाली आहे. सत्यापित कामगार ID, प्रमाणपत्र व रेफरल कोड सुरू करण्यासाठी खाली ₹250 पेमेंट पूर्ण करा.'}
+                    : isAlreadyPaid
+                    ? 'Your ₹250 fee is PAID and verified on our server. Your Worker ID Card & Registration Certificate will be generated automatically once ABUJMAD FOUNDATION Admin approves your registration.'
+                    : 'तुमची माहिती जतन झाली आहे. नोंदणी पूर्ण करण्यासाठी खाली ₹250 पेमेंट करा.'}
                 </p>
               </div>
             </div>
+
+            {paymentStatusMsg && (
+              <div className="mx-6 mt-4 rounded-lg bg-emerald-50 border border-emerald-200 px-4 py-3 text-xs font-bold text-emerald-900 flex items-start gap-2">
+                <CheckCircle2 className="w-4 h-4 text-[#15803D] shrink-0 mt-0.5" />
+                <span>{paymentStatusMsg}</span>
+              </div>
+            )}
 
             <div className="p-6 space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 bg-slate-50 border border-slate-200 rounded-lg p-4 text-xs sm:text-sm">
@@ -651,7 +872,7 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
                 </div>
                 <div>
                   <div className="text-slate-500 text-xs font-medium">
-                    {isWorkerPaidBenefitsActive(workerProfile) ? 'Verified Worker ID' : 'Provisional Application ID'}
+                    {isAdminApproved ? 'Verified Worker ID' : 'Worker Registration ID'}
                   </div>
                   <div className="font-mono-tabular font-extrabold text-[#C25E00] mt-0.5">
                     {workerProfile?.registrationId || savedId}
@@ -680,7 +901,7 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
                     {cityOrVillage}, {districtName}, {stateName}
                   </div>
                 </div>
-                {isWorkerPaidBenefitsActive(workerProfile) &&
+                {isAdminApproved &&
                   (myGeneratedReferralCode || workerProfile?.referralCode) && (
                     <div className="sm:col-span-3 pt-2 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
                       <div className="flex items-center gap-2">
@@ -718,8 +939,8 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
             </div>
           </div>
 
-          {/* Step 2: ₹250 Payment Checkout (when not yet verified) */}
-          {user && !isWorkerPaidBenefitsActive(workerProfile) && (
+          {/* Step 2: ₹250 Payment Checkout (shown ONLY if not yet PAID — prevents duplicate payments) */}
+          {user && !isAlreadyPaid && (
             <WorkerPaymentCheckoutCard
               workerUid={user.uid}
               workerName={fullName.trim() || workerProfile?.displayName || 'Worker'}
@@ -739,22 +960,24 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
           {/* Registration Payment Status & History */}
           <WorkerPaymentHistoryCard workerProfile={workerProfile} payment={ownPayment} />
 
-          {/* Receipt Card (shown as soon as payment proof is submitted or verified) */}
+          {/* Receipt Card (shown as soon as payment record exists) */}
           {ownPayment && <WorkerPaymentReceiptCard payment={ownPayment} />}
 
-          {/* Verified Digital ID Card & Official Certificate (unlocked strictly after verification) */}
-          {workerProfile && isWorkerPaidBenefitsActive(workerProfile) && (
-            <>
-              <WorkerDigitalIdCard
-                workerProfile={workerProfile}
-                workerPrivate={workerPrivate}
-                payment={ownPayment}
-              />
-              <WorkerRegistrationCertificateCard
-                workerProfile={workerProfile}
-                payment={ownPayment}
-              />
-            </>
+          {/* Official Registration Certificate Card (shows Awaiting Admin Approval when PAID, unlocks ONLY after Admin approval) */}
+          {workerProfile && (
+            <WorkerRegistrationCertificateCard
+              workerProfile={workerProfile}
+              payment={ownPayment}
+            />
+          )}
+
+          {/* Verified Digital ID Card (generated ONLY after ABUJMAD FOUNDATION Admin approval) */}
+          {workerProfile && isAdminApproved && (
+            <WorkerDigitalIdCard
+              workerProfile={workerProfile}
+              workerPrivate={workerPrivate}
+              payment={ownPayment}
+            />
           )}
         </section>
       )}
@@ -1346,41 +1569,158 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
           </label>
         </div>
 
-        {errorMsg && (
-          <div
-            ref={errorBoxRef}
-            role="alert"
-            className="p-3.5 rounded-md bg-red-50 border border-red-200 text-sm text-red-800 flex items-start gap-2"
-          >
-            <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-700" />
-            <span>{errorMsg}</span>
+        {/* ================= VISIBLE ₹250 WORKER REGISTRATION PAYMENT SECTION ================= */}
+        <section
+          aria-label="ABUJMAD FOUNDATION Worker Registration Fee"
+          className="rounded-xl border-2 border-[#0B3B75] bg-slate-50/70 overflow-hidden shadow-xs"
+        >
+          <div className="h-1.5 flex">
+            <div className="flex-1 bg-[#E06D1B]" />
+            <div className="flex-1 bg-white" />
+            <div className="flex-1 bg-[#15803D]" />
           </div>
-        )}
 
-        {!user && (
-          <div className="p-3.5 rounded-md bg-amber-50 border border-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-950">
-            <span>
-              <strong>Sign-In Required:</strong> Sign in with Google before clicking Submit so your registration can be saved securely.
-            </span>
-            <button
-              type="button"
-              onClick={signInWithGoogle}
-              className="px-4 py-2 rounded-md bg-[#0B3B75] text-white font-semibold hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              {t.workerForm.signInBtn}
-            </button>
+          <div className="p-5 space-y-4">
+            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 pb-3.5">
+              <div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <h2 className="font-display text-base sm:text-lg font-extrabold text-[#0B3B75]">
+                    ABUJMAD FOUNDATION – Worker Registration Fee
+                  </h2>
+                  {gatewayConfig?.razorpayMode === 'test' && (
+                    <span className="px-2 py-0.5 rounded bg-amber-100 border border-amber-300 text-[#9A3412] text-[10px] font-extrabold uppercase">
+                      Razorpay Test Mode
+                    </span>
+                  )}
+                </div>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  Purpose: <strong className="text-[#0B3B75]">Worker ID Card &amp; Registration Certificate</strong> (generated after ABUJMAD FOUNDATION Admin approval)
+                </p>
+              </div>
+              <div className="text-right">
+                <div className="text-[11px] font-bold uppercase text-slate-500">Amount</div>
+                <div className="font-mono-tabular text-2xl font-extrabold text-[#15803D]">
+                  ₹{WORKER_REGISTRATION_FEE_INR}
+                </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-white border border-slate-200 rounded-lg p-3.5 text-xs">
+              <div>
+                <div className="text-slate-500 font-semibold">Amount</div>
+                <div className="font-mono-tabular font-extrabold text-[#0B3B75] mt-0.5">₹250 (One-Time)</div>
+              </div>
+              <div>
+                <div className="text-slate-500 font-semibold">Purpose</div>
+                <div className="font-bold text-[#0B3B75] mt-0.5">Worker ID Card &amp; Registration Certificate</div>
+              </div>
+              <div>
+                <div className="text-slate-500 font-semibold">Payment Status</div>
+                <div className="mt-0.5">
+                  <PaymentStatusBadge
+                    status={ownPayment?.status || workerProfile?.registrationPaymentStatus || 'pending'}
+                    lang={lang}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {paymentErrorMsg && (
+              <div
+                role="alert"
+                className="p-3.5 rounded-lg bg-red-50 border border-red-200 text-xs sm:text-sm font-semibold text-red-800 flex items-start gap-2"
+              >
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-700" />
+                <span>{paymentErrorMsg}</span>
+              </div>
+            )}
+
+            {paymentStatusMsg && (
+              <div className="p-3.5 rounded-lg bg-emerald-50 border border-emerald-200 text-xs sm:text-sm font-semibold text-emerald-900 flex items-start gap-2">
+                <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-[#15803D]" />
+                <span>{paymentStatusMsg}</span>
+              </div>
+            )}
+
+            {isAlreadyPaid ? (
+              <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3.5 text-xs text-emerald-950 space-y-1">
+                <div className="font-extrabold text-[#15803D] flex items-center gap-1.5">
+                  <ShieldCheck className="w-4 h-4" />
+                  <span>₹250 Registration Fee Already PAID (Duplicate Payment Blocked)</span>
+                </div>
+                <p>
+                  {isAdminApproved
+                    ? `Approved Worker ID: ${workerProfile?.registrationId}. Your Worker ID Card & Registration Certificate are active.`
+                    : `Payment ID: ${ownPayment?.gatewayPaymentId || ownPayment?.utrOrGatewayRef || 'Verified'}. Your registration is queued in the ABUJMAD FOUNDATION Admin Dashboard for approval.`}
+                </p>
+              </div>
+            ) : (
+              <p className="text-[11px] text-slate-600 leading-relaxed flex items-start gap-1.5">
+                <ShieldCheck className="w-4 h-4 text-[#15803D] shrink-0 mt-0.5" />
+                <span>
+                  Secured by <strong>Razorpay</strong>. Payment signature and ₹250 capture are verified on our server before marking your registration <strong>PAID</strong> and sending it to the ABUJMAD FOUNDATION Admin Dashboard for approval. Registration fee payment does not guarantee employment or job allocation.
+                </span>
+              </p>
+            )}
+
+            {errorMsg && (
+              <div
+                ref={errorBoxRef}
+                role="alert"
+                className="p-3.5 rounded-md bg-red-50 border border-red-200 text-sm text-red-800 flex items-start gap-2"
+              >
+                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-700" />
+                <span>{errorMsg}</span>
+              </div>
+            )}
+
+            {!user && (
+              <div className="p-3.5 rounded-md bg-amber-50 border border-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-950">
+                <span>
+                  <strong>Sign-In Required:</strong> Sign in with Google before clicking Pay ₹250 &amp; Complete Registration so your payment and registration are linked securely to your worker account.
+                </span>
+                <button
+                  type="button"
+                  onClick={signInWithGoogle}
+                  className="px-4 py-2 rounded-md bg-[#0B3B75] text-white font-semibold hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  {t.workerForm.signInBtn}
+                </button>
+              </div>
+            )}
+
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-3 pt-1">
+              {isAlreadyPaid ? (
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="px-6 py-3 rounded-lg bg-[#0B3B75] text-white text-sm font-bold hover:bg-slate-800 disabled:opacity-50 cursor-pointer"
+                >
+                  {saving ? t.common.loading : t.workerForm.updateBtn}
+                </button>
+              ) : (
+                <button
+                  type="submit"
+                  disabled={payingRazorpay || saving}
+                  className="w-full sm:w-auto px-7 py-3.5 rounded-xl bg-[#15803D] hover:bg-[#116830] disabled:opacity-60 text-white text-sm sm:text-base font-extrabold inline-flex items-center justify-center gap-2 shadow-sm cursor-pointer"
+                >
+                  {payingRazorpay || saving ? (
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                  ) : (
+                    <CreditCard className="w-5 h-5" />
+                  )}
+                  <span>
+                    {payingRazorpay
+                      ? 'Opening Razorpay Checkout...'
+                      : ownPayment?.status === 'failed'
+                      ? 'Retry — Pay ₹250 & Complete Registration'
+                      : 'Pay ₹250 & Complete Registration'}
+                  </span>
+                </button>
+              )}
+            </div>
           </div>
-        )}
-
-        <div className="flex justify-end gap-3 pt-2">
-          <button
-            type="submit"
-            disabled={saving}
-            className="px-6 py-3 rounded-md bg-[#0B3B75] text-white text-sm font-bold hover:bg-slate-800 disabled:opacity-50 cursor-pointer"
-          >
-            {saving ? t.common.loading : workerProfile ? t.workerForm.updateBtn : t.workerForm.submitBtn}
-          </button>
-        </div>
+        </section>
       </form>
       )}
     </div>

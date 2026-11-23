@@ -102,21 +102,44 @@ export function loadRazorpayCheckoutScript(): Promise<boolean> {
   return razorpayScriptPromise;
 }
 
+/**
+ * Returns true ONLY after ABUJMAD FOUNDATION Admin has approved the worker registration
+ * (unlocking Verified Worker ID RS-W-..., Digital Worker ID Card, and Registration Certificate).
+ */
 export function isWorkerPaidBenefitsActive(worker: PublicWorkerProfile | null | undefined): boolean {
   if (!worker) return false;
-  if (worker.registrationPaymentStatus === 'verified' || worker.paidBenefitsActive === true) {
+  if (worker.paidBenefitsActive === true && worker.verificationStatus === 'verified') {
     return true;
+  }
+  if (worker.paidBenefitsActive === false) {
+    return false;
   }
   if (
     worker.registrationPaymentStatus === 'pending' ||
     worker.registrationPaymentStatus === 'failed' ||
-    worker.registrationPaymentStatus === 'refunded' ||
-    worker.paidBenefitsActive === false
+    worker.registrationPaymentStatus === 'refunded'
   ) {
     return false;
   }
-  // Backwards compatibility for existing pre-existing verified workers created before ₹250 activation
-  return Boolean(worker.registrationId && worker.registrationId.startsWith('RS-W-'));
+  // Backwards compatibility for pre-existing verified workers created before ₹250 activation
+  return Boolean(
+    worker.verificationStatus === 'verified' &&
+      worker.registrationId &&
+      worker.registrationId.startsWith('RS-W-')
+  );
+}
+
+/**
+ * Returns true once the worker's ₹250 registration fee has been server-verified as PAID
+ * (even while ABUJMAD FOUNDATION Admin approval for ID Card & Certificate is still pending).
+ */
+export function isWorkerPaymentPaid(
+  worker: PublicWorkerProfile | null | undefined,
+  payment?: WorkerRegistrationPayment | null
+): boolean {
+  if (payment?.status === 'verified') return true;
+  if (worker?.registrationPaymentStatus === 'verified') return true;
+  return false;
 }
 
 export function maskMobileNumber(mobile: string): string {
@@ -188,7 +211,9 @@ export async function fetchPaymentGatewayConfig(): Promise<PaymentGatewayPublicC
   return (await resp.json()) as PaymentGatewayPublicConfig;
 }
 
-export async function createServerRegistrationOrder(): Promise<CreatedPaymentOrder> {
+export async function createServerRegistrationOrder(params?: {
+  registrationId?: string;
+}): Promise<CreatedPaymentOrder> {
   const token = await auth.currentUser?.getIdToken();
   if (!token) throw new Error('Please sign in first to initiate registration payment.');
   const resp = await fetch('/api/payments/create-order', {
@@ -197,7 +222,10 @@ export async function createServerRegistrationOrder(): Promise<CreatedPaymentOrd
       'Content-Type': 'application/json',
       Authorization: `Bearer ${token}`,
     },
-    body: JSON.stringify({ amountInr: WORKER_REGISTRATION_FEE_INR }),
+    body: JSON.stringify({
+      amountInr: WORKER_REGISTRATION_FEE_INR,
+      ...(params?.registrationId ? { registrationId: params.registrationId } : {}),
+    }),
   });
   const data = await resp.json();
   if (!resp.ok) {
@@ -237,9 +265,19 @@ export async function verifyGatewaySignatureOnServer(params: {
   razorpayPaymentId: string;
   razorpaySignature: string;
   orderRef?: string;
+  registrationId?: string;
+  workerName?: string;
+  workerSkill?: string;
+  workerLocation?: string;
+  workerMobileMasked?: string;
 }): Promise<{
   verified: boolean;
   captured?: boolean;
+  paymentStatus?: string;
+  adminApprovalPending?: boolean;
+  provisionalAppId?: string;
+  gatewayOrderId?: string;
+  gatewayPaymentId?: string;
   alreadyVerified?: boolean;
   razorpayMode?: string;
   verifiedAtIso?: string;
@@ -264,6 +302,11 @@ export async function verifyGatewaySignatureOnServer(params: {
   const data = (await resp.json()) as {
     verified?: boolean;
     captured?: boolean;
+    paymentStatus?: string;
+    adminApprovalPending?: boolean;
+    provisionalAppId?: string;
+    gatewayOrderId?: string;
+    gatewayPaymentId?: string;
     alreadyVerified?: boolean;
     razorpayMode?: string;
     verifiedAtIso?: string;
@@ -282,6 +325,11 @@ export async function verifyGatewaySignatureOnServer(params: {
   return {
     verified: true,
     captured: data.captured,
+    paymentStatus: data.paymentStatus,
+    adminApprovalPending: data.adminApprovalPending,
+    provisionalAppId: data.provisionalAppId,
+    gatewayOrderId: data.gatewayOrderId,
+    gatewayPaymentId: data.gatewayPaymentId,
     alreadyVerified: data.alreadyVerified,
     razorpayMode: data.razorpayMode,
     verifiedAtIso: data.verifiedAtIso,
@@ -626,8 +674,14 @@ export async function adminVerifyWorkerRegistrationPayment(params: {
   certificateNo: string;
   referralOutcome: string;
 }> {
-  if (params.payment.status === 'verified') {
-    throw new Error('This registration payment is already verified.');
+  const alreadyIssuedIdAndCert = Boolean(
+    params.payment.status === 'verified' &&
+      params.payment.verifiedWorkerId &&
+      params.payment.verifiedWorkerId.startsWith('RS-W-') &&
+      params.payment.certificateNo
+  );
+  if (alreadyIssuedIdAndCert) {
+    throw new Error('This registration payment is already approved and Worker ID & Certificate have been issued.');
   }
 
   const workerUid = params.payment.workerUid;

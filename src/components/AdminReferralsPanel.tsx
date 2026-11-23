@@ -58,7 +58,7 @@ type FinanceSubTab = 'payments' | 'referrals' | 'withdrawals' | 'ledger' | 'veri
 export const AdminReferralsPanel: React.FC = () => {
   const { user } = useAuth();
   const [subTab, setSubTab] = useState<FinanceSubTab>('payments');
-  const [paymentStatusFilter, setPaymentStatusFilter] = useState<'all' | RegistrationPaymentStatus>('all');
+  const [paymentStatusFilter, setPaymentStatusFilter] = useState<'all' | 'awaiting_approval' | RegistrationPaymentStatus>('all');
 
   const [config, setConfig] = useState<PlatformReferralConfig>(DEFAULT_REFERRAL_CONFIG);
   const [payments, setPayments] = useState<WorkerRegistrationPayment[]>([]);
@@ -140,8 +140,25 @@ export const AdminReferralsPanel: React.FC = () => {
     [payments, rewards, withdrawals]
   );
 
+  const awaitingApprovalCount = useMemo(
+    () =>
+      payments.filter(
+        (p) =>
+          p.status === 'pending' ||
+          (p.status === 'verified' && (!p.verifiedWorkerId || !p.certificateNo))
+      ).length,
+    [payments]
+  );
+
   const filteredPayments = useMemo(() => {
     if (paymentStatusFilter === 'all') return payments;
+    if (paymentStatusFilter === 'awaiting_approval') {
+      return payments.filter(
+        (p) =>
+          p.status === 'pending' ||
+          (p.status === 'verified' && (!p.verifiedWorkerId || !p.certificateNo))
+      );
+    }
     return payments.filter((p) => p.status === paymentStatusFilter);
   }, [payments, paymentStatusFilter]);
 
@@ -480,7 +497,7 @@ export const AdminReferralsPanel: React.FC = () => {
             {
               id: 'payments',
               label: `₹250 Payments (${payments.length})`,
-              badge: financialReport.pendingRegistrationCount,
+              badge: awaitingApprovalCount,
               icon: CreditCard,
             },
             {
@@ -551,18 +568,27 @@ export const AdminReferralsPanel: React.FC = () => {
               Worker ₹250 Registration Payments ({filteredPayments.length})
             </h3>
             <div className="flex flex-wrap gap-1.5 text-xs">
-              {(['all', 'pending', 'verified', 'failed', 'refunded'] as const).map((st) => (
+              {(
+                [
+                  { id: 'all', label: 'All' },
+                  { id: 'awaiting_approval', label: `Awaiting Approval (${awaitingApprovalCount})` },
+                  { id: 'verified', label: 'PAID' },
+                  { id: 'pending', label: 'Pending' },
+                  { id: 'failed', label: 'Failed' },
+                  { id: 'refunded', label: 'Refunded' },
+                ] as const
+              ).map((st) => (
                 <button
-                  key={st}
+                  key={st.id}
                   type="button"
-                  onClick={() => setPaymentStatusFilter(st)}
+                  onClick={() => setPaymentStatusFilter(st.id)}
                   className={`px-3 py-1 rounded-md font-bold uppercase cursor-pointer ${
-                    paymentStatusFilter === st
+                    paymentStatusFilter === st.id
                       ? 'bg-[#E06D1B] text-white'
                       : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                   }`}
                 >
-                  {st}
+                  {st.label}
                 </button>
               ))}
             </div>
@@ -576,6 +602,12 @@ export const AdminReferralsPanel: React.FC = () => {
             <div className="divide-y divide-slate-100 text-xs">
               {filteredPayments.map((p) => {
                 const isActionOpen = activePaymentAction?.paymentId === p.id;
+                const isAdminApproved = p.status === 'verified' && Boolean(p.verifiedWorkerId && p.certificateNo);
+                const isPaidAwaitingApproval = p.status === 'verified' && !isAdminApproved;
+                const needsAdminApproval =
+                  p.status === 'pending' || p.status === 'failed' || isPaidAwaitingApproval;
+                const orderIdDisplay = p.gatewayOrderId || p.orderRef;
+                const paymentIdDisplay = p.gatewayPaymentId || p.utrOrGatewayRef;
                 return (
                   <div key={p.id} className="py-4 space-y-3">
                     <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
@@ -583,6 +615,16 @@ export const AdminReferralsPanel: React.FC = () => {
                         <div className="flex flex-wrap items-center gap-2">
                           <span className="font-extrabold text-sm text-[#0B3B75]">{p.workerName}</span>
                           <PaymentStatusBadge status={p.status} />
+                          {isPaidAwaitingApproval && (
+                            <span className="px-2 py-0.5 rounded bg-amber-100 text-[#9A3412] border border-amber-300 text-[10px] font-extrabold uppercase">
+                              PAID · Awaiting Admin Approval
+                            </span>
+                          )}
+                          {isAdminApproved && (
+                            <span className="px-2 py-0.5 rounded bg-emerald-100 text-[#15803D] border border-emerald-300 text-[10px] font-extrabold uppercase">
+                              Approved · ID &amp; Cert Issued
+                            </span>
+                          )}
                           <span className="font-mono-tabular font-extrabold text-[#15803D]">₹{p.amountInr}</span>
                           {p.otpVerified ? (
                             <span className="px-2 py-0.5 rounded bg-emerald-50 text-[#15803D] border border-emerald-200 text-[10px] font-bold">
@@ -598,12 +640,13 @@ export const AdminReferralsPanel: React.FC = () => {
                           {p.workerSkill} · {p.workerLocation} · Mobile: {p.workerMobileMasked}
                         </div>
                         <div className="font-mono-tabular text-[11px] text-slate-700">
-                          ID: <strong>{p.verifiedWorkerId || p.provisionalAppId}</strong> · Order:{' '}
-                          <strong>{p.orderRef}</strong> · UTR/Ref: <strong>{p.utrOrGatewayRef}</strong>
+                          Reg ID: <strong>{p.verifiedWorkerId || p.provisionalAppId}</strong> · Order ID:{' '}
+                          <strong>{orderIdDisplay}</strong> · Payment ID: <strong>{paymentIdDisplay}</strong>
                           {p.payerUpiOrName ? ` · Payer: ${p.payerUpiOrName}` : ''}
                         </div>
                         <div className="text-[11px] text-slate-500">
                           Method: <strong className="uppercase">{p.paymentMethod.replace(/_/g, ' ')}</strong>
+                          {p.gatewaySignatureVerified ? ' · Razorpay Signature Verified' : ''}
                           {p.referredByCode ? ` · Referred By Code: ${p.referredByCode}` : ''}
                           {p.receiptNo ? ` · Receipt: ${p.receiptNo}` : ''}
                           {p.certificateNo ? ` · Cert: ${p.certificateNo}` : ''}
@@ -615,7 +658,7 @@ export const AdminReferralsPanel: React.FC = () => {
                       </div>
 
                       <div className="flex flex-wrap items-center gap-2 shrink-0">
-                        {(p.status === 'pending' || p.status === 'failed') && (
+                        {needsAdminApproval && (
                           <button
                             type="button"
                             disabled={busyId === p.id}
@@ -626,7 +669,9 @@ export const AdminReferralsPanel: React.FC = () => {
                             }}
                             className="px-3 py-1.5 rounded-lg bg-[#15803D] hover:bg-[#116830] text-white font-bold cursor-pointer"
                           >
-                            Verify ₹250 &amp; Issue Worker ID
+                            {isPaidAwaitingApproval
+                              ? 'Approve & Generate Worker ID + Certificate'
+                              : 'Verify ₹250 & Issue Worker ID'}
                           </button>
                         )}
                         {p.status === 'pending' && (
@@ -666,7 +711,9 @@ export const AdminReferralsPanel: React.FC = () => {
                         <div className="flex items-center justify-between">
                           <div className="font-extrabold text-[#0B3B75]">
                             {activePaymentAction.mode === 'verify'
-                              ? `Confirm Verification for ${p.workerName} (UTR: ${p.utrOrGatewayRef})`
+                              ? isPaidAwaitingApproval
+                                ? `Approve PAID Registration & Issue ID Card + Certificate for ${p.workerName} (Payment ID: ${paymentIdDisplay})`
+                                : `Confirm Verification for ${p.workerName} (Ref: ${paymentIdDisplay})`
                               : activePaymentAction.mode === 'fail'
                               ? `Mark Payment Failed for ${p.workerName}`
                               : `Refund ₹${p.amountInr} & Automatically Reverse Linked ₹50 Referral Reward`}
@@ -711,7 +758,7 @@ export const AdminReferralsPanel: React.FC = () => {
                             onChange={(e) => setActionNotes(e.target.value)}
                             placeholder={
                               activePaymentAction.mode === 'verify'
-                                ? 'Admin verification note (optional)'
+                                ? 'Admin approval note (optional)'
                                 : activePaymentAction.mode === 'fail'
                                 ? 'Reason for payment failure *'
                                 : 'Refund reason *'
@@ -733,7 +780,7 @@ export const AdminReferralsPanel: React.FC = () => {
                           {busyId === p.id && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                           <span>
                             {activePaymentAction.mode === 'verify'
-                              ? 'Confirm & Activate Verified Worker ID'
+                              ? 'Confirm Approval & Generate Worker ID + Certificate'
                               : activePaymentAction.mode === 'fail'
                               ? 'Confirm Mark Failed'
                               : 'Confirm Refund & Reverse Referral Reward'}

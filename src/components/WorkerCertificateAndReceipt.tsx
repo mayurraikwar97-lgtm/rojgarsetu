@@ -35,7 +35,9 @@ import {
   createServerRegistrationOrder,
   fetchPaymentGatewayConfig,
   isWorkerPaidBenefitsActive,
+  isWorkerPaymentPaid,
   loadRazorpayCheckoutScript,
+  maskMobileNumber,
   recordGatewayAttemptOnServer,
   submitWorkerRegistrationPaymentProof,
   verifyGatewaySignatureOnServer,
@@ -184,7 +186,7 @@ export const PaymentStatusBadge: React.FC<{ status: RegistrationPaymentStatus; l
     return (
       <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-[#15803D] text-xs font-extrabold uppercase">
         <CheckCircle2 className="w-3.5 h-3.5" />
-        {tr(lang, 'Successful', 'सफल (सत्यापित)', 'यशस्वी (सत्यापित)')}
+        {tr(lang, 'PAID', 'भुगतान पूर्ण (PAID)', 'भरले (PAID)')}
       </span>
     );
   }
@@ -264,7 +266,7 @@ export const WorkerPaymentCheckoutCard: React.FC<WorkerPaymentCheckoutCardProps>
     try {
       const [cfg, created] = await Promise.all([
         fetchPaymentGatewayConfig(),
-        createServerRegistrationOrder(),
+        createServerRegistrationOrder({ registrationId: provisionalAppId }),
       ]);
       setConfig(cfg);
       setOrder(created);
@@ -386,20 +388,25 @@ export const WorkerPaymentCheckoutCard: React.FC<WorkerPaymentCheckoutCardProps>
               razorpayPaymentId: response.razorpay_payment_id,
               razorpaySignature: response.razorpay_signature,
               orderRef: order.orderRef,
+              registrationId: provisionalAppId,
+              workerName,
+              workerSkill,
+              workerLocation,
+              workerMobileMasked: maskMobileNumber(workerMobile),
             });
             setSubmitSuccess(
               verification.activatedOnServer
                 ? tr(
                     lang,
-                    `₹250 payment verified & captured! Verified Worker ID ${verification.verifiedWorkerId || ''} and Digital Registration Certificate are now active.${verification.referralCredited ? ' ₹50 referral reward credited.' : ''}`,
-                    `₹250 भुगतान सत्यापित हो गया! आपका सत्यापित कामगार ID ${verification.verifiedWorkerId || ''} और पंजीकरण प्रमाणपत्र सक्रिय हो गया है।`,
-                    `₹250 पेमेंट यशस्वीरित्या सत्यापित झाले! तुमचा सत्यापित कामगार ID ${verification.verifiedWorkerId || ''} आणि नोंदणी प्रमाणपत्र आता सुरू झाले आहे.`
+                    '₹250 PAID & verified on server! Your registration has been sent to the ABUJMAD FOUNDATION Admin Dashboard. Your Worker ID Card & Registration Certificate will be generated after Admin approval.',
+                    '₹250 भुगतान सत्यापित (PAID) हो गया! आपका पंजीकरण ABUJMAD FOUNDATION एडमिन डैशबोर्ड पर भेज दिया गया है। एडमिन स्वीकृति के बाद आपका ID कार्ड और प्रमाणपत्र जारी होगा।',
+                    '₹250 पेमेंट यशस्वी (PAID) व सर्व्हरवर सत्यापित झाले! तुमची नोंदणी ABUJMAD FOUNDATION अ‍ॅडमिन डॅशबोर्डवर तपासणीसाठी पाठवली आहे. अ‍ॅडमिन मंजुरीनंतर कामगार ID कार्ड व प्रमाणपत्र तयार होईल.'
                   )
                 : tr(
                     lang,
-                    'Razorpay payment signature and ₹250 capture verified on server! Syncing your verified account now.',
-                    'Razorpay भुगतान सत्यापित हो गया! आपका खाता अपडेट हो रहा है।',
-                    'Razorpay पेमेंट सर्व्हरवर सत्यापित झाले! तुमचे खाते अद्यतनित होत आहे.'
+                    'Razorpay payment signature and ₹250 capture verified on server! Syncing your PAID status with Admin Dashboard now.',
+                    'Razorpay भुगतान सत्यापित हो गया! आपका पंजीकरण एडमिन डैशबोर्ड पर अपडेट हो रहा है।',
+                    'Razorpay पेमेंट सर्व्हरवर सत्यापित झाले! तुमची नोंदणी अ‍ॅडमिन डॅशबोर्डवर अद्यतनित होत आहे.'
                   )
             );
             onPaymentSubmitted?.();
@@ -1165,6 +1172,7 @@ export const WorkerRegistrationCertificateCard: React.FC<{
 }> = ({ workerProfile, payment }) => {
   const { lang } = useLanguage();
   const isVerified = isWorkerPaidBenefitsActive(workerProfile);
+  const isPaid = isWorkerPaymentPaid(workerProfile, payment);
 
   if (!isVerified) {
     return (
@@ -1172,20 +1180,34 @@ export const WorkerRegistrationCertificateCard: React.FC<{
         <Lock className="w-5 h-5 text-[#E06D1B] shrink-0 mt-0.5" />
         <div className="space-y-1">
           <div className="font-extrabold text-[#0B3B75] text-sm">
-            {tr(
-              lang,
-              'Official Registration Certificate Locked Until ₹250 Payment Verification',
-              '₹250 भुगतान सत्यापन तक आधिकारिक पंजीकरण प्रमाणपत्र लॉक है',
-              '₹250 पेमेंट सत्यापन होईपर्यंत अधिकृत नोंदणी प्रमाणपत्र लॉक आहे'
-            )}
+            {isPaid
+              ? tr(
+                  lang,
+                  '₹250 Registration Fee PAID — Awaiting ABUJMAD FOUNDATION Admin Approval',
+                  '₹250 शुल्क भुगतान पूर्ण (PAID) — ABUJMAD FOUNDATION एडमिन स्वीकृति लंबित',
+                  '₹250 नोंदणी शुल्क भरले (PAID) — ABUJMAD FOUNDATION अ‍ॅडमिन मंजुरी प्रलंबित'
+                )
+              : tr(
+                  lang,
+                  'Official Registration Certificate Locked Until ₹250 Payment & Admin Approval',
+                  '₹250 भुगतान और एडमिन स्वीकृति तक आधिकारिक पंजीकरण प्रमाणपत्र लॉक है',
+                  '₹250 पेमेंट आणि अ‍ॅडमिन मंजुरी होईपर्यंत अधिकृत नोंदणी प्रमाणपत्र लॉक आहे'
+                )}
           </div>
           <p>
-            {tr(
-              lang,
-              'Once your one-time ₹250 registration fee is verified, your printable Official Rojgar Setu Worker Registration Certificate and Verified Worker ID (RS-W-...) will unlock here automatically.',
-              'जैसे ही आपका एकमुश्त ₹250 शुल्क सत्यापित होता है, आपका प्रिंट योग्य आधिकारिक पंजीकरण प्रमाणपत्र और सत्यापित कामगार ID यहाँ खुल जाएगा।',
-              'तुमचे ₹250 नोंदणी शुल्क सत्यापित होताच तुमचे अधिकृत नोंदणी प्रमाणपत्र आणि सत्यापित कामगार ID (RS-W-...) येथे आपोआप उपलब्ध होईल.'
-            )}
+            {isPaid
+              ? tr(
+                  lang,
+                  'Your ₹250 registration fee is PAID and sent to the ABUJMAD FOUNDATION Admin Dashboard. Your Official Worker ID Card (RS-W-...) and Registration Certificate will be generated automatically once Admin approves your registration.',
+                  'आपका ₹250 शुल्क PAID हो गया है और ABUJMAD FOUNDATION एडमिन डैशबोर्ड पर सत्यापन हेतु भेजा गया है। एडमिन स्वीकृति के बाद आपका ID कार्ड और प्रमाणपत्र यहाँ खुल जाएगा।',
+                  'तुमचे ₹250 नोंदणी शुल्क भरले (PAID) गेले असून ABUJMAD FOUNDATION अ‍ॅडमिन डॅशबोर्डवर तपासणीसाठी पाठवले आहे. अ‍ॅडमिन मंजुरीनंतर कामगार ID कार्ड व प्रमाणपत्र येथे आपोआप तयार होईल.'
+                )
+              : tr(
+                  lang,
+                  'Once your one-time ₹250 registration fee is paid and approved by ABUJMAD FOUNDATION Admin, your printable Official Worker Registration Certificate and Verified Worker ID (RS-W-...) will unlock here automatically.',
+                  'एकमुश्त ₹250 शुल्क भुगतान और ABUJMAD FOUNDATION एडमिन स्वीकृति के बाद आपका आधिकारिक पंजीकरण प्रमाणपत्र और सत्यापित कामगार ID यहाँ खुल जाएगा।',
+                  '₹250 नोंदणी शुल्क भरून ABUJMAD FOUNDATION अ‍ॅडमिन मंजुरी मिळाल्यानंतर तुमचे अधिकृत नोंदणी प्रमाणपत्र आणि सत्यापित कामगार ID येथे उपलब्ध होईल.'
+                )}
           </p>
         </div>
       </section>
@@ -1298,6 +1320,7 @@ export const WorkerDigitalIdCard: React.FC<{
 }) => {
   const { lang } = useLanguage();
   const isPaidVerified = isWorkerPaidBenefitsActive(workerProfile);
+  const isPaymentPaid = isWorkerPaymentPaid(workerProfile, payment);
   const effectiveStatus: RegistrationPaymentStatus =
     payment?.status ||
     workerProfile.registrationPaymentStatus ||
@@ -1326,14 +1349,16 @@ export const WorkerDigitalIdCard: React.FC<{
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <PaymentStatusBadge status={effectiveStatus} lang={lang} />
-            <button
-              type="button"
-              onClick={() => window.print()}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-50 cursor-pointer"
-            >
-              <Printer className="w-3.5 h-3.5" />
-              {tr(lang, 'Print ID', 'ID प्रिंट करें', 'ID प्रिंट करा')}
-            </button>
+            {isPaidVerified && (
+              <button
+                type="button"
+                onClick={() => window.print()}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-50 cursor-pointer"
+              >
+                <Printer className="w-3.5 h-3.5" />
+                {tr(lang, 'Print ID', 'ID प्रिंट करें', 'ID प्रिंट करा')}
+              </button>
+            )}
             {onEditProfile && (
               <button
                 type="button"
@@ -1363,13 +1388,17 @@ export const WorkerDigitalIdCard: React.FC<{
                 className={`inline-flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded-md border ${
                   isPaidVerified
                     ? 'bg-emerald-50 text-[#15803D] border-emerald-200'
+                    : isPaymentPaid
+                    ? 'bg-blue-50 text-[#0B3B75] border-blue-200'
                     : 'bg-amber-50 text-amber-800 border-amber-200'
                 }`}
               >
                 {isPaidVerified ? <BadgeCheck className="w-3.5 h-3.5" /> : <ShieldCheck className="w-3.5 h-3.5" />}
                 {isPaidVerified
-                  ? tr(lang, 'Verified Worker', 'सत्यापित कामगार', 'सत्यापित कामगार')
-                  : tr(lang, 'Pending ₹250 Verification', '₹250 सत्यापन लंबित', '₹250 सत्यापन प्रलंबित')}
+                  ? tr(lang, 'Admin Approved Worker', 'सत्यापित कामगार', 'सत्यापित कामगार')
+                  : isPaymentPaid
+                  ? tr(lang, '₹250 PAID · Awaiting Admin Approval', '₹250 भुगतान पूर्ण · एडमिन स्वीकृति लंबित', '₹250 भरले · अ‍ॅडमिन मंजुरी प्रलंबित')
+                  : tr(lang, 'Pending ₹250 Payment', '₹250 भुगतान लंबित', '₹250 पेमेंट प्रलंबित')}
               </span>
             </div>
             <div className="text-sm font-semibold text-slate-700">
