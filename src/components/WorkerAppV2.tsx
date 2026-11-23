@@ -1148,6 +1148,71 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
               }}
             />
 
+            {/* Custom Profession Status & Work Portfolio */}
+            {(workerProfile.customProfessionName ||
+              workerProfile.workDescription ||
+              (workerProfile.workPhotoUrls && workerProfile.workPhotoUrls.length > 0)) && (
+              <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-sm font-bold text-[#0B3B75]">
+                      {tr(lang, 'Profession & Work Portfolio', 'व्यवसाय और कार्य विवरण', 'व्यवसाय आणि कामाचा पोर्टफोलिओ')}
+                    </h3>
+                    <p className="text-xs font-semibold text-[#C25E00] mt-0.5">
+                      {workerProfile.customProfessionName || workerProfile.primarySkill}
+                    </p>
+                  </div>
+                  {workerProfile.customProfessionStatus && (
+                    <span
+                      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-bold border ${
+                        workerProfile.customProfessionStatus === 'approved'
+                          ? 'bg-emerald-50 text-emerald-800 border-emerald-300'
+                          : workerProfile.customProfessionStatus === 'rejected'
+                          ? 'bg-red-50 text-red-800 border-red-300'
+                          : 'bg-amber-50 text-amber-800 border-amber-300'
+                      }`}
+                    >
+                      {workerProfile.customProfessionStatus === 'approved'
+                        ? tr(lang, 'Approved & Searchable', 'स्वीकृत एवं खोज योग्य', 'मंजूर व शोधात उपलब्ध')
+                        : workerProfile.customProfessionStatus === 'rejected'
+                        ? tr(lang, 'Profession Rejected', 'व्यवसाय अस्वीकृत', 'व्यवसाय नाकारला')
+                        : tr(lang, 'Pending Admin Approval', 'एडमिन स्वीकृति लंबित', 'अ‍ॅडमिन मंजुरी प्रलंबित')}
+                    </span>
+                  )}
+                </div>
+
+                {workerProfile.workDescription && (
+                  <p className="text-xs sm:text-sm text-slate-700 bg-slate-50 border border-slate-200 rounded-lg p-3 leading-relaxed">
+                    {workerProfile.workDescription}
+                  </p>
+                )}
+
+                {workerProfile.workPhotoUrls && workerProfile.workPhotoUrls.length > 0 && (
+                  <div className="space-y-1.5">
+                    <div className="text-[11px] font-semibold text-slate-500">
+                      {tr(lang, 'Uploaded Work Photos', 'अपलोड किए गए कार्य फ़ोटो', 'अपलोड केलेले कामाचे फोटो')}
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      {workerProfile.workPhotoUrls.map((url, idx) => (
+                        <button
+                          key={`${url.slice(0, 32)}_${idx}`}
+                          type="button"
+                          onClick={() => setLightboxPhoto(url)}
+                          className="rounded-lg overflow-hidden border border-slate-200 aspect-square bg-slate-100 hover:border-[#0B3B75] cursor-pointer"
+                        >
+                          <img
+                            src={url}
+                            alt={`Work sample ${idx + 1}`}
+                            className="w-full h-full object-cover"
+                          />
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* ₹250 Registration Payment Checkout (shown ONLY if not yet PAID — prevents duplicate payment) */}
             {!isWorkerPaymentPaid(workerProfile, ownPayment) && !isWorkerPaidBenefitsActive(workerProfile) && (
               <WorkerPaymentCheckoutCard

@@ -134,6 +134,11 @@ export interface PublicWorkerProfile {
   referredByCode?: string;
   referredByUid?: string;
   referredByName?: string;
+  customProfessionId?: string;
+  customProfessionName?: string;
+  customProfessionStatus?: CustomProfessionStatus;
+  workDescription?: string;
+  workPhotoUrls?: string[];
   createdAt?: unknown;
   updatedAt?: unknown;
 }
@@ -1228,6 +1233,49 @@ export interface FinancialReportSummary {
   withdrawalsPendingInr: number;
   netBalanceInr: number;
 }
+
+// ============================================================
+// CUSTOM PROFESSION & DYNAMIC CATEGORY SYSTEM
+// ============================================================
+
+export type CustomProfessionStatus = 'pending' | 'approved' | 'rejected';
+
+export type CustomProfessionGroup =
+  | 'trades'
+  | 'industrial'
+  | 'transport'
+  | 'agriculture'
+  | 'hospitality'
+  | 'office'
+  | 'services'
+  | 'enterprise';
+
+export interface CustomProfessionRecord {
+  id: string; // deterministic slug e.g. 'cctv_installer'
+  slug: string;
+  nameEn: string;
+  nameHi?: string;
+  nameMr?: string;
+  description?: string;
+  group: CustomProfessionGroup;
+  keywords: string[];
+  status: CustomProfessionStatus;
+  source: 'worker_submission' | 'admin_created';
+  createdByUid: string;
+  submittedByWorkerName?: string;
+  submittedByWorkerRegistrationId?: string;
+  submittedLocation?: string;
+  sampleWorkPhotoUrls?: string[];
+  expectedWage?: number;
+  wageUnit?: WageUnit;
+  experienceYears?: number;
+  approvedByUid?: string;
+  adminNotes?: string;
+  usageCount: number;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
 
 
 

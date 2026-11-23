@@ -29,7 +29,12 @@ import {
 import { getJobPhotoUrls, MAX_WORK_PHOTOS } from '../lib/workPhotoService';
 import { WorkPhotoUploader } from './WorkPhotoUploader';
 import { speakJobAlert, stopVoiceAlert, unlockAudioOnUserGesture } from '../lib/voiceAlertEngine';
+import {
+  getCustomProfessionLabel,
+  subscribeApprovedProfessions,
+} from '../lib/customProfessionService';
 import type {
+  CustomProfessionRecord,
   JobPosting,
   JobWorkType,
   PageRoute,
@@ -523,10 +528,36 @@ interface FindWorkersViewProps {
 }
 
 export const FindWorkersView: React.FC<FindWorkersViewProps> = ({ workers, onNavigate }) => {
-  const { t } = useLanguage();
+  const { lang, t } = useLanguage();
   const [search, setSearch] = useState('');
   const [stateFilter, setStateFilter] = useState('');
   const [availFilter, setAvailFilter] = useState('');
+  const [approvedProfessions, setApprovedProfessions] = useState<CustomProfessionRecord[]>([]);
+
+  useEffect(() => {
+    return subscribeApprovedProfessions(setApprovedProfessions);
+  }, []);
+
+  const approvedProfessionSlugs = useMemo(
+    () => new Set(approvedProfessions.filter((p) => p.status === 'approved').map((p) => p.slug)),
+    [approvedProfessions]
+  );
+
+  // Never publicly expose an unverified custom profession category name until Admin approves it
+  const getPublicProfessionLabel = (w: PublicWorkerProfile): string => {
+    const isUnverifiedCustom =
+      Boolean(w.customProfessionId) &&
+      (w.customProfessionStatus === 'pending' || w.customProfessionStatus === 'rejected') &&
+      !approvedProfessionSlugs.has(w.customProfessionId || '');
+    if (isUnverifiedCustom) {
+      return lang === 'mr'
+        ? 'कुशल कामगार (व्यवसाय सत्यापन प्रलंबित)'
+        : lang === 'hi'
+        ? 'कुशल कामगार (व्यवसाय सत्यापन लंबित)'
+        : 'Skilled Worker (Profession Review Pending)';
+    }
+    return w.primarySkill;
+  };
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -534,15 +565,30 @@ export const FindWorkersView: React.FC<FindWorkersViewProps> = ({ workers, onNav
       .filter((w) => w.verificationStatus !== 'suspended')
       .filter((w) => !stateFilter || w.state === stateFilter)
       .filter((w) => !availFilter || w.availabilityStatus === availFilter)
-      .filter(
-        (w) =>
-          !q ||
+      .filter((w) => {
+        if (!q) return true;
+        const publicSkill = getPublicProfessionLabel(w).toLowerCase();
+        const isUnverifiedCustom =
+          Boolean(w.customProfessionId) &&
+          (w.customProfessionStatus === 'pending' || w.customProfessionStatus === 'rejected') &&
+          !approvedProfessionSlugs.has(w.customProfessionId || '');
+        const matchingApprovedProf = w.customProfessionId
+          ? approvedProfessions.find((p) => p.slug === w.customProfessionId)
+          : undefined;
+        const profSearchText = matchingApprovedProf
+          ? `${matchingApprovedProf.nameEn} ${matchingApprovedProf.nameHi || ''} ${matchingApprovedProf.nameMr || ''} ${(matchingApprovedProf.keywords || []).join(' ')}`.toLowerCase()
+          : '';
+        return (
           w.displayName.toLowerCase().includes(q) ||
-          w.primarySkill.toLowerCase().includes(q) ||
+          publicSkill.includes(q) ||
+          profSearchText.includes(q) ||
           w.district.toLowerCase().includes(q) ||
-          w.skills.some((s) => s.toLowerCase().includes(q))
-      );
-  }, [workers, search, stateFilter, availFilter]);
+          w.cityOrVillage.toLowerCase().includes(q) ||
+          (!isUnverifiedCustom && (w.workDescription || '').toLowerCase().includes(q)) ||
+          (!isUnverifiedCustom && w.skills.some((s) => s.toLowerCase().includes(q)))
+        );
+      });
+  }, [workers, search, stateFilter, availFilter, approvedProfessions, approvedProfessionSlugs, lang]);
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
@@ -563,14 +609,20 @@ export const FindWorkersView: React.FC<FindWorkersViewProps> = ({ workers, onNav
         </button>
       </div>
 
-      <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-8 grid grid-cols-1 md:grid-cols-3 gap-4">
+      <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-5 grid grid-cols-1 md:grid-cols-3 gap-4">
         <div className="relative">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
           <input
             type="search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search by skill, district, or worker name..."
+            placeholder={
+              lang === 'mr'
+                ? 'व्यवसाय, कौशल्य, जिल्हा किंवा कामगाराचे नाव शोधा...'
+                : lang === 'hi'
+                ? 'व्यवसाय, कौशल, ज़िला या कामगार का नाम खोजें...'
+                : 'Search by profession, skill, district, or worker name...'
+            }
             className="w-full pl-9 pr-3 py-2 bg-white border border-slate-300 rounded-md text-sm"
           />
         </div>
@@ -597,6 +649,36 @@ export const FindWorkersView: React.FC<FindWorkersViewProps> = ({ workers, onNav
         </select>
       </div>
 
+      {/* Approved Specialized Profession Filter Chips */}
+      {approvedProfessions.length > 0 && (
+        <div className="mb-6 flex flex-wrap items-center gap-2">
+          <span className="text-xs font-semibold text-slate-500">
+            {lang === 'mr'
+              ? 'मंजूर विशेष व्यवसाय:'
+              : lang === 'hi'
+              ? 'स्वीकृत विशेष व्यवसाय:'
+              : 'Approved Professions:'}
+          </span>
+          {approvedProfessions.map((p) => {
+            const active = search.trim().toLowerCase() === p.nameEn.toLowerCase();
+            return (
+              <button
+                key={p.slug}
+                type="button"
+                onClick={() => setSearch(active ? '' : p.nameEn)}
+                className={`px-3 py-1 rounded-full text-xs font-semibold border cursor-pointer transition-colors ${
+                  active
+                    ? 'bg-[#0B3B75] text-white border-[#0B3B75]'
+                    : 'bg-white text-slate-700 border-slate-300 hover:border-[#0B3B75]'
+                }`}
+              >
+                {getCustomProfessionLabel(p, lang)}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       <div className="mb-8">
         <SponsoredAdSlider
           compact
@@ -614,40 +696,68 @@ export const FindWorkersView: React.FC<FindWorkersViewProps> = ({ workers, onNav
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
-          {filtered.map((w) => (
-            <div key={w.id} className="bg-white border border-slate-200 rounded-lg p-5 space-y-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="flex items-center gap-3 min-w-0">
-                  <SecureAvatar
-                    name={w.displayName}
-                    photoDocId={w.photoDocId}
-                    sizeClass="w-11 h-11"
-                    textSizeClass="text-sm"
-                  />
-                  <div className="min-w-0">
-                    <p className="text-xs font-mono-tabular text-slate-500 truncate">{w.registrationId}</p>
-                    <h2 className="font-display text-base font-bold text-[#0B3B75] truncate">{w.displayName}</h2>
+          {filtered.map((w) => {
+            const isUnverifiedCustom =
+              Boolean(w.customProfessionId) &&
+              (w.customProfessionStatus === 'pending' || w.customProfessionStatus === 'rejected') &&
+              !approvedProfessionSlugs.has(w.customProfessionId || '');
+            return (
+              <div key={w.id} className="bg-white border border-slate-200 rounded-lg p-5 space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <SecureAvatar
+                      name={w.displayName}
+                      photoDocId={w.photoDocId}
+                      sizeClass="w-11 h-11"
+                      textSizeClass="text-sm"
+                    />
+                    <div className="min-w-0">
+                      <p className="text-xs font-mono-tabular text-slate-500 truncate">{w.registrationId}</p>
+                      <h2 className="font-display text-base font-bold text-[#0B3B75] truncate">{w.displayName}</h2>
+                    </div>
                   </div>
+                  <span className="text-xs font-semibold text-[#15803D] shrink-0">
+                    {w.verificationStatus === 'verified' ? t.common.verified : t.common.pending}
+                  </span>
                 </div>
-                <span className="text-xs font-semibold text-[#15803D] shrink-0">
-                  {w.verificationStatus === 'verified' ? t.common.verified : t.common.pending}
-                </span>
+                <p className="text-xs font-semibold text-[#C25E00]">{getPublicProfessionLabel(w)}</p>
+                {!isUnverifiedCustom && (
+                  <p className="text-xs text-slate-600">
+                    Skills: {w.skills.join(' · ')}
+                  </p>
+                )}
+                {!isUnverifiedCustom && w.workDescription && (
+                  <p className="text-xs text-slate-600 line-clamp-2 bg-slate-50 rounded p-2 border border-slate-100">
+                    {w.workDescription}
+                  </p>
+                )}
+                {!isUnverifiedCustom && w.workPhotoUrls && w.workPhotoUrls.length > 0 && (
+                  <div className="grid grid-cols-4 gap-1.5">
+                    {w.workPhotoUrls.slice(0, 4).map((url, idx) => (
+                      <img
+                        key={`${w.id}_wp_${idx}`}
+                        src={url}
+                        alt={`${w.displayName} work ${idx + 1}`}
+                        className="w-full h-12 object-cover rounded border border-slate-200"
+                      />
+                    ))}
+                  </div>
+                )}
+                <div className="text-xs text-slate-600 space-y-1 pt-2 border-t border-slate-100">
+                  <p>
+                    {w.cityOrVillage}, {w.district}, {w.state}
+                  </p>
+                  <p className="font-mono-tabular">
+                    Exp: {w.experienceYears} yrs
+                    {w.expectedWage > 0
+                      ? ` · Expected: ₹${w.expectedWage.toLocaleString('en-IN')} / ${w.wageUnit}`
+                      : ''}
+                  </p>
+                  <p className="text-slate-500">Languages: {w.languagesKnown.join(', ')}</p>
+                </div>
               </div>
-              <p className="text-xs font-semibold text-[#C25E00]">{w.primarySkill}</p>
-              <p className="text-xs text-slate-600">
-                Skills: {w.skills.join(' · ')}
-              </p>
-              <div className="text-xs text-slate-600 space-y-1 pt-2 border-t border-slate-100">
-                <p>
-                  {w.cityOrVillage}, {w.district}, {w.state}
-                </p>
-                <p className="font-mono-tabular">
-                  Exp: {w.experienceYears} yrs · Expected: ₹{w.expectedWage.toLocaleString('en-IN')} / {w.wageUnit}
-                </p>
-                <p className="text-slate-500">Languages: {w.languagesKnown.join(', ')}</p>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
@@ -695,6 +805,11 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
   const [errorMsg, setErrorMsg] = useState('');
   const [createdJobId, setCreatedJobId] = useState('');
   const [pushDispatchNotice, setPushDispatchNotice] = useState('');
+  const [approvedProfessions, setApprovedProfessions] = useState<CustomProfessionRecord[]>([]);
+
+  useEffect(() => {
+    return subscribeApprovedProfessions(setApprovedProfessions);
+  }, []);
 
   const stateObj = INDIA_STATES_DISTRICTS.find((s) => s.name === stateName);
 
@@ -931,11 +1046,38 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
                   onChange={(e) => setCategory(e.target.value)}
                   className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
                 >
-                  {NORMAL_WORK_CATEGORIES.map((c) => (
-                    <option key={c.id} value={c.en}>
-                      {lang === 'hi' ? c.hi : lang === 'mr' ? c.mr : c.en}
-                    </option>
-                  ))}
+                  <optgroup
+                    label={
+                      lang === 'mr'
+                        ? 'प्रमुख रोजगार श्रेणी'
+                        : lang === 'hi'
+                        ? 'प्रमुख रोजगार श्रेणियाँ'
+                        : 'Standard Categories'
+                    }
+                  >
+                    {NORMAL_WORK_CATEGORIES.map((c) => (
+                      <option key={c.id} value={c.en}>
+                        {lang === 'hi' ? c.hi : lang === 'mr' ? c.mr : c.en}
+                      </option>
+                    ))}
+                  </optgroup>
+                  {approvedProfessions.length > 0 && (
+                    <optgroup
+                      label={
+                        lang === 'mr'
+                          ? 'मंजूर विशेष व्यवसाय'
+                          : lang === 'hi'
+                          ? 'स्वीकृत विशेष व्यवसाय'
+                          : 'Approved Specialized Professions'
+                      }
+                    >
+                      {approvedProfessions.map((p) => (
+                        <option key={p.slug} value={p.nameEn}>
+                          {getCustomProfessionLabel(p, lang)}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
                 </select>
               </div>
             </div>

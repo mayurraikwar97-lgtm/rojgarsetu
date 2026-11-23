@@ -67,6 +67,11 @@
         "referredByCode": { "type": "string", "minLength": 4, "maxLength": 32, "pattern": "^[A-Z0-9_\\-]+$" },
         "referredByUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "referredByName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "customProfessionId": { "type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[a-z0-9_\\-]+$" },
+        "customProfessionName": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "customProfessionStatus": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "workDescription": { "type": "string", "maxLength": 500 },
+        "workPhotoUrls": { "type": "array", "description": "Up to 4 uploaded sample work photo URLs." },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
       },
@@ -1351,6 +1356,36 @@
         "initiatedByRole", "callerSafeName", "receiverSafeName", "maskedBridgeCode",
         "maskedVirtualNumber", "status", "createdAt", "updatedAt"
       ]
+    },
+    "CustomProfession": {
+      "title": "CustomProfession",
+      "description": "Dynamic and worker-submitted custom profession requiring admin approval before becoming a public searchable job and ad category.",
+      "type": "object",
+      "properties": {
+        "slug": { "type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[a-z0-9_\\-]+$" },
+        "nameEn": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "nameHi": { "type": "string", "maxLength": 80 },
+        "nameMr": { "type": "string", "maxLength": 80 },
+        "description": { "type": "string", "maxLength": 500 },
+        "group": { "type": "string", "enum": ["trades", "industrial", "transport", "agriculture", "hospitality", "office", "services", "enterprise"] },
+        "keywords": { "type": "array", "description": "Up to 12 searchable multilingual keywords." },
+        "status": { "type": "string", "enum": ["pending", "approved", "rejected"] },
+        "source": { "type": "string", "enum": ["worker_submission", "admin_created"] },
+        "createdByUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "submittedByWorkerName": { "type": "string", "maxLength": 120 },
+        "submittedByWorkerRegistrationId": { "type": "string", "maxLength": 40 },
+        "submittedLocation": { "type": "string", "maxLength": 140 },
+        "sampleWorkPhotoUrls": { "type": "array", "description": "Up to 4 sample work photo URLs." },
+        "expectedWage": { "type": "number" },
+        "wageUnit": { "type": "string", "enum": ["daily", "monthly", "hourly", "contract"] },
+        "experienceYears": { "type": "number" },
+        "approvedByUid": { "type": "string", "maxLength": 128 },
+        "adminNotes": { "type": "string", "maxLength": 500 },
+        "usageCount": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["slug", "nameEn", "group", "keywords", "status", "source", "createdByUid", "usageCount", "createdAt", "updatedAt"]
     }
   },
   "firestore": {
@@ -1557,6 +1592,10 @@
     "/financialLedger/{entryId}": {
       "schema": { "$ref": "#/entities/FinancialLedgerEntry" },
       "description": "Immutable admin-auditable financial ledger separating Gross Registration Revenue, Referral Rewards, Refunds, and Net Balance."
+    },
+    "/customProfessions/{professionId}": {
+      "schema": { "$ref": "#/entities/CustomProfession" },
+      "description": "Dynamic and worker-submitted custom professions gated by Admin approval before public search, matching, and ad targeting."
     }
   }
 }

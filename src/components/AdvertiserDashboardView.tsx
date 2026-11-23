@@ -28,11 +28,13 @@ import {
   subscribeAdvertiserProfile,
   subscribeOwnerAdvertisements,
 } from '../lib/adsReferralService';
+import { getCustomProfessionLabel, subscribeApprovedProfessions } from '../lib/customProfessionService';
 import type {
   AdvertisementActionType,
   AdvertisementCategory,
   AdvertisementRecord,
   AdvertiserProfile,
+  CustomProfessionRecord,
   Language,
   PageRoute,
 } from '../types/domain';
@@ -53,6 +55,7 @@ export const AdvertiserDashboardView: React.FC<AdvertiserDashboardViewProps> = (
   const [profile, setProfile] = useState<AdvertiserProfile | null>(null);
   const [myAds, setMyAds] = useState<AdvertisementRecord[]>([]);
   const [customCategories, setCustomCategories] = useState<AdvertisementCategory[]>([]);
+  const [approvedProfessions, setApprovedProfessions] = useState<CustomProfessionRecord[]>([]);
 
   // Business Profile Registration Form
   const [businessName, setBusinessName] = useState('');
@@ -90,7 +93,11 @@ export const AdvertiserDashboardView: React.FC<AdvertiserDashboardViewProps> = (
 
   useEffect(() => {
     const uCat = subscribeAdvertisementCategories(setCustomCategories);
-    return () => uCat();
+    const uProf = subscribeApprovedProfessions(setApprovedProfessions);
+    return () => {
+      uCat();
+      uProf();
+    };
   }, []);
 
   useEffect(() => {
@@ -136,20 +143,36 @@ export const AdvertiserDashboardView: React.FC<AdvertiserDashboardViewProps> = (
   }, [stateName]);
 
   const allCategoryChoices = useMemo(() => {
-    const base = DEFAULT_AD_TARGET_CATEGORIES.map((c) => ({
-      id: c.id,
-      label: lang === 'mr' ? c.labelMr : lang === 'hi' ? c.labelHi : c.labelEn,
-      hint: lang === 'mr' ? c.exampleBusinessesMr : c.exampleBusinessesEn,
-    }));
-    const extras = customCategories
-      .filter((c) => c.active)
-      .map((c) => ({
+    const seen = new Set<string>();
+    const list: Array<{ id: string; label: string; hint: string }> = [];
+    for (const c of DEFAULT_AD_TARGET_CATEGORIES) {
+      seen.add(c.id);
+      list.push({
+        id: c.id,
+        label: lang === 'mr' ? c.labelMr : lang === 'hi' ? c.labelHi : c.labelEn,
+        hint: lang === 'mr' ? c.exampleBusinessesMr : c.exampleBusinessesEn,
+      });
+    }
+    for (const c of customCategories) {
+      if (!c.active || seen.has(c.slug)) continue;
+      seen.add(c.slug);
+      list.push({
         id: c.slug,
         label: (lang === 'mr' ? c.nameMr : lang === 'hi' ? c.nameHi : c.nameEn) || c.nameEn,
         hint: `Linked: ${c.linkedServiceCategories.join(', ')}`,
-      }));
-    return [...base, ...extras];
-  }, [customCategories, lang]);
+      });
+    }
+    for (const p of approvedProfessions) {
+      if (seen.has(p.slug)) continue;
+      seen.add(p.slug);
+      list.push({
+        id: p.slug,
+        label: getCustomProfessionLabel(p, lang),
+        hint: p.description || p.nameEn,
+      });
+    }
+    return list;
+  }, [customCategories, approvedProfessions, lang]);
 
   const aggregateStats = useMemo(() => {
     return myAds.reduce(

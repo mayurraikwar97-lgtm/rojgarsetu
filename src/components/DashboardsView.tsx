@@ -36,7 +36,10 @@ import { SecureAvatar } from './SecureAvatar';
 import { UserNotificationCenter } from './UserNotificationCenter';
 import { AdminNotificationDemoPanel } from './AdminNotificationDemoPanel';
 import { AdminAdsManagementPanel } from './AdminAdsManagementPanel';
+import { AdminProfessionsPanel } from './AdminProfessionsPanel';
 import { AdminReferralsPanel } from './AdminReferralsPanel';
+import { subscribeAllProfessionsAdmin } from '../lib/customProfessionService';
+import type { CustomProfessionRecord } from '../types/domain';
 import { PaymentStatusBadge } from './WorkerCertificateAndReceipt';
 import { ApproximateJobLocationMap } from './ApproximateJobLocationMap';
 import { DealCoordinationPanel, getDealStatusBadgeStyle } from './DealCoordinationPanel';
@@ -3878,6 +3881,7 @@ type AdminTab =
   | 'workers'
   | 'employers'
   | 'jobs'
+  | 'professions'
   | 'categories'
   | 'advertisements'
   | 'referrals'
@@ -3906,6 +3910,7 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
   const [workerPayments, setWorkerPayments] = useState<WorkerRegistrationPayment[]>([]);
   const [adminReferrals, setAdminReferrals] = useState<WorkerReferralRecord[]>([]);
   const [adminRewards, setAdminRewards] = useState<ReferralRewardRecord[]>([]);
+  const [adminCustomProfessions, setAdminCustomProfessions] = useState<CustomProfessionRecord[]>([]);
   const [referralConfig, setReferralConfig] = useState<PlatformReferralConfig>(DEFAULT_REFERRAL_CONFIG);
   const [workerApprovalMessage, setWorkerApprovalMessage] = useState('');
   const [grievanceNotes, setGrievanceNotes] = useState<Record<string, string>>({});
@@ -3937,6 +3942,7 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
       onPayouts: () => undefined,
     });
     const u7 = subscribeReferralConfig(setReferralConfig);
+    const u8 = subscribeAllProfessionsAdmin(setAdminCustomProfessions);
     let mounted = true;
     void adminFetchAllEmployerPrivate().then((map) => {
       if (mounted) setEmployerPrivateMap(map);
@@ -3950,8 +3956,14 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
       u5();
       u6();
       u7();
+      u8();
     };
   }, [isAdmin]);
+
+  const pendingCustomProfessionsCount = useMemo(
+    () => adminCustomProfessions.filter((p) => p.status === 'pending').length,
+    [adminCustomProfessions]
+  );
 
   const paymentByWorkerUid = useMemo(() => {
     const map: Record<string, WorkerRegistrationPayment> = {};
@@ -4080,6 +4092,14 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
             { id: 'workers', label: `Workers (${workers.length})`, icon: Users },
             { id: 'employers', label: `Employers (${employers.length})`, icon: Briefcase },
             { id: 'jobs', label: `Jobs (${jobs.length})`, icon: FileText },
+            {
+              id: 'professions',
+              label:
+                pendingCustomProfessionsCount > 0
+                  ? `Professions & Custom Skills (${pendingCustomProfessionsCount} Pending)`
+                  : `Professions & Custom Skills (${adminCustomProfessions.length})`,
+              icon: PlusCircle,
+            },
             { id: 'categories', label: `Services & Radius (${SERVICE_CATALOG_V2.length})`, icon: Radar },
             { id: 'advertisements', label: 'Advertisement Management', icon: Megaphone },
             { id: 'referrals', label: 'Payments, Referrals & Finance', icon: Gift },
@@ -4092,7 +4112,10 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
         ).map((item) => {
           const Icon = item.icon;
           const isHighlight =
-            item.id === 'notifications' || item.id === 'advertisements' || item.id === 'referrals';
+            item.id === 'professions' ||
+            item.id === 'notifications' ||
+            item.id === 'advertisements' ||
+            item.id === 'referrals';
           return (
             <button
               key={item.id}
@@ -4114,6 +4137,8 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
           );
         })}
       </div>
+
+      {tab === 'professions' && <AdminProfessionsPanel />}
 
       {tab === 'advertisements' && <AdminAdsManagementPanel />}
 

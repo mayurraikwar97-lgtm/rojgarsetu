@@ -58,6 +58,11 @@ import {
   buildApproxLocationLabel,
   getNextRadiusStage,
 } from '../lib/smartVoiceJobAlert';
+import {
+  customProfessionToServiceCategoryV2,
+  subscribeApprovedProfessions,
+} from '../lib/customProfessionService';
+import type { CustomProfessionRecord } from '../types/domain';
 import type {
   JobApplication,
   JobPosting,
@@ -137,6 +142,11 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState<ServiceCategoryV2 | null>(null);
   const [selectedSubService, setSelectedSubService] = useState<SubServiceItem | null>(null);
+  const [approvedProfessions, setApprovedProfessions] = useState<CustomProfessionRecord[]>([]);
+
+  useEffect(() => {
+    return subscribeApprovedProfessions(setApprovedProfessions);
+  }, []);
 
   // Location State
   const [location, setLocation] = useState<ActiveLocationState>(() => {
@@ -218,19 +228,48 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
     return { job: latestJob, app: matchingApp };
   }, [jobs, customerApplications, user]);
 
-  // Filter categories & sub-services by search query
+  const approvedCustomCatalog = useMemo(() => {
+    const builtInIds = new Set(SERVICE_CATALOG_V2.map((c) => c.id.toLowerCase()));
+    const builtInNames = new Set(SERVICE_CATALOG_V2.map((c) => c.en.toLowerCase()));
+    return approvedProfessions
+      .filter((p) => p.status === 'approved')
+      .filter((p) => !builtInIds.has(p.slug.toLowerCase()) && !builtInNames.has(p.nameEn.toLowerCase()))
+      .map(customProfessionToServiceCategoryV2);
+  }, [approvedProfessions]);
+
+  const allCatalogCategories = useMemo(
+    () => [...SERVICE_CATALOG_V2, ...approvedCustomCatalog],
+    [approvedCustomCatalog]
+  );
+
+  // Filter categories & sub-services by search query (includes Admin-approved custom professions)
   const searchResults = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
-    if (!q) return { categories: SERVICE_CATALOG_V2, matchingSubs: [] as Array<{ cat: ServiceCategoryV2; sub: SubServiceItem }> };
+    if (!q) {
+      return {
+        categories: SERVICE_CATALOG_V2,
+        customCategories: approvedCustomCatalog,
+        matchingSubs: [] as Array<{ cat: ServiceCategoryV2; sub: SubServiceItem }>,
+      };
+    }
 
-    const matchingCats = SERVICE_CATALOG_V2.filter((cat) => {
-      const catText = `${cat.en} ${cat.hi} ${cat.mr} ${cat.taglineEn} ${cat.taglineHi} ${cat.taglineMr}`.toLowerCase();
+    const keywordsBySlug = new Map<string, string>();
+    approvedProfessions.forEach((p) => {
+      keywordsBySlug.set(
+        p.slug,
+        `${p.nameEn} ${p.nameHi || ''} ${p.nameMr || ''} ${p.description || ''} ${(p.keywords || []).join(' ')}`.toLowerCase()
+      );
+    });
+
+    const matchingCats = allCatalogCategories.filter((cat) => {
+      const extraKw = keywordsBySlug.get(cat.id.replace(/^custom_/, '')) || '';
+      const catText = `${cat.en} ${cat.hi} ${cat.mr} ${cat.taglineEn} ${cat.taglineHi} ${cat.taglineMr} ${cat.canonicalCategory} ${extraKw}`.toLowerCase();
       if (catText.includes(q)) return true;
       return cat.subServices.some((s) => `${s.en} ${s.hi} ${s.mr}`.toLowerCase().includes(q));
     });
 
     const matchingSubs: Array<{ cat: ServiceCategoryV2; sub: SubServiceItem }> = [];
-    SERVICE_CATALOG_V2.forEach((cat) => {
+    allCatalogCategories.forEach((cat) => {
       if (cat.isTransport) return;
       cat.subServices.forEach((sub) => {
         if (`${sub.en} ${sub.hi} ${sub.mr}`.toLowerCase().includes(q)) {
@@ -239,8 +278,12 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
       });
     });
 
-    return { categories: matchingCats, matchingSubs: matchingSubs.slice(0, 6) };
-  }, [searchQuery]);
+    return {
+      categories: matchingCats,
+      customCategories: [] as ServiceCategoryV2[],
+      matchingSubs: matchingSubs.slice(0, 6),
+    };
+  }, [searchQuery, allCatalogCategories, approvedCustomCatalog, approvedProfessions]);
 
   const handleDetectGps = async () => {
     setGpsLoading(true);
@@ -760,7 +803,63 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
               })}
             </div>
 
-            {searchResults.categories.length === 0 && (
+            {/* Admin-Approved Dynamic Specialized Professions (A-to-Z Inclusivity) */}
+            {searchResults.customCategories.length > 0 && (
+              <div className="space-y-3 pt-2">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <h3 className="font-display text-base sm:text-lg font-extrabold text-[#0B3B75]">
+                      {tr(
+                        lang,
+                        'More Approved Professions & Local Skills',
+                        'अन्य स्वीकृत व्यवसाय और स्थानीय कौशल',
+                        'अधिक मंजूर व्यवसाय आणि स्थानिक कौशल्ये'
+                      )}
+                    </h3>
+                    <p className="text-xs text-slate-600">
+                      {tr(
+                        lang,
+                        'Verified specialized professions available for instant location-based hiring.',
+                        'सत्यापित विशेष व्यवसाय — नज़दीकी कामगार तुरंत बुक करें।',
+                        'सत्यापित विशेष व्यवसाय — जवळच्या कुशल कामगारांना थेट कामाची विनंती पाठवा.'
+                      )}
+                    </p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
+                  {searchResults.customCategories.map((cat) => {
+                    const Icon = getCategoryIcon(cat.id);
+                    return (
+                      <button
+                        key={cat.id}
+                        type="button"
+                        onClick={() => handleSelectCategory(cat)}
+                        className="group text-left bg-white rounded-xl border border-indigo-200/80 hover:border-[#0B3B75] p-4 transition-all hover:shadow-md active:scale-[0.99] cursor-pointer flex flex-col justify-between min-h-[132px]"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <div className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 ${cat.accentBg} ${cat.accentBorder}`}>
+                            <Icon className={`w-5 h-5 ${cat.accentText}`} />
+                          </div>
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
+                            {tr(lang, 'Verified', 'सत्यापित', 'मंजूर')}
+                          </span>
+                        </div>
+                        <div className="mt-2.5 space-y-0.5">
+                          <div className="font-display text-sm font-extrabold text-[#0B3B75] group-hover:text-[#E06D1B] transition-colors leading-snug">
+                            {getServiceCategoryLabel(cat, lang)}
+                          </div>
+                          <p className="text-[11px] text-slate-500 line-clamp-2 leading-relaxed">
+                            {getServiceTagline(cat, lang)}
+                          </p>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {searchResults.categories.length === 0 && searchResults.customCategories.length === 0 && (
               <div className="bg-white border border-slate-200 rounded-xl p-8 text-center space-y-2">
                 <p className="text-sm font-bold text-[#0B3B75]">
                   {tr(lang, 'No matching service found.', 'कोई मेल खाती सेवा नहीं मिली।', 'जुळणारी सेवा सापडली नाही.')}
@@ -770,7 +869,7 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
                   onClick={() => setSearchQuery('')}
                   className="text-xs font-bold text-[#E06D1B] hover:underline cursor-pointer"
                 >
-                  {tr(lang, 'Show all 12 services', 'सभी 12 सेवाएँ देखें', 'सर्व 12 सेवा पहा')}
+                  {tr(lang, 'Show all services', 'सभी सेवाएँ देखें', 'सर्व सेवा पहा')}
                 </button>
               </div>
             )}

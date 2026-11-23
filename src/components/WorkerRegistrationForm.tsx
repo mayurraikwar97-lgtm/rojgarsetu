@@ -32,7 +32,16 @@ import {
   verifyGatewaySignatureOnServer,
   type PaymentGatewayPublicConfig,
 } from '../lib/workerPaymentService';
+import {
+  OTHER_PROFESSION_OPTION_VALUE,
+  findDuplicateProfession,
+  getCustomProfessionLabel,
+  submitCustomProfessionByWorker,
+  subscribeApprovedProfessions,
+} from '../lib/customProfessionService';
 import type {
+  CustomProfessionRecord,
+  CustomProfessionStatus,
   PageRoute,
   VerificationMethod,
   WageUnit,
@@ -45,6 +54,7 @@ import { OtpVerificationBox } from './OtpVerificationBox';
 import { ProfilePhotoUploader, type SelectedProfilePhoto } from './ProfilePhotoUploader';
 import { PWAInstallButton } from './PWAControls';
 import { SecureAvatar } from './SecureAvatar';
+import { WorkPhotoUploader } from './WorkPhotoUploader';
 import {
   PaymentStatusBadge,
   WorkerDigitalIdCard,
@@ -89,6 +99,12 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
   const [primarySkill, setPrimarySkill] = useState(EMPLOYMENT_CATEGORIES[0].en);
   const [skills, setSkills] = useState<string[]>([EMPLOYMENT_CATEGORIES[0].en]);
   const [newSkillText, setNewSkillText] = useState('');
+  const [approvedProfessions, setApprovedProfessions] = useState<CustomProfessionRecord[]>([]);
+  const [customProfessionName, setCustomProfessionName] = useState('');
+  const [workDescription, setWorkDescription] = useState('');
+  const [workPhotoUrls, setWorkPhotoUrls] = useState<string[]>([]);
+  const [workPhotoUploading, setWorkPhotoUploading] = useState(false);
+  const [customProfessionSubmittedMsg, setCustomProfessionSubmittedMsg] = useState('');
   const [experienceYears, setExperienceYears] = useState<number>(2);
   const [expectedWage, setExpectedWage] = useState<number>(600);
   const [wageUnit, setWageUnit] = useState<WageUnit>('daily');
@@ -200,8 +216,18 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
       setGender(workerProfile.gender || 'prefer_not_to_say');
       setAgeConfirmed(workerPrivate.ageConfirmed);
       setEducation(workerProfile.education || '');
-      setPrimarySkill(workerProfile.primarySkill);
+      const isBuiltIn = EMPLOYMENT_CATEGORIES.some((c) => c.en === workerProfile.primarySkill);
+      const isApprovedCustom = approvedProfessions.some((p) => p.nameEn === workerProfile.primarySkill);
+      if (workerProfile.customProfessionName && !isBuiltIn && !isApprovedCustom) {
+        setPrimarySkill(OTHER_PROFESSION_OPTION_VALUE);
+        setCustomProfessionName(workerProfile.customProfessionName);
+      } else {
+        setPrimarySkill(workerProfile.primarySkill);
+        setCustomProfessionName(workerProfile.customProfessionName || '');
+      }
       setSkills(workerProfile.skills || [workerProfile.primarySkill]);
+      setWorkDescription(workerProfile.workDescription || '');
+      setWorkPhotoUrls(workerProfile.workPhotoUrls || []);
       setExperienceYears(workerProfile.experienceYears);
       setExpectedWage(workerProfile.expectedWage);
       setWageUnit(workerProfile.wageUnit);
@@ -221,7 +247,11 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
       setFullName(user.displayName || '');
       setEmail(user.email || '');
     }
-  }, [workerProfile, workerPrivate, user]);
+  }, [workerProfile, workerPrivate, user, approvedProfessions]);
+
+  useEffect(() => {
+    return subscribeApprovedProfessions(setApprovedProfessions);
+  }, []);
 
   useEffect(() => {
     if (!user) {
@@ -242,6 +272,14 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
       active = false;
     };
   }, []);
+
+  const isOtherProfessionSelected = primarySkill === OTHER_PROFESSION_OPTION_VALUE;
+  const liveCustomDuplicate = isOtherProfessionSelected
+    ? findDuplicateProfession({
+        inputName: customProfessionName,
+        existingCustomProfessions: approvedProfessions,
+      })
+    : null;
 
   const isAlreadyPaid = isWorkerPaymentPaid(workerProfile, ownPayment);
   const isAdminApproved = isWorkerPaidBenefitsActive(workerProfile);
@@ -309,6 +347,7 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
   const validateAndPersistRegistration = async (): Promise<{
     regId: string;
     workerLocation: string;
+    resolvedPrimarySkill: string;
   } | null> => {
     setErrorMsg('');
     setPaymentErrorMsg('');
@@ -352,6 +391,26 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
       return null;
     }
     const wageNum = Number(expectedWage);
+    if (workPhotoUploading) {
+      failValidation(
+        lang === 'mr'
+          ? 'कृपया कामाचे फोटो अपलोड पूर्ण होईपर्यंत थांबा.'
+          : lang === 'hi'
+          ? 'कृपया कार्य फ़ोटो अपलोड पूरा होने तक प्रतीक्षा करें।'
+          : 'Please wait for your work photos to finish uploading before submitting.'
+      );
+      return null;
+    }
+    if (isOtherProfessionSelected && customProfessionName.trim().length < 2) {
+      failValidation(
+        lang === 'mr'
+          ? 'कृपया "तुमचा व्यवसाय लिहा" (किमान 2 अक्षरे) भरा.'
+          : lang === 'hi'
+          ? 'कृपया "अपना व्यवसाय लिखें" (कम से कम 2 अक्षर) भरें।'
+          : 'Please enter your profession name (minimum 2 characters) when "Other Profession / Add Your Profession" is selected.'
+      );
+      return null;
+    }
     if (!Number.isFinite(wageNum) || wageNum < 0 || wageNum > 500000) {
       failValidation('Expected wage must be between ₹0 and ₹5,00,000.');
       return null;
@@ -376,12 +435,78 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
       .slice(0, 10);
     if (langs.length === 0) langs.push('Hindi');
 
-    const normalizedSkills = Array.from(new Set([primarySkill, ...skills])).slice(0, 15);
     const regId =
       workerProfile?.registrationId ||
       savedId ||
       `RS-APP-${user.uid.slice(0, 6).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
     const workerLocation = `${cityOrVillage.trim()}, ${districtName}, ${stateName}`;
+
+    // Resolve Custom Profession / Approved Dynamic Profession (no extra fee, no duplicate entries)
+    let resolvedPrimarySkill = primarySkill;
+    let resolvedCustomProfessionId: string | undefined;
+    let resolvedCustomProfessionName: string | undefined;
+    let resolvedCustomProfessionStatus: CustomProfessionStatus | undefined;
+
+    if (isOtherProfessionSelected) {
+      const cleanedCustom = customProfessionName.trim().replace(/\s+/g, ' ').slice(0, 80);
+      const dupCheck = findDuplicateProfession({
+        inputName: cleanedCustom,
+        existingCustomProfessions: approvedProfessions,
+      });
+      if (dupCheck && (dupCheck.source === 'builtin_category' || dupCheck.source === 'service_catalog')) {
+        resolvedPrimarySkill = dupCheck.existingName;
+      } else if (dupCheck && dupCheck.source === 'custom_approved' && dupCheck.customRecord) {
+        resolvedPrimarySkill = dupCheck.customRecord.nameEn;
+        resolvedCustomProfessionId = dupCheck.customRecord.slug;
+        resolvedCustomProfessionName = dupCheck.customRecord.nameEn;
+        if (workerProfile?.customProfessionStatus === 'approved') {
+          resolvedCustomProfessionStatus = 'approved';
+        }
+      } else {
+        const submission = await submitCustomProfessionByWorker({
+          uid: user.uid,
+          professionName: cleanedCustom,
+          workDescription: workDescription.trim() || undefined,
+          experienceYears: Number(experienceYears) || 0,
+          expectedWage: Number(expectedWage) || 0,
+          wageUnit,
+          preferredLocation: (preferredWorkLocation.trim() || workerLocation).slice(0, 140),
+          sampleWorkPhotoUrls: workPhotoUrls,
+          workerName: fullName.trim().slice(0, 120),
+          workerRegistrationId: regId,
+          existingApprovedProfessions: approvedProfessions,
+        });
+        resolvedPrimarySkill = submission.canonicalName;
+        resolvedCustomProfessionId = submission.professionId;
+        resolvedCustomProfessionName = submission.canonicalName;
+        if (submission.status === 'pending') {
+          resolvedCustomProfessionStatus = 'pending';
+          setCustomProfessionSubmittedMsg(
+            lang === 'mr'
+              ? `तुमचा नवीन व्यवसाय "${submission.canonicalName}" अ‍ॅडमिन मंजुरीसाठी पाठवला आहे. मंजुरीनंतर ग्राहक या व्यवसायासाठी तुम्हाला शोधू शकतील.`
+              : lang === 'hi'
+              ? `आपका नया व्यवसाय "${submission.canonicalName}" एडमिन स्वीकृति के लिए भेजा गया है। स्वीकृति के बाद ग्राहक इसे खोज सकेंगे।`
+              : `Your custom profession "${submission.canonicalName}" has been submitted to the Admin Dashboard for approval. Once approved, customers can search and book this profession.`
+          );
+        }
+      }
+    } else {
+      const selectedDynamic = approvedProfessions.find((p) => p.nameEn === primarySkill);
+      if (selectedDynamic) {
+        resolvedCustomProfessionId = selectedDynamic.slug;
+        resolvedCustomProfessionName = selectedDynamic.nameEn;
+        if (workerProfile?.customProfessionStatus === 'approved') {
+          resolvedCustomProfessionStatus = 'approved';
+        }
+      }
+    }
+
+    const normalizedSkills = Array.from(
+      new Set([
+        resolvedPrimarySkill,
+        ...skills.filter((s) => s !== OTHER_PROFESSION_OPTION_VALUE),
+      ])
+    ).slice(0, 15);
 
     const existingPhotoId = workerProfile?.photoDocId || workerPrivate?.photoDocId || '';
     let resolvedPhotoDocId: string | undefined = existingPhotoId || undefined;
@@ -413,7 +538,7 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
       ownerUid: user.uid,
       registrationId: regId,
       displayName: fullName.trim().slice(0, 120),
-      primarySkill,
+      primarySkill: resolvedPrimarySkill,
       skills: normalizedSkills,
       experienceYears: Number(experienceYears) || 0,
       expectedWage: Number(expectedWage) || 0,
@@ -431,6 +556,11 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
       verificationStatus: workerProfile?.verificationStatus || 'pending',
       isWomenEnterprise: gender === 'female',
       ...(resolvedPhotoDocId !== undefined ? { photoDocId: resolvedPhotoDocId } : {}),
+      ...(resolvedCustomProfessionId ? { customProfessionId: resolvedCustomProfessionId } : {}),
+      ...(resolvedCustomProfessionName ? { customProfessionName: resolvedCustomProfessionName } : {}),
+      ...(resolvedCustomProfessionStatus ? { customProfessionStatus: resolvedCustomProfessionStatus } : {}),
+      ...(workDescription.trim() ? { workDescription: workDescription.trim().slice(0, 500) } : {}),
+      ...(workPhotoUrls.length > 0 ? { workPhotoUrls: workPhotoUrls.slice(0, 4) } : {}),
       completedJobsCount: workerProfile?.completedJobsCount || 0,
       ratingAvg: workerProfile?.ratingAvg || 0,
       ...(workerProfile?.referralCode ? { referralCode: workerProfile.referralCode } : {}),
@@ -513,7 +643,7 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
     setSelectedPhoto(null);
     setRemovePhoto(false);
     setSavedId(regId);
-    return { regId, workerLocation };
+    return { regId, workerLocation, resolvedPrimarySkill };
   };
 
   const handlePayAndCompleteRegistration = async () => {
@@ -629,7 +759,7 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
               orderRef: order.orderRef,
               registrationId: saved.regId,
               workerName: fullName.trim().slice(0, 120),
-              workerSkill: primarySkill,
+              workerSkill: saved.resolvedPrimarySkill,
               workerLocation: saved.workerLocation,
               workerMobileMasked: maskMobileNumber(mobile.trim()),
             });
@@ -639,7 +769,7 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
               await submitWorkerRegistrationPaymentProof({
                 workerUid: user.uid,
                 workerName: fullName.trim().slice(0, 120),
-                workerSkill: primarySkill,
+                workerSkill: saved.resolvedPrimarySkill,
                 workerLocation: saved.workerLocation,
                 workerMobile: mobile.trim(),
                 provisionalAppId: saved.regId,
@@ -1217,7 +1347,7 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
           </div>
         </div>
 
-        {/* Multi-skill section */}
+        {/* Multi-skill & Custom Profession section */}
         <div className="space-y-4 pt-2 border-t border-slate-200">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
             <div>
@@ -1229,18 +1359,61 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
                 onChange={(e) => {
                   const val = e.target.value;
                   setPrimarySkill(val);
-                  if (!skills.includes(val)) {
-                    setSkills((prev) => [val, ...prev].slice(0, 15));
+                  if (val !== OTHER_PROFESSION_OPTION_VALUE && !skills.includes(val)) {
+                    setSkills((prev) =>
+                      [val, ...prev.filter((s) => s !== OTHER_PROFESSION_OPTION_VALUE)].slice(0, 15)
+                    );
                   }
                 }}
                 className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
               >
-                {EMPLOYMENT_CATEGORIES.map((c) => (
-                  <option key={c.id} value={c.en}>
-                    {lang === 'hi' ? c.hi : lang === 'mr' ? c.mr : c.en}
-                  </option>
-                ))}
+                <optgroup
+                  label={
+                    lang === 'mr'
+                      ? 'प्रमुख रोजगार श्रेणी'
+                      : lang === 'hi'
+                      ? 'प्रमुख रोजगार श्रेणियाँ'
+                      : 'Standard Professions'
+                  }
+                >
+                  {EMPLOYMENT_CATEGORIES.map((c) => (
+                    <option key={c.id} value={c.en}>
+                      {lang === 'hi' ? c.hi : lang === 'mr' ? c.mr : c.en}
+                    </option>
+                  ))}
+                </optgroup>
+                {approvedProfessions.length > 0 && (
+                  <optgroup
+                    label={
+                      lang === 'mr'
+                        ? 'मंजूर विशेष व्यवसाय (नवीन श्रेणी)'
+                        : lang === 'hi'
+                        ? 'स्वीकृत विशेष व्यवसाय (नई श्रेणियाँ)'
+                        : 'Approved Specialized Professions'
+                    }
+                  >
+                    {approvedProfessions.map((p) => (
+                      <option key={p.slug} value={p.nameEn}>
+                        {getCustomProfessionLabel(p, lang)}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                <option value={OTHER_PROFESSION_OPTION_VALUE}>
+                  {lang === 'mr'
+                    ? '➕ इतर व्यवसाय / तुमचा व्यवसाय जोडा (Other Profession / Add Your Profession)'
+                    : lang === 'hi'
+                    ? '➕ अन्य व्यवसाय / अपना व्यवसाय जोड़ें (Other Profession / Add Your Profession)'
+                    : '➕ Other Profession / Add Your Profession'}
+                </option>
               </select>
+              <p className="mt-1 text-[11px] text-slate-500">
+                {lang === 'mr'
+                  ? 'तुमचा व्यवसाय यादीत नसल्यास शेवटचा पर्याय "इतर व्यवसाय / तुमचा व्यवसाय जोडा" निवडा.'
+                  : lang === 'hi'
+                  ? 'यदि आपका काम सूची में नहीं है, तो अंतिम विकल्प "अन्य व्यवसाय / अपना व्यवसाय जोड़ें" चुनें।'
+                  : 'Don’t see your profession? Select "Other Profession / Add Your Profession" at the end of the list.'}
+              </p>
             </div>
 
             <div>
@@ -1273,25 +1446,244 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
             </div>
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            {skills.map((s) => (
-              <span
-                key={s}
-                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded border border-slate-300 bg-slate-50 text-xs font-medium text-slate-800"
-              >
-                {s}
-                {s !== primarySkill && (
-                  <button
-                    type="button"
-                    onClick={() => setSkills((prev) => prev.filter((item) => item !== s))}
-                    className="text-slate-500 hover:text-red-700 cursor-pointer"
-                    aria-label={`Remove ${s}`}
-                  >
-                    <X className="w-3 h-3" />
-                  </button>
+          {/* Custom Profession / Add Your Own Skill Panel */}
+          {isOtherProfessionSelected && (
+            <div className="rounded-xl border-2 border-[#0B3B75]/30 bg-blue-50/50 p-4 sm:p-5 space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-blue-200 pb-3">
+                <div>
+                  <h3 className="text-sm font-bold text-[#0B3B75]">
+                    {lang === 'mr'
+                      ? 'नवीन व्यवसाय / स्वतःचे कौशल्य जोडा (Custom Profession)'
+                      : lang === 'hi'
+                      ? 'अपना व्यवसाय / कौशल जोड़ें (Custom Profession)'
+                      : 'Add Your Own Profession / Skill'}
+                  </h3>
+                  <p className="text-xs text-slate-600 mt-0.5">
+                    {lang === 'mr'
+                      ? 'रोजगार सेतू हे A-to-Z सर्वांसाठी खुले व्यासपीठ आहे. नवीन व्यवसाय अ‍ॅडमिन मंजुरीनंतर ग्राहकांच्या शोधात दिसेल.'
+                      : lang === 'hi'
+                      ? 'रोज़गार सेतु सभी कामगारों के लिए A-to-Z मंच है। एडमिन स्वीकृति के बाद आपका व्यवसाय ग्राहकों की खोज में दिखेगा।'
+                      : 'Rojgar Setu is an inclusive A-to-Z platform. Your custom profession will be reviewed by Admin before becoming a public searchable category.'}
+                  </p>
+                </div>
+                <span className="inline-flex items-center gap-1 self-start px-2.5 py-1 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300 text-[11px] font-bold shrink-0">
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  {lang === 'mr'
+                    ? 'अतिरिक्त शुल्क ₹0'
+                    : lang === 'hi'
+                    ? 'अतिरिक्त शुल्क ₹0'
+                    : 'No Extra Fee (₹0)'}
+                </span>
+              </div>
+
+              {/* 1. Enter Your Profession (Mandatory) */}
+              <div>
+                <label className="block text-xs font-bold text-[#0B3B75] mb-1">
+                  {lang === 'mr'
+                    ? 'तुमचा व्यवसाय लिहा (Enter Your Profession) *'
+                    : lang === 'hi'
+                    ? 'अपना व्यवसाय लिखें (Enter Your Profession) *'
+                    : 'Enter Your Profession *'}
+                </label>
+                <input
+                  type="text"
+                  required={isOtherProfessionSelected}
+                  maxLength={80}
+                  value={customProfessionName}
+                  onChange={(e) => setCustomProfessionName(e.target.value)}
+                  placeholder={
+                    lang === 'mr'
+                      ? 'उदा. CCTV Installer, Solar Panel Technician, Photographer, Event Decorator, Tailor...'
+                      : lang === 'hi'
+                      ? 'उदा. CCTV Installer, Solar Panel Technician, Photographer, Event Decorator, Tailor...'
+                      : 'e.g., CCTV Installer, Solar Panel Technician, Photographer, Video Editor, Pet Care...'
+                  }
+                  className="w-full px-3 py-2.5 border border-blue-300 rounded-md text-sm bg-white focus:outline-none focus:ring-2 focus:ring-[#0B3B75]"
+                />
+                {liveCustomDuplicate && liveCustomDuplicate.existingName && (
+                  <div className="mt-2 p-2.5 rounded-lg bg-amber-50 border border-amber-300 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs text-amber-900">
+                    <span className="flex items-center gap-1.5 font-medium">
+                      <AlertTriangle className="w-4 h-4 text-amber-700 shrink-0" />
+                      {lang === 'mr'
+                        ? `हा व्यवसाय आधीच उपलब्ध आहे: "${liveCustomDuplicate.existingName}". डुप्लिकेट टाळण्यासाठी तो निवडा.`
+                        : lang === 'hi'
+                        ? `यह व्यवसाय पहले से उपलब्ध है: "${liveCustomDuplicate.existingName}"। डुप्लिकेट से बचने के लिए इसे चुनें।`
+                        : `This profession already exists as "${liveCustomDuplicate.existingName}". Switch to it to avoid duplicates.`}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const target = liveCustomDuplicate.existingName;
+                        const inBuiltIn = EMPLOYMENT_CATEGORIES.some((c) => c.en === target);
+                        const inApproved = approvedProfessions.some((p) => p.nameEn === target);
+                        if (inBuiltIn || inApproved) {
+                          setPrimarySkill(target);
+                          setCustomProfessionName('');
+                          setSkills((prev) =>
+                            Array.from(
+                              new Set([target, ...prev.filter((s) => s !== OTHER_PROFESSION_OPTION_VALUE)])
+                            ).slice(0, 15)
+                          );
+                        }
+                      }}
+                      className="px-3 py-1.5 rounded bg-[#0B3B75] text-white font-semibold hover:bg-slate-800 whitespace-nowrap cursor-pointer"
+                    >
+                      {lang === 'mr' ? 'हा व्यवसाय निवडा' : lang === 'hi' ? 'इसे चुनें' : 'Select Existing'}
+                    </button>
+                  </div>
                 )}
-              </span>
-            ))}
+              </div>
+
+              {/* 2. Describe Your Work / Skills (Optional) */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  {lang === 'mr'
+                    ? 'तुमच्या कामाचे / कौशल्याचे वर्णन (पर्यायी)'
+                    : lang === 'hi'
+                    ? 'अपने काम / कौशल का विवरण लिखें (वैकल्पिक)'
+                    : 'Describe Your Work / Skills (Optional)'}
+                </label>
+                <textarea
+                  rows={3}
+                  maxLength={500}
+                  value={workDescription}
+                  onChange={(e) => setWorkDescription(e.target.value)}
+                  placeholder={
+                    lang === 'mr'
+                      ? 'तुम्ही कोणती कामे करता, कोणती उपकरणे/सेवा देता ते थोडक्यात लिहा...'
+                      : lang === 'hi'
+                      ? 'आप किस प्रकार का कार्य करते हैं, कौन से उपकरण या सेवाएँ देते हैं लिखें...'
+                      : 'Briefly describe the services you offer, tools you bring, or specialized skills...'
+                  }
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
+                />
+              </div>
+
+              {/* 3, 5, 6: Work Experience (Optional), Preferred Work Location, Expected Daily/Monthly Charges (Optional) */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    {lang === 'mr'
+                      ? 'कामाचा अनुभव — वर्षे (पर्यायी)'
+                      : lang === 'hi'
+                      ? 'कार्य अनुभव — वर्ष (वैकल्पिक)'
+                      : 'Work Experience (Optional)'}
+                  </label>
+                  <input
+                    type="number"
+                    min={0}
+                    max={60}
+                    value={experienceYears}
+                    onChange={(e) => setExperienceYears(Number(e.target.value) || 0)}
+                    placeholder="0"
+                    className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white font-mono-tabular"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    {lang === 'mr'
+                      ? 'पसंतीचे कामाचे ठिकाण'
+                      : lang === 'hi'
+                      ? 'पसंदीदा कार्य स्थान'
+                      : 'Preferred Work Location'}
+                  </label>
+                  <input
+                    type="text"
+                    value={preferredWorkLocation}
+                    onChange={(e) => setPreferredWorkLocation(e.target.value)}
+                    placeholder={
+                      lang === 'mr'
+                        ? 'उदा. तालुका / शहर / जिल्हा'
+                        : lang === 'hi'
+                        ? 'उदा. ब्लॉक / शहर / ज़िला'
+                        : 'e.g., City / Block / District'
+                    }
+                    className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    {lang === 'mr'
+                      ? 'अपेक्षित दैनिक / मासिक दर ₹ (पर्यायी)'
+                      : lang === 'hi'
+                      ? 'अपेक्षित दैनिक / मासिक शुल्क ₹ (वैकल्पिक)'
+                      : 'Expected Daily or Monthly Charges ₹ (Optional)'}
+                  </label>
+                  <div className="flex gap-1.5">
+                    <input
+                      type="number"
+                      min={0}
+                      max={500000}
+                      value={expectedWage}
+                      onChange={(e) => setExpectedWage(Number(e.target.value) || 0)}
+                      placeholder="0"
+                      className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white font-mono-tabular"
+                    />
+                    <select
+                      value={wageUnit}
+                      onChange={(e) => setWageUnit(e.target.value as WageUnit)}
+                      className="px-2 py-2 border border-slate-300 rounded-md text-xs bg-white shrink-0"
+                    >
+                      <option value="daily">{lang === 'mr' ? 'दैनिक' : lang === 'hi' ? 'दैनिक' : 'Daily'}</option>
+                      <option value="monthly">{lang === 'mr' ? 'मासिक' : lang === 'hi' ? 'मासिक' : 'Monthly'}</option>
+                      <option value="hourly">{lang === 'mr' ? 'ताशी' : lang === 'hi' ? 'घंटे' : 'Hourly'}</option>
+                      <option value="contract">{lang === 'mr' ? 'कंत्राट' : lang === 'hi' ? 'ठेका' : 'Contract'}</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              {/* 4. Upload Work Photos (Optional) */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+                  {lang === 'mr'
+                    ? 'कामाचे फोटो अपलोड करा (पर्यायी — कमाल 4 फोटो)'
+                    : lang === 'hi'
+                    ? 'कार्य के फ़ोटो अपलोड करें (वैकल्पिक — अधिकतम 4 फ़ोटो)'
+                    : 'Upload Work Photos (Optional — up to 4 photos)'}
+                </label>
+                <WorkPhotoUploader
+                  photos={workPhotoUrls}
+                  onChange={setWorkPhotoUrls}
+                  ownerUid={user?.uid || 'worker'}
+                  folder="work"
+                  disabled={!user}
+                  onUploadingChange={setWorkPhotoUploading}
+                />
+              </div>
+
+              {customProfessionSubmittedMsg && (
+                <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-300 text-xs text-emerald-900 font-medium flex items-start gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
+                  <span>{customProfessionSubmittedMsg}</span>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="flex flex-wrap gap-2">
+            {skills
+              .filter((s) => s !== OTHER_PROFESSION_OPTION_VALUE)
+              .map((s) => (
+                <span
+                  key={s}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded border border-slate-300 bg-slate-50 text-xs font-medium text-slate-800"
+                >
+                  {s}
+                  {s !== primarySkill && (
+                    <button
+                      type="button"
+                      onClick={() => setSkills((prev) => prev.filter((item) => item !== s))}
+                      className="text-slate-500 hover:text-red-700 cursor-pointer"
+                      aria-label={`Remove ${s}`}
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  )}
+                </span>
+              ))}
           </div>
         </div>
 

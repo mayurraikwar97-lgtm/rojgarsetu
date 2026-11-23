@@ -12,6 +12,42 @@ service cloud.firestore {
       return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
     }
 
+    function isStr(v, minLen, maxLen) {
+      return v is string && v.size() >= minLen && v.size() <= maxLen;
+    }
+
+    function isNum(v, minVal, maxVal) {
+      return v is number && v >= minVal && v <= maxVal;
+    }
+
+    function optStr(d, k, maxLen) {
+      return !(k in d) || (d[k] is string && d[k].size() <= maxLen);
+    }
+
+    function optStrR(d, k, minLen, maxLen) {
+      return !(k in d) || (d[k] is string && d[k].size() >= minLen && d[k].size() <= maxLen);
+    }
+
+    function optNum(d, k, minVal, maxVal) {
+      return !(k in d) || (d[k] is number && d[k] >= minVal && d[k] <= maxVal);
+    }
+
+    function optBool(d, k) {
+      return !(k in d) || d[k] is bool;
+    }
+
+    function optId(d, k) {
+      return !(k in d) || isValidId(d[k]);
+    }
+
+    function optCode(d, k) {
+      return !(k in d) || (d[k] is string && d[k].size() >= 4 && d[k].size() <= 32 && d[k].matches('^[A-Z0-9_\\-]+$'));
+    }
+
+    function optPhotoList(d, k) {
+      return !(k in d) || (d[k] is list && d[k].size() <= 4 && (d[k].size() == 0 || (d[k][0] is string && d[k][0].size() <= 120000)));
+    }
+
     function incoming() {
       return request.resource.data;
     }
@@ -57,8 +93,8 @@ service cloud.firestore {
       return data.keys().hasAll(['uid', 'email', 'displayName', 'role', 'preferredLanguage', 'createdAt', 'updatedAt'])
         && data.keys().hasOnly(['uid', 'email', 'displayName', 'role', 'preferredLanguage', 'createdAt', 'updatedAt'])
         && isValidId(data.uid)
-        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
-        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && isStr(data.email, 3, 200)
+        && isStr(data.displayName, 1, 120)
         && data.role in ['worker', 'employer', 'admin']
         && data.preferredLanguage in ['en', 'hi', 'mr']
         && data.createdAt is timestamp
@@ -69,7 +105,7 @@ service cloud.firestore {
       return data.keys().hasAll(['uid', 'email', 'grantedAt'])
         && data.keys().hasOnly(['uid', 'email', 'grantedAt'])
         && isValidId(data.uid)
-        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
+        && isStr(data.email, 3, 200)
         && data.grantedAt is timestamp;
     }
 
@@ -92,44 +128,87 @@ service cloud.firestore {
           'preferredLanguage', 'preferredRadiusKm', 'voiceAlertsEnabled',
           'completedJobsCount', 'ratingAvg', 'lastRatedApplicationId',
           'referralCode', 'referredByCode', 'referredByUid', 'referredByName',
+          'customProfessionId', 'customProfessionName', 'customProfessionStatus',
+          'workDescription', 'workPhotoUrls',
           'createdAt', 'updatedAt'
         ])
         && isValidId(data.ownerUid)
-        && data.registrationId is string && data.registrationId.size() >= 5 && data.registrationId.size() <= 40
-        && data.displayName is string && data.displayName.size() >= 2 && data.displayName.size() <= 120
-        && data.primarySkill is string && data.primarySkill.size() >= 2 && data.primarySkill.size() <= 80
+        && isStr(data.registrationId, 5, 40)
+        && isStr(data.displayName, 2, 120)
+        && isStr(data.primarySkill, 2, 80)
         && data.skills is list && data.skills.size() >= 1 && data.skills.size() <= 15 && data.skills[0] is string
-        && data.experienceYears is number && data.experienceYears >= 0 && data.experienceYears <= 70
-        && data.expectedWage is number && data.expectedWage >= 0 && data.expectedWage <= 500000
+        && isNum(data.experienceYears, 0, 70)
+        && isNum(data.expectedWage, 0, 500000)
         && data.wageUnit in ['daily', 'monthly', 'hourly', 'contract']
         && data.preferredWorkType in ['full_time', 'part_time', 'daily_wage', 'contract']
         && data.availabilityStatus in ['available', 'busy', 'offline']
-        && data.state is string && data.state.size() >= 2 && data.state.size() <= 80
-        && data.district is string && data.district.size() >= 2 && data.district.size() <= 80
-        && data.cityOrVillage is string && data.cityOrVillage.size() >= 2 && data.cityOrVillage.size() <= 100
-        && data.approxLat is number && data.approxLat >= -90 && data.approxLat <= 90
-        && data.approxLng is number && data.approxLng >= -180 && data.approxLng <= 180
+        && isStr(data.state, 2, 80)
+        && isStr(data.district, 2, 80)
+        && isStr(data.cityOrVillage, 2, 100)
+        && isNum(data.approxLat, -90, 90)
+        && isNum(data.approxLng, -180, 180)
         && data.languagesKnown is list && data.languagesKnown.size() >= 1 && data.languagesKnown.size() <= 10 && data.languagesKnown[0] is string
         && (!('gender' in data) || data.gender in ['female', 'male', 'other', 'prefer_not_to_say'])
-        && (!('education' in data) || (data.education is string && data.education.size() <= 100))
+        && optStr(data, 'education', 100)
         && data.verificationStatus in ['pending', 'verified', 'suspended']
         && (!('registrationPaymentStatus' in data) || data.registrationPaymentStatus in ['pending', 'verified', 'failed', 'refunded'])
-        && (!('paidBenefitsActive' in data) || data.paidBenefitsActive is bool)
-        && (!('paymentReceiptNo' in data) || (data.paymentReceiptNo is string && data.paymentReceiptNo.size() <= 60))
-        && (!('certificateNo' in data) || (data.certificateNo is string && data.certificateNo.size() <= 60))
-        && (!('verifiedAtIso' in data) || (data.verifiedAtIso is string && data.verifiedAtIso.size() <= 40))
-        && (!('isWomenEnterprise' in data) || data.isWomenEnterprise is bool)
-        && (!('photoDocId' in data) || isValidId(data.photoDocId))
+        && optBool(data, 'paidBenefitsActive')
+        && optStr(data, 'paymentReceiptNo', 60)
+        && optStr(data, 'certificateNo', 60)
+        && optStr(data, 'verifiedAtIso', 40)
+        && optBool(data, 'isWomenEnterprise')
+        && optId(data, 'photoDocId')
         && (!('preferredLanguage' in data) || data.preferredLanguage in ['en', 'hi', 'mr'])
         && (!('preferredRadiusKm' in data) || data.preferredRadiusKm in [2, 5, 10, 20, 30])
-        && (!('voiceAlertsEnabled' in data) || data.voiceAlertsEnabled is bool)
-        && data.completedJobsCount is number && data.completedJobsCount >= 0 && data.completedJobsCount <= 100000
-        && data.ratingAvg is number && data.ratingAvg >= 0 && data.ratingAvg <= 5
-        && (!('lastRatedApplicationId' in data) || isValidId(data.lastRatedApplicationId))
-        && (!('referralCode' in data) || (data.referralCode is string && data.referralCode.size() >= 4 && data.referralCode.size() <= 32 && data.referralCode.matches('^[A-Z0-9_\\-]+$')))
-        && (!('referredByCode' in data) || (data.referredByCode is string && data.referredByCode.size() >= 4 && data.referredByCode.size() <= 32 && data.referredByCode.matches('^[A-Z0-9_\\-]+$')))
-        && (!('referredByUid' in data) || isValidId(data.referredByUid))
-        && (!('referredByName' in data) || (data.referredByName is string && data.referredByName.size() >= 2 && data.referredByName.size() <= 120))
+        && optBool(data, 'voiceAlertsEnabled')
+        && isNum(data.completedJobsCount, 0, 100000)
+        && isNum(data.ratingAvg, 0, 5)
+        && optId(data, 'lastRatedApplicationId')
+        && optCode(data, 'referralCode')
+        && optCode(data, 'referredByCode')
+        && optId(data, 'referredByUid')
+        && optStrR(data, 'referredByName', 2, 120)
+        && (!('customProfessionId' in data) || (isStr(data.customProfessionId, 2, 64) && data.customProfessionId.matches('^[a-z0-9_\\-]+$')))
+        && optStrR(data, 'customProfessionName', 2, 80)
+        && (!('customProfessionStatus' in data) || data.customProfessionStatus in ['pending', 'approved', 'rejected'])
+        && optStr(data, 'workDescription', 500)
+        && optPhotoList(data, 'workPhotoUrls')
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidCustomProfession(data) {
+      return data.keys().hasAll([
+          'slug', 'nameEn', 'group', 'keywords', 'status', 'source',
+          'createdByUid', 'usageCount', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'slug', 'nameEn', 'nameHi', 'nameMr', 'description', 'group', 'keywords',
+          'status', 'source', 'createdByUid',
+          'submittedByWorkerName', 'submittedByWorkerRegistrationId', 'submittedLocation',
+          'sampleWorkPhotoUrls', 'expectedWage', 'wageUnit', 'experienceYears',
+          'approvedByUid', 'adminNotes', 'usageCount', 'createdAt', 'updatedAt'
+        ])
+        && isStr(data.slug, 2, 64) && data.slug.matches('^[a-z0-9_\\-]+$')
+        && isStr(data.nameEn, 2, 80)
+        && optStr(data, 'nameHi', 80)
+        && optStr(data, 'nameMr', 80)
+        && optStr(data, 'description', 500)
+        && data.group in ['trades', 'industrial', 'transport', 'agriculture', 'hospitality', 'office', 'services', 'enterprise']
+        && data.keywords is list && data.keywords.size() >= 1 && data.keywords.size() <= 12 && data.keywords[0] is string
+        && data.status in ['pending', 'approved', 'rejected']
+        && data.source in ['worker_submission', 'admin_created']
+        && isValidId(data.createdByUid)
+        && optStr(data, 'submittedByWorkerName', 120)
+        && optStr(data, 'submittedByWorkerRegistrationId', 40)
+        && optStr(data, 'submittedLocation', 140)
+        && optPhotoList(data, 'sampleWorkPhotoUrls')
+        && optNum(data, 'expectedWage', 0, 500000)
+        && (!('wageUnit' in data) || data.wageUnit in ['daily', 'monthly', 'hourly', 'contract'])
+        && optNum(data, 'experienceYears', 0, 70)
+        && optId(data, 'approvedByUid')
+        && optStr(data, 'adminNotes', 500)
+        && isNum(data.usageCount, 0, 100000)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -151,27 +230,27 @@ service cloud.firestore {
           'createdAt', 'updatedAt'
         ])
         && isValidId(data.ownerUid)
-        && data.fullName is string && data.fullName.size() >= 2 && data.fullName.size() <= 120
-        && data.mobile is string && data.mobile.size() >= 10 && data.mobile.size() <= 20
+        && isStr(data.fullName, 2, 120)
+        && isStr(data.mobile, 10, 20)
         && data.mobileVerified is bool
         && (!('verificationMethod' in data) || data.verificationMethod in ['sms_otp', 'firebase_phone', 'test_pin'])
-        && (!('testPinHash' in data) || (data.testPinHash is string && data.testPinHash.size() <= 128))
-        && (!('email' in data) || (data.email is string && data.email.size() <= 200))
+        && optStr(data, 'testPinHash', 128)
+        && optStr(data, 'email', 200)
         && data.ageConfirmed is bool
-        && (!('preferredWorkLocation' in data) || (data.preferredWorkLocation is string && data.preferredWorkLocation.size() <= 160))
+        && optStr(data, 'preferredWorkLocation', 160)
         && data.liveLocationConsent is bool
         && data.privacyConsent is bool
-        && (!('refundPolicyAccepted' in data) || data.refundPolicyAccepted is bool)
-        && (!('noEmploymentGuaranteeAccepted' in data) || data.noEmploymentGuaranteeAccepted is bool)
+        && optBool(data, 'refundPolicyAccepted')
+        && optBool(data, 'noEmploymentGuaranteeAccepted')
         && (!('registrationPaymentStatus' in data) || data.registrationPaymentStatus in ['pending', 'verified', 'failed', 'refunded'])
         && data.idVerificationStatus in ['not_submitted', 'voluntary_pending', 'verified']
-        && (!('certificateNotes' in data) || (data.certificateNotes is string && data.certificateNotes.size() <= 500))
-        && (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 1000))
-        && (!('photoDocId' in data) || isValidId(data.photoDocId))
-        && (!('referralCode' in data) || (data.referralCode is string && data.referralCode.size() >= 4 && data.referralCode.size() <= 32 && data.referralCode.matches('^[A-Z0-9_\\-]+$')))
-        && (!('referredByCode' in data) || (data.referredByCode is string && data.referredByCode.size() >= 4 && data.referredByCode.size() <= 32 && data.referredByCode.matches('^[A-Z0-9_\\-]+$')))
-        && (!('referredByUid' in data) || isValidId(data.referredByUid))
-        && (!('referredByName' in data) || (data.referredByName is string && data.referredByName.size() >= 2 && data.referredByName.size() <= 120))
+        && optStr(data, 'certificateNotes', 500)
+        && optStr(data, 'photoUrl', 1000)
+        && optId(data, 'photoDocId')
+        && optCode(data, 'referralCode')
+        && optCode(data, 'referredByCode')
+        && optId(data, 'referredByUid')
+        && optStrR(data, 'referredByName', 2, 120)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -190,19 +269,19 @@ service cloud.firestore {
           'createdAt', 'updatedAt'
         ])
         && isValidId(data.ownerUid)
-        && data.registrationId is string && data.registrationId.size() >= 5 && data.registrationId.size() <= 40
-        && data.businessName is string && data.businessName.size() >= 2 && data.businessName.size() <= 160
-        && data.businessType is string && data.businessType.size() >= 2 && data.businessType.size() <= 80
-        && data.industryCategory is string && data.industryCategory.size() >= 2 && data.industryCategory.size() <= 80
-        && data.state is string && data.state.size() >= 2 && data.state.size() <= 80
-        && data.district is string && data.district.size() >= 2 && data.district.size() <= 80
+        && isStr(data.registrationId, 5, 40)
+        && isStr(data.businessName, 2, 160)
+        && isStr(data.businessType, 2, 80)
+        && isStr(data.industryCategory, 2, 80)
+        && isStr(data.state, 2, 80)
+        && isStr(data.district, 2, 80)
         && data.requiredCategories is list && data.requiredCategories.size() >= 1 && data.requiredCategories.size() <= 15 && data.requiredCategories[0] is string
         && data.verificationStatus in ['pending', 'verified', 'suspended']
         && (!('gender' in data) || data.gender in ['male', 'female', 'other', 'prefer_not_to_say'])
-        && (!('lastName' in data) || (data.lastName is string && data.lastName.size() >= 1 && data.lastName.size() <= 60))
+        && optStrR(data, 'lastName', 1, 60)
         && (!('profileVisibility' in data) || data.profileVisibility in ['standard', 'last_name_only', 'private_strict'])
-        && (!('hidePhotoUntilConfirm' in data) || data.hidePhotoUntilConfirm is bool)
-        && (!('maskedCallingOnly' in data) || data.maskedCallingOnly is bool)
+        && optBool(data, 'hidePhotoUntilConfirm')
+        && optBool(data, 'maskedCallingOnly')
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -219,21 +298,21 @@ service cloud.firestore {
           'workforceNotes', 'photoDocId', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.ownerUid)
-        && data.contactPerson is string && data.contactPerson.size() >= 2 && data.contactPerson.size() <= 120
-        && (!('firstName' in data) || (data.firstName is string && data.firstName.size() <= 60))
-        && (!('lastName' in data) || (data.lastName is string && data.lastName.size() <= 60))
+        && isStr(data.contactPerson, 2, 120)
+        && optStr(data, 'firstName', 60)
+        && optStr(data, 'lastName', 60)
         && (!('gender' in data) || data.gender in ['male', 'female', 'other', 'prefer_not_to_say'])
         && (!('profileVisibility' in data) || data.profileVisibility in ['standard', 'last_name_only', 'private_strict'])
-        && data.mobile is string && data.mobile.size() >= 10 && data.mobile.size() <= 20
+        && isStr(data.mobile, 10, 20)
         && data.mobileVerified is bool
         && (!('verificationMethod' in data) || data.verificationMethod in ['sms_otp', 'firebase_phone', 'test_pin'])
-        && (!('testPinHash' in data) || (data.testPinHash is string && data.testPinHash.size() <= 128))
-        && data.email is string && data.email.size() >= 3 && data.email.size() <= 200
-        && data.businessAddress is string && data.businessAddress.size() >= 4 && data.businessAddress.size() <= 300
-        && (!('gstNumber' in data) || (data.gstNumber is string && data.gstNumber.size() <= 30))
-        && (!('establishmentDetails' in data) || (data.establishmentDetails is string && data.establishmentDetails.size() <= 600))
-        && (!('workforceNotes' in data) || (data.workforceNotes is string && data.workforceNotes.size() <= 600))
-        && (!('photoDocId' in data) || isValidId(data.photoDocId))
+        && optStr(data, 'testPinHash', 128)
+        && isStr(data.email, 3, 200)
+        && isStr(data.businessAddress, 4, 300)
+        && optStr(data, 'gstNumber', 30)
+        && optStr(data, 'establishmentDetails', 600)
+        && optStr(data, 'workforceNotes', 600)
+        && optId(data, 'photoDocId')
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -1186,6 +1265,7 @@ service cloud.firestore {
         && incoming().verificationStatus == 'pending'
         && (!('registrationPaymentStatus' in incoming()) || incoming().registrationPaymentStatus == 'pending')
         && (!('paidBenefitsActive' in incoming()) || incoming().paidBenefitsActive == false)
+        && (!('customProfessionStatus' in incoming()) || incoming().customProfessionStatus == 'pending')
         && !('paymentReceiptNo' in incoming())
         && !('certificateNo' in incoming())
         && incoming().completedJobsCount == 0
@@ -1203,12 +1283,15 @@ service cloud.firestore {
             && incoming().registrationId == existing().registrationId
             && existing().verificationStatus != 'suspended'
             && (!('referralCode' in existing()) || incoming().referralCode == existing().referralCode)
+            && (!('customProfessionStatus' in incoming()) || incoming().customProfessionStatus == 'pending' || ('customProfessionStatus' in existing() && incoming().customProfessionStatus == existing().customProfessionStatus))
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'displayName', 'primarySkill', 'skills', 'experienceYears',
               'expectedWage', 'wageUnit', 'preferredWorkType', 'availabilityStatus',
               'state', 'district', 'cityOrVillage', 'approxLat', 'approxLng',
               'languagesKnown', 'gender', 'education', 'isWomenEnterprise', 'photoDocId',
-              'preferredLanguage', 'preferredRadiusKm', 'voiceAlertsEnabled', 'referralCode', 'updatedAt'
+              'preferredLanguage', 'preferredRadiusKm', 'voiceAlertsEnabled', 'referralCode',
+              'customProfessionId', 'customProfessionName', 'customProfessionStatus',
+              'workDescription', 'workPhotoUrls', 'updatedAt'
             ])
           ) ||
           (
@@ -3068,6 +3151,42 @@ service cloud.firestore {
         && incoming().createdAt == request.time;
       allow update: if false;
       allow delete: if isValidId(entryId) && isAdmin();
+    }
+
+    match /customProfessions/{professionId} {
+      // Unverified custom professions are NEVER published publicly; only approved categories,
+      // the submitting worker, and authorized Admins may read them.
+      allow get: if isValidId(professionId)
+        && (
+          existing().status == 'approved' ||
+          (isVerifiedUser() && existing().createdByUid == request.auth.uid) ||
+          isAdmin()
+        );
+      allow list: if existing().status == 'approved'
+        || (isVerifiedUser() && existing().createdByUid == request.auth.uid)
+        || isAdmin();
+      allow create: if isValidId(professionId)
+        && isVerifiedUser()
+        && isValidCustomProfession(incoming())
+        && incoming().slug == professionId
+        && isValidTimestampOnCreate()
+        && (
+          isAdmin() ||
+          (
+            incoming().createdByUid == request.auth.uid
+            && incoming().status == 'pending'
+            && incoming().source == 'worker_submission'
+            && !('approvedByUid' in incoming())
+            && !('adminNotes' in incoming())
+            && incoming().usageCount <= 1
+          )
+        );
+      allow update: if isValidId(professionId)
+        && isAdmin()
+        && isValidCustomProfession(incoming())
+        && incoming().slug == existing().slug
+        && isValidTimestampOnUpdate();
+      allow delete: if isValidId(professionId) && isAdmin();
     }
   }
 }

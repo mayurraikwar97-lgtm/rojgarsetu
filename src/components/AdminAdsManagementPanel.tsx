@@ -34,6 +34,7 @@ import {
   subscribeAllAdvertisementsAdmin,
   subscribeAllAdvertisersAdmin,
 } from '../lib/adsReferralService';
+import { subscribeApprovedProfessions } from '../lib/customProfessionService';
 import type {
   AdvertisementActionType,
   AdvertisementCategory,
@@ -42,6 +43,7 @@ import type {
   AdvertisementRecord,
   AdvertisementStatus,
   AdvertiserProfile,
+  CustomProfessionRecord,
 } from '../types/domain';
 
 type AdAdminSubTab = 'ads' | 'create' | 'advertisers' | 'categories' | 'analytics';
@@ -53,6 +55,7 @@ export const AdminAdsManagementPanel: React.FC = () => {
   const [ads, setAds] = useState<AdvertisementRecord[]>([]);
   const [advertisers, setAdvertisers] = useState<AdvertiserProfile[]>([]);
   const [customCategories, setCustomCategories] = useState<AdvertisementCategory[]>([]);
+  const [approvedProfessions, setApprovedProfessions] = useState<CustomProfessionRecord[]>([]);
   const [impressions, setImpressions] = useState<AdvertisementImpression[]>([]);
   const [clicks, setClicks] = useState<AdvertisementClick[]>([]);
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -98,27 +101,43 @@ export const AdminAdsManagementPanel: React.FC = () => {
     const u2 = subscribeAllAdvertisersAdmin(setAdvertisers);
     const u3 = subscribeAdvertisementCategories(setCustomCategories);
     const u4 = subscribeAdAnalyticsAdmin(setImpressions, setClicks);
+    const u5 = subscribeApprovedProfessions(setApprovedProfessions);
     return () => {
       u1();
       u2();
       u3();
       u4();
+      u5();
     };
   }, []);
 
   const allCategoryChoices = useMemo(() => {
-    const base = DEFAULT_AD_TARGET_CATEGORIES.map((c) => ({
-      id: c.id,
-      label: c.labelEn,
-      hint: c.exampleBusinessesEn,
-    }));
-    const custom = customCategories.map((c) => ({
-      id: c.slug,
-      label: `${c.nameEn} (Custom)`,
-      hint: `Linked: ${c.linkedServiceCategories.join(', ')}`,
-    }));
-    return [...base, ...custom];
-  }, [customCategories]);
+    const seen = new Set<string>();
+    const list: Array<{ id: string; label: string; hint: string }> = [];
+    for (const c of DEFAULT_AD_TARGET_CATEGORIES) {
+      seen.add(c.id);
+      list.push({ id: c.id, label: c.labelEn, hint: c.exampleBusinessesEn });
+    }
+    for (const c of customCategories) {
+      if (seen.has(c.slug)) continue;
+      seen.add(c.slug);
+      list.push({
+        id: c.slug,
+        label: `${c.nameEn} (Custom)`,
+        hint: `Linked: ${c.linkedServiceCategories.join(', ')}`,
+      });
+    }
+    for (const p of approvedProfessions) {
+      if (seen.has(p.slug)) continue;
+      seen.add(p.slug);
+      list.push({
+        id: p.slug,
+        label: `${p.nameEn} (Approved Profession)`,
+        hint: p.description || `Matches customers booking ${p.nameEn}`,
+      });
+    }
+    return list;
+  }, [customCategories, approvedProfessions]);
 
   const filteredAds = useMemo(() => {
     if (statusFilter === 'all') return ads;

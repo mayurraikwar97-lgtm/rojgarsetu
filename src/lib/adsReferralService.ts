@@ -219,14 +219,23 @@ export function buildWhatsAppAdHref(raw?: string, adTitle?: string): string | nu
 // ============================================================
 
 export function normalizeAdCategoryKey(raw: string): string {
-  const clean = (raw || '').trim().toLowerCase();
+  const clean = (raw || '').trim().toLowerCase().replace(/^custom_/, '');
   if (!clean) return '';
+  const slugified = clean
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
   for (const opt of DEFAULT_AD_TARGET_CATEGORIES) {
-    if (opt.id === clean || opt.aliases.includes(clean)) {
+    if (
+      opt.id === clean ||
+      opt.id === slugified ||
+      opt.aliases.includes(clean) ||
+      opt.aliases.includes(slugified)
+    ) {
       return opt.id;
     }
   }
-  return clean;
+  return slugified || clean;
 }
 
 export function getTodayIsoDate(): string {

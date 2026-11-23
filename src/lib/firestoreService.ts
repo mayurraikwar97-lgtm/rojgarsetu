@@ -271,6 +271,11 @@ export async function saveWorkerRegistration(
 
       const cleanPub = { ...publicData };
       if (!cleanPub.photoDocId) delete cleanPub.photoDocId;
+      if (!cleanPub.customProfessionId) delete cleanPub.customProfessionId;
+      if (!cleanPub.customProfessionName) delete cleanPub.customProfessionName;
+      if (!cleanPub.customProfessionStatus) delete cleanPub.customProfessionStatus;
+      if (!cleanPub.workDescription) delete cleanPub.workDescription;
+      if (!cleanPub.workPhotoUrls || cleanPub.workPhotoUrls.length === 0) delete cleanPub.workPhotoUrls;
       const cleanPriv = { ...privateData, mobile: normalizedMobile };
       if (!cleanPriv.photoDocId) delete cleanPriv.photoDocId;
 
@@ -312,6 +317,13 @@ export async function saveWorkerRegistration(
             : cleanPub.photoDocId
               ? { photoDocId: cleanPub.photoDocId }
               : {}),
+          ...(cleanPub.customProfessionId ? { customProfessionId: cleanPub.customProfessionId } : {}),
+          ...(cleanPub.customProfessionName ? { customProfessionName: cleanPub.customProfessionName } : {}),
+          ...(cleanPub.customProfessionStatus ? { customProfessionStatus: cleanPub.customProfessionStatus } : {}),
+          ...(cleanPub.workDescription ? { workDescription: cleanPub.workDescription } : {}),
+          ...(cleanPub.workPhotoUrls && cleanPub.workPhotoUrls.length > 0
+            ? { workPhotoUrls: cleanPub.workPhotoUrls.slice(0, 4) }
+            : {}),
           updatedAt: serverTimestamp(),
         });
       }
@@ -532,12 +544,18 @@ export async function saveEmployerRegistration(
 
 export function doesWorkerMatchJob(
   job: Pick<JobPosting, 'category' | 'requiredSkills' | 'district' | 'employerUid'>,
-  worker: Pick<PublicWorkerProfile, 'ownerUid' | 'primarySkill' | 'skills' | 'district' | 'verificationStatus' | 'availabilityStatus'>
+  worker: Pick<
+    PublicWorkerProfile,
+    'ownerUid' | 'primarySkill' | 'skills' | 'district' | 'verificationStatus' | 'availabilityStatus'
+  > & { customProfessionStatus?: PublicWorkerProfile['customProfessionStatus'] }
 ): { matches: boolean; skillMatches: boolean; locationMatches: boolean } {
   if (worker.ownerUid && job.employerUid && worker.ownerUid === job.employerUid) {
     return { matches: false, skillMatches: false, locationMatches: false };
   }
   if (worker.verificationStatus === 'suspended' || worker.availabilityStatus !== 'available') {
+    return { matches: false, skillMatches: false, locationMatches: false };
+  }
+  if (worker.customProfessionStatus === 'pending' || worker.customProfessionStatus === 'rejected') {
     return { matches: false, skillMatches: false, locationMatches: false };
   }
   const skillMatches = doesCategoryMatch(

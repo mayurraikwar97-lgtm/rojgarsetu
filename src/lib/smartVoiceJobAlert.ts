@@ -118,6 +118,18 @@ export function normalizeCategoryToken(raw: string): string {
     return 'security_guard';
   }
   if (clean.includes('delivery') || clean.includes('डिलीवरी') || clean.includes('डिलिव्हरी')) return 'delivery_personnel';
+  if (clean.includes('cctv')) return 'cctv_installer';
+  if (clean.includes('solar panel') || clean.includes('solar technician') || clean.includes('solar installer')) {
+    return 'solar_panel_technician';
+  }
+  if (clean.includes('photographer') || clean.includes('photography')) return 'photographer';
+  if (clean.includes('video editor') || clean.includes('videographer')) return 'video_editor';
+  if (clean.includes('event decorator') || clean.includes('mandap')) return 'event_decorator';
+  if (clean.includes('pet care') || clean.includes('pet groom')) return 'pet_care';
+  if (clean.includes('sculptor') || clean.includes('artist')) return 'artist_sculptor';
+  if (clean.includes('beautician') || clean.includes('beauty professional') || clean.includes('beauty parlour') || clean.includes('beauty parlor')) {
+    return 'beauty_professional';
+  }
   if (
     clean.includes('ac repair') ||
     clean.includes('air conditioner') ||
@@ -125,7 +137,9 @@ export function normalizeCategoryToken(raw: string): string {
     clean.includes('fridge') ||
     clean.includes('washing machine') ||
     clean.includes('mechanic') ||
-    clean.includes('technician') ||
+    clean === 'technician' ||
+    clean === 'technicians' ||
+    clean.includes('technicians and mechanics') ||
     clean.includes('मेकॅनिक') ||
     clean.includes('मैकेनिक') ||
     clean.includes('उपकरण')
@@ -147,11 +161,16 @@ export function normalizeCategoryToken(raw: string): string {
   if (clean.includes('office assistant') || clean.includes('कार्यालय सहाय्यक') || clean.includes('कार्यालय सहायक')) {
     return 'office_assistant';
   }
-  if (clean.includes('tailor') || clean.includes('freelancer')) return 'freelancer_self_employed';
+  if (clean.includes('tailor') || clean.includes('शिलाई') || clean.includes('दर्जी')) return 'tailor';
+  if (clean.includes('freelancer')) return 'freelancer_self_employed';
   if (clean.includes('women entrepreneur') || clean.includes('महिला उद्योजक') || clean.includes('महिला उद्यमी')) {
     return 'women_entrepreneur';
   }
-  return clean.replace(/s$/, '');
+  return clean
+    .replace(/&/g, ' and ')
+    .replace(/[^a-z0-9\u0900-\u097f]+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .replace(/s$/, '');
 }
 
 function getCategoryCanonicalSkillsOnly(categoryOrSkill: string): Set<string> {
