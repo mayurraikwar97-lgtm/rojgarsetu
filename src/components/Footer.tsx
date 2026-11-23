@@ -43,7 +43,7 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
                   ROJGAR SETU
                 </div>
                 <div className="text-[11px] font-bold text-amber-300">
-                  ABUJMAD FOUNDATION
+                  {tr(lang, 'Employment & Workforce Network', 'रोजगार सेतु', 'रोजगार सेतु')}
                 </div>
               </div>
             </div>
@@ -182,13 +182,13 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
           <p className="leading-relaxed">
             {tr(
               lang,
-              'Disclaimer: ROJGAR SETU is an independent public-service social initiative under ABUJMAD FOUNDATION. It is NOT an official Government of India or Government of Maharashtra portal. Government scheme links direct users strictly to authentic official portals for public awareness.',
-              'अस्वीकरण: रोजगार सेतु (ABUJMAD FOUNDATION) एक स्वतंत्र जनसेवा पहल है। यह भारत सरकार या महाराष्ट्र शासन का आधिकारिक पोर्टल नहीं है। सरकारी योजनाओं के लिंक जन-जागरूकता हेतु केवल प्रामाणिक आधिकारिक सरकारी पोर्टलों पर जाते हैं।',
-              'अस्वीकरण: रोजगार सेतु (ABUJMAD FOUNDATION) हा एक स्वतंत्र जनसेवा उपक्रम आहे. हे भारत सरकार किंवा महाराष्ट्र शासनाचे अधिकृत संकेतस्थळ नाही. सरकारी योजनांचे दुवे जन-जागृतीसाठी केवळ अधिकृत शासकीय पोर्टल्सवर नेतात.'
+              'Disclaimer: ROJGAR SETU is an independent public-service employment platform. It is NOT an official Government of India or Government of Maharashtra portal. Government scheme links direct users strictly to authentic official portals for public awareness.',
+              'अस्वीकरण: रोजगार सेतु एक स्वतंत्र जनसेवा रोजगार मंच है। यह भारत सरकार या महाराष्ट्र शासन का आधिकारिक पोर्टल नहीं है। सरकारी योजनाओं के लिंक जन-जागरूकता हेतु केवल प्रामाणिक आधिकारिक सरकारी पोर्टलों पर जाते हैं।',
+              'अस्वीकरण: रोजगार सेतु हा एक स्वतंत्र जनसेवा रोजगार मंच आहे. हे भारत सरकार किंवा महाराष्ट्र शासनाचे अधिकृत संकेतस्थळ नाही. सरकारी योजनांचे दुवे जन-जागृतीसाठी केवळ अधिकृत शासकीय पोर्टल्सवर नेतात.'
             )}
           </p>
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pt-1 text-slate-300">
-            <span>© {new Date().getFullYear()} ROJGAR SETU · ABUJMAD FOUNDATION</span>
+            <span>© {new Date().getFullYear()} ROJGAR SETU</span>
             <span>
               {tr(
                 lang,

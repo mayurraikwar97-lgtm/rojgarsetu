@@ -26,6 +26,26 @@
   ],
   "rewrites": [
     {
+      "source": "/api/public-config",
+      "destination": "/api/health?mode=public-config"
+    },
+    {
+      "source": "/api/referrals/evaluate-eligibility",
+      "destination": "/api/platform?action=referrals-evaluate-eligibility"
+    },
+    {
+      "source": "/api/ads/validate-event",
+      "destination": "/api/platform?action=ads-validate-event"
+    },
+    {
+      "source": "/api/calls/masked-session",
+      "destination": "/api/platform?action=calls-masked-session"
+    },
+    {
+      "source": "/api/admin/payments/run-demo-verification",
+      "destination": "/api/platform?action=admin-run-demo-verification"
+    },
+    {
       "source": "/((?!api/|assets/|manifest\\.json|manifest\\.webmanifest|sw\\.js|workbox-|firebase-messaging-sw\\.js|pwa-|apple-touch-icon\\.png|icon\\.svg|logo-horizontal\\.svg|favicon\\.ico).*)",
       "destination": "/index.html"
     }

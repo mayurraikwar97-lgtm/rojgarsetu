@@ -181,9 +181,9 @@ export const GovtSchemesView: React.FC<GovtSchemesViewProps> = ({
             <p className="leading-relaxed">
               {tr(
                 lang,
-                'Information Notice: ROJGAR SETU (ABUJMAD FOUNDATION) is an independent public-service employment platform and is NOT an official Government of India or Government of Maharashtra website. All links below direct you to authentic official government portals. Always verify current eligibility, benefits, and deadlines on the respective department website.',
-                'महत्त्वपूर्ण सूचना: रोजगार सेतु (ABUJMAD FOUNDATION) एक स्वतंत्र जनसेवा रोजगार मंच है और भारत सरकार या महाराष्ट्र शासन का आधिकारिक पोर्टल नहीं है। नीचे दिए गए सभी लिंक प्रामाणिक सरकारी वेबसाइटों पर जाते हैं। अद्यतन पात्रता व लाभ की पुष्टि संबंधित विभाग की आधिकारिक वेबसाइट पर अवश्य करें।',
-                'महत्त्वाची सूचना: रोजगार सेतु (ABUJMAD FOUNDATION) हा एक स्वतंत्र जनसेवा रोजगार मंच असून तो भारत सरकार किंवा महाराष्ट्र शासनाचे अधिकृत संकेतस्थळ नाही. खालील सर्व दुवे अधिकृत शासकीय पोर्टल्सवर नेतात. अद्ययावत पात्रता, लाभ व अटींसाठी संबंधित विभागाच्या अधिकृत वेबसाइटला भेट द्या.'
+                'Information Notice: ROJGAR SETU is an independent public-service employment platform and is NOT an official Government of India or Government of Maharashtra website. All links below direct you to authentic official government portals. Always verify current eligibility, benefits, and deadlines on the respective department website.',
+                'महत्त्वपूर्ण सूचना: रोजगार सेतु एक स्वतंत्र जनसेवा रोजगार मंच है और भारत सरकार या महाराष्ट्र शासन का आधिकारिक पोर्टल नहीं है। नीचे दिए गए सभी लिंक प्रामाणिक सरकारी वेबसाइटों पर जाते हैं। अद्यतन पात्रता व लाभ की पुष्टि संबंधित विभाग की आधिकारिक वेबसाइट पर अवश्य करें।',
+                'महत्त्वाची सूचना: रोजगार सेतु हा एक स्वतंत्र जनसेवा रोजगार मंच असून तो भारत सरकार किंवा महाराष्ट्र शासनाचे अधिकृत संकेतस्थळ नाही. खालील सर्व दुवे अधिकृत शासकीय पोर्टल्सवर नेतात. अद्ययावत पात्रता, लाभ व अटींसाठी संबंधित विभागाच्या अधिकृत वेबसाइटला भेट द्या.'
               )}
             </p>
           </div>

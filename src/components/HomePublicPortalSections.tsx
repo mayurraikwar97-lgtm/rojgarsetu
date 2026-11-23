@@ -65,7 +65,7 @@ export const HomeIdentityHero: React.FC<HomeIdentityHeroProps> = ({
                 <RojgarSetuLogo variant="icon" className="w-12 h-12 shrink-0" />
                 <div>
                   <p className="text-xs font-bold text-[#C25E00]">
-                    ABUJMAD FOUNDATION ·{' '}
+                    ROJGAR SETU ·{' '}
                     {tr(
                       lang,
                       'National Public-Service Workforce Platform',
@@ -719,7 +719,7 @@ export const HomePublicPortalSections: React.FC<HomePublicPortalSectionsProps> =
             <div className="space-y-2 max-w-3xl">
               <div className="inline-flex items-center gap-2 text-xs font-bold text-[#0B3B75]">
                 <Handshake className="w-4 h-4 text-[#E06D1B]" />
-                <span>ABUJMAD FOUNDATION · {tr(lang, 'Institutional Collaboration', 'संस्थागत सहयोग', 'संस्थात्मक सहकार्य')}</span>
+                <span>ROJGAR SETU · {tr(lang, 'Institutional Collaboration', 'संस्थागत सहयोग', 'संस्थात्मक सहकार्य')}</span>
               </div>
               <h2 className="font-display text-2xl font-extrabold text-[#0B3B75]">
                 {tr(
@@ -773,9 +773,9 @@ export const HomePublicPortalSections: React.FC<HomePublicPortalSectionsProps> =
             <p className="text-sm text-slate-600 leading-relaxed">
               {tr(
                 lang,
-                'ROJGAR SETU is an independent social-impact employment initiative under ABUJMAD FOUNDATION (Proposed Section 8 Non-Profit). It is designed to respect the dignity of labour, simplify local hiring without brokers, and bring authentic government scheme guidance to every citizen in Marathi, Hindi, and English.',
-                'रोजगार सेतु (ABUJMAD FOUNDATION) एक स्वतंत्र सामाजिक रोजगार पहल है जो श्रम की गरिमा का सम्मान करते हुए बिना दलालों के स्थानीय रोजगार और मराठी, हिंदी व अंग्रेजी में प्रामाणिक सरकारी योजना मार्गदर्शन प्रदान करती है।',
-                'रोजगार सेतु (ABUJMAD FOUNDATION) हा एक स्वतंत्र सामाजिक उपक्रम असून तो श्रमाचा सन्मान राखून मध्यस्थांशिवाय स्थानिक रोजगार आणि मराठी, हिंदी व इंग्रजीमध्ये अधिकृत सरकारी योजनांची माहिती देतो.'
+                'ROJGAR SETU is an independent social-impact employment platform. It is designed to respect the dignity of labour, simplify local hiring without brokers, and bring authentic government scheme guidance to every citizen in Marathi, Hindi, and English.',
+                'रोजगार सेतु एक स्वतंत्र सामाजिक रोजगार मंच है जो श्रम की गरिमा का सम्मान करते हुए बिना दलालों के स्थानीय रोजगार और मराठी, हिंदी व अंग्रेजी में प्रामाणिक सरकारी योजना मार्गदर्शन प्रदान करता है।',
+                'रोजगार सेतु हा एक स्वतंत्र सामाजिक रोजगार मंच असून तो श्रमाचा सन्मान राखून मध्यस्थांशिवाय स्थानिक रोजगार आणि मराठी, हिंदी व इंग्रजीमध्ये अधिकृत सरकारी योजनांची माहिती देतो.'
               )}
             </p>
             <div className="flex flex-wrap gap-2.5 pt-2">

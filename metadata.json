@@ -1,6 +1,6 @@
 {
   "name": "ROJGAR SETU",
-  "description": "Every Hand Deserves an Opportunity — National Employment & Workforce Connectivity Platform under ABUJMAD FOUNDATION connecting India's skilled and unskilled workforce with employers.",
+  "description": "Every Hand Deserves an Opportunity — National Employment & Workforce Connectivity Platform connecting India's skilled and unskilled workforce with employers.",
   "requestFramePermissions": ["geolocation", "microphone", "camera"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

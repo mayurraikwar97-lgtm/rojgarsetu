@@ -1097,9 +1097,9 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
                     {isWorkerPaymentPaid(workerProfile, ownPayment)
                       ? tr(
                           lang,
-                          '₹250 Fee PAID — Sent to ABUJMAD FOUNDATION Admin Dashboard for Approval',
-                          '₹250 शुल्क भुगतान पूर्ण (PAID) — ABUJMAD FOUNDATION एडमिन स्वीकृति लंबित',
-                          '₹250 नोंदणी शुल्क भरले (PAID) — ABUJMAD FOUNDATION अ‍ॅडमिन मंजुरी प्रलंबित'
+                          '₹250 Fee PAID — Sent to ROJGAR SETU Admin Dashboard for Approval',
+                          '₹250 शुल्क भुगतान पूर्ण (PAID) — रोजगार सेतु एडमिन स्वीकृति लंबित',
+                          '₹250 नोंदणी शुल्क भरले (PAID) — रोजगार सेतु अ‍ॅडमिन मंजुरी प्रलंबित'
                         )
                       : tr(
                           lang,
@@ -1118,7 +1118,7 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
                         )
                       : tr(
                           lang,
-                          'Complete your ₹250 payment below to submit your registration to ABUJMAD FOUNDATION Admin for Worker ID Card & Certificate approval.',
+                          'Complete your ₹250 payment below to submit your registration to ROJGAR SETU Admin for Worker ID Card & Certificate approval.',
                           'अपना कामगार ID कार्ड और प्रमाणपत्र प्राप्त करने के लिए नीचे ₹250 भुगतान पूरा करें।',
                           'कामगार ID कार्ड व प्रमाणपत्र मिळवण्यासाठी खाली ₹250 पेमेंट पूर्ण करा.'
                         )}

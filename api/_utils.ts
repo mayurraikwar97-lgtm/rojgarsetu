@@ -16,6 +16,39 @@ export function extractClientIp(req: ServerlessRequest): string {
   return (raw || req.socket?.remoteAddress || 'unknown').trim();
 }
 
+export function getQueryParam(req: ServerlessRequest, key: string): string {
+  const direct = req.query?.[key];
+  if (typeof direct === 'string' && direct.trim()) return direct.trim();
+  if (Array.isArray(direct) && direct[0]?.trim()) return direct[0].trim();
+  try {
+    const parsed = new URL(req.url || '/', 'http://localhost');
+    return (parsed.searchParams.get(key) || '').trim();
+  } catch {
+    return '';
+  }
+}
+
+export function resolveRouteAction(req: ServerlessRequest, groupSegment?: string): string {
+  const fromQuery = getQueryParam(req, 'action');
+  if (fromQuery) return fromQuery.toLowerCase();
+
+  try {
+    const parsed = new URL(req.url || '/', 'http://localhost');
+    const cleanPath = parsed.pathname.replace(/\/+$/, '');
+    if (groupSegment) {
+      const prefix = `/api/${groupSegment}/`;
+      if (cleanPath.toLowerCase().startsWith(prefix.toLowerCase())) {
+        const rest = cleanPath.slice(prefix.length).split('/')[0] || '';
+        return rest.trim().toLowerCase();
+      }
+    }
+    const parts = cleanPath.split('/').filter(Boolean);
+    return (parts[parts.length - 1] || '').trim().toLowerCase();
+  } catch {
+    return '';
+  }
+}
+
 export async function readJsonBody(req: ServerlessRequest): Promise<Record<string, unknown>> {
   if (req.body && typeof req.body === 'object' && !Buffer.isBuffer(req.body)) {
     return req.body as Record<string, unknown>;

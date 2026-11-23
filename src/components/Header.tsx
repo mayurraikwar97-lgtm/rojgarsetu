@@ -195,9 +195,9 @@ export const Header: React.FC<HeaderProps> = ({
             <p className="text-slate-200 font-medium truncate">
               {tr(
                 lang,
-                'ABUJMAD FOUNDATION · Independent Public-Service Workforce Platform (Not a Government Portal)',
-                'ABUJMAD FOUNDATION · स्वतंत्र जनसेवा रोजगार मंच (आधिकारिक सरकारी पोर्टल नहीं)',
-                'ABUJMAD FOUNDATION · स्वतंत्र जनसेवा रोजगार मंच (अधिकृत शासकीय पोर्टल नाही)'
+                'ROJGAR SETU · Independent Public-Service Workforce Platform (Not a Government Portal)',
+                'रोजगार सेतु · स्वतंत्र जनसेवा रोजगार मंच (आधिकारिक सरकारी पोर्टल नहीं)',
+                'रोजगार सेतु · स्वतंत्र जनसेवा रोजगार मंच (अधिकृत शासकीय पोर्टल नाही)'
               )}
             </p>
           </div>
@@ -346,7 +346,7 @@ export const Header: React.FC<HeaderProps> = ({
                 श्रम की गरिमा • स्वावलंबन • रोजगार
               </div>
               <div className="text-[11px] text-slate-500 mt-0.5">
-                ABUJMAD FOUNDATION
+                {tr(lang, 'ROJGAR SETU', 'रोजगार सेतु', 'रोजगार सेतु')}
               </div>
             </figcaption>
           </figure>

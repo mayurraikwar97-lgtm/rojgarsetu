@@ -715,7 +715,7 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
         key: order.razorpayKeyId,
         amount: 25000, // Exact ₹250 in paise
         currency: 'INR',
-        name: 'ABUJMAD FOUNDATION · ROJGAR SETU',
+        name: 'ROJGAR SETU',
         description: 'Worker Registration Fee — Worker ID Card & Registration Certificate',
         order_id: order.gatewayOrderId,
         prefill: {
@@ -788,7 +788,7 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
             }
 
             setPaymentStatusMsg(
-              `₹250 PAID & Verified! Payment ID: ${response.razorpay_payment_id}. Registration ${saved.regId} has been sent to the ABUJMAD FOUNDATION Admin Dashboard for approval.`
+              `₹250 PAID & Verified! Payment ID: ${response.razorpay_payment_id}. Registration ${saved.regId} has been sent to the ROJGAR SETU Admin Dashboard for approval.`
             );
             await refreshUserProfiles();
             setShowSuccessScreen(true);
@@ -797,7 +797,7 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
             setPaymentErrorMsg(
               verifyErr instanceof Error
                 ? verifyErr.message
-                : 'Server payment verification failed. Please retry or contact ABUJMAD FOUNDATION support.'
+                : 'Server payment verification failed. Please retry or contact ROJGAR SETU support.'
             );
           } finally {
             verifyingPaymentRef.current = false;
@@ -965,14 +965,14 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
                   {isAdminApproved
                     ? 'Admin Approved ROJGAR SETU Worker!'
                     : isAlreadyPaid
-                    ? '₹250 PAID — Registration Sent to ABUJMAD FOUNDATION Admin Dashboard'
+                    ? '₹250 PAID — Registration Sent to ROJGAR SETU Admin Dashboard'
                     : 'Registration Saved — Complete ₹250 Payment Below'}
                 </h2>
                 <p className="text-sm text-blue-50 font-semibold mt-0.5">
                   {isAdminApproved
                     ? 'आपकी कामगार प्रोफ़ाइल और ₹250 पंजीकरण सत्यापित है · “कामगार नाही, आपलीच माणसं!”'
                     : isAlreadyPaid
-                    ? 'Your ₹250 fee is PAID and verified on our server. Your Worker ID Card & Registration Certificate will be generated automatically once ABUJMAD FOUNDATION Admin approves your registration.'
+                    ? 'Your ₹250 fee is PAID and verified on our server. Your Worker ID Card & Registration Certificate will be generated automatically once ROJGAR SETU Admin approves your registration.'
                     : 'तुमची माहिती जतन झाली आहे. नोंदणी पूर्ण करण्यासाठी खाली ₹250 पेमेंट करा.'}
                 </p>
               </div>
@@ -1101,7 +1101,7 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
             />
           )}
 
-          {/* Verified Digital ID Card (generated ONLY after ABUJMAD FOUNDATION Admin approval) */}
+          {/* Verified Digital ID Card (generated ONLY after ROJGAR SETU Admin approval) */}
           {workerProfile && isAdminApproved && (
             <WorkerDigitalIdCard
               workerProfile={workerProfile}
@@ -1963,7 +1963,7 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
 
         {/* ================= VISIBLE ₹250 WORKER REGISTRATION PAYMENT SECTION ================= */}
         <section
-          aria-label="ABUJMAD FOUNDATION Worker Registration Fee"
+          aria-label="ROJGAR SETU Worker Registration Fee"
           className="rounded-xl border-2 border-[#0B3B75] bg-slate-50/70 overflow-hidden shadow-xs"
         >
           <div className="h-1.5 flex">
@@ -1977,7 +1977,7 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
               <div>
                 <div className="flex flex-wrap items-center gap-2">
                   <h2 className="font-display text-base sm:text-lg font-extrabold text-[#0B3B75]">
-                    ABUJMAD FOUNDATION – Worker Registration Fee
+                    ROJGAR SETU – Worker Registration Fee
                   </h2>
                   {gatewayConfig?.razorpayMode === 'test' && (
                     <span className="px-2 py-0.5 rounded bg-amber-100 border border-amber-300 text-[#9A3412] text-[10px] font-extrabold uppercase">
@@ -1986,7 +1986,7 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
                   )}
                 </div>
                 <p className="text-xs text-slate-600 mt-0.5">
-                  Purpose: <strong className="text-[#0B3B75]">Worker ID Card &amp; Registration Certificate</strong> (generated after ABUJMAD FOUNDATION Admin approval)
+                  Purpose: <strong className="text-[#0B3B75]">Worker ID Card &amp; Registration Certificate</strong> (generated after ROJGAR SETU Admin approval)
                 </p>
               </div>
               <div className="text-right">
@@ -2043,14 +2043,14 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
                 <p>
                   {isAdminApproved
                     ? `Approved Worker ID: ${workerProfile?.registrationId}. Your Worker ID Card & Registration Certificate are active.`
-                    : `Payment ID: ${ownPayment?.gatewayPaymentId || ownPayment?.utrOrGatewayRef || 'Verified'}. Your registration is queued in the ABUJMAD FOUNDATION Admin Dashboard for approval.`}
+                    : `Payment ID: ${ownPayment?.gatewayPaymentId || ownPayment?.utrOrGatewayRef || 'Verified'}. Your registration is queued in the ROJGAR SETU Admin Dashboard for approval.`}
                 </p>
               </div>
             ) : (
               <p className="text-[11px] text-slate-600 leading-relaxed flex items-start gap-1.5">
                 <ShieldCheck className="w-4 h-4 text-[#15803D] shrink-0 mt-0.5" />
                 <span>
-                  Secured by <strong>Razorpay</strong>. Payment signature and ₹250 capture are verified on our server before marking your registration <strong>PAID</strong> and sending it to the ABUJMAD FOUNDATION Admin Dashboard for approval. Registration fee payment does not guarantee employment or job allocation.
+                  Secured by <strong>Razorpay</strong>. Payment signature and ₹250 capture are verified on our server before marking your registration <strong>PAID</strong> and sending it to the ROJGAR SETU Admin Dashboard for approval. Registration fee payment does not guarantee employment or job allocation.
                 </span>
               </p>
             )}

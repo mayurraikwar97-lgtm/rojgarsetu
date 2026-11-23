@@ -33,7 +33,7 @@ export const AboutUsView: React.FC = () => {
   return (
     <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-12 space-y-10">
       <div className="bg-white border border-slate-200 rounded-lg p-6 sm:p-10 space-y-5">
-        <p className="text-xs font-semibold text-[#C25E00]">ABUJMAD FOUNDATION</p>
+        <p className="text-xs font-semibold text-[#C25E00]">ROJGAR SETU</p>
         <h1 className="font-display text-3xl sm:text-4xl font-extrabold text-[#0B3B75] tracking-tight">
           {t.about.title}
         </h1>
@@ -217,7 +217,7 @@ export const AboutUsView: React.FC = () => {
         <div className="divide-y divide-slate-200 text-sm">
           <div className="py-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
             <span className="font-semibold text-slate-700">{t.about.founderLabel}</span>
-            <span className="sm:col-span-2 text-slate-900 font-medium">ABUJMAD FOUNDATION (Proposed Section 8 Company)</span>
+            <span className="sm:col-span-2 text-slate-900 font-medium">ROJGAR SETU</span>
           </div>
           <div className="py-3 grid grid-cols-1 sm:grid-cols-3 gap-2">
             <span className="font-semibold text-slate-700">{t.about.registrationLabel}</span>
@@ -278,8 +278,7 @@ export const PartnershipsView: React.FC = () => {
     const brief = [
       'ROJGAR SETU — CONCEPT BRIEF & PROJECT OVERVIEW (SUMMARY)',
       '======================================================',
-      'Initiative: ROJGAR SETU (रोजगार सेतु)',
-      'Proposed Parent Body: ABUJMAD FOUNDATION (Social-Impact Section 8 Initiative)',
+      'Platform: ROJGAR SETU (रोजगार सेतु)',
       'Slogan: Every Hand Deserves an Opportunity.',
       '',
       'IMPORTANT DISCLAIMER:',
@@ -304,7 +303,7 @@ export const PartnershipsView: React.FC = () => {
       '- Women Self-Help Group (SHG) and rural artisan market-work linkages',
       '- MSME cluster workforce mobilization pilots',
       '',
-      'Status: Legal registration and office details pending formal confirmation by ABUJMAD FOUNDATION.',
+      'Status: Legal registration and office details pending formal publication by ROJGAR SETU.',
     ].join('\n');
 
     const blob = new Blob([brief], { type: 'text/plain;charset=utf-8' });
@@ -374,7 +373,7 @@ export const PartnershipsView: React.FC = () => {
   return (
     <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-12 space-y-10">
       <div className="bg-white border border-slate-200 rounded-lg p-6 sm:p-10 space-y-4">
-        <p className="text-xs font-semibold text-[#C25E00]">ABUJMAD FOUNDATION · Institutional Outreach</p>
+        <p className="text-xs font-semibold text-[#C25E00]">ROJGAR SETU · Institutional Outreach</p>
         <h1 className="font-display text-3xl font-extrabold text-[#0B3B75]">{t.partnerships.title}</h1>
         <p className="text-base text-slate-600 leading-relaxed max-w-3xl">{t.partnerships.subtitle}</p>
         <div className="p-4 rounded-md bg-amber-50 border border-amber-200 text-xs sm:text-sm text-amber-950 font-medium">
@@ -899,9 +898,9 @@ export const TrustSafetyView: React.FC = () => {
       points: [
         tr(
           lang,
-          'Private Social-Impact Platform: ROJGAR SETU is operated as a proposed initiative under ABUJMAD FOUNDATION and is not a government portal.',
-          'निजी सामाजिक पहल: रोजगार सेतु ABUJMAD FOUNDATION के अंतर्गत प्रस्तावित एक पहल है और यह कोई सरकारी पोर्टल नहीं है।',
-          'खाजगी सामाजिक उपक्रम: रोजगार सेतु हा ABUJMAD FOUNDATION अंतर्गत प्रस्तावित उपक्रम असून हे सरकारी पोर्टल नाही.'
+          'Private Social-Impact Platform: ROJGAR SETU is operated as an independent employment platform and is not a government portal.',
+          'निजी सामाजिक पहल: रोजगार सेतु एक स्वतंत्र रोजगार मंच है और यह कोई सरकारी पोर्टल नहीं है।',
+          'खाजगी सामाजिक उपक्रम: रोजगार सेतु हा एक स्वतंत्र रोजगार मंच असून हे सरकारी पोर्टल नाही.'
         ),
         tr(
           lang,
@@ -1004,9 +1003,9 @@ export const TrustSafetyView: React.FC = () => {
       q: tr(lang, 'Is ROJGAR SETU a government portal?', 'क्या रोजगार सेतु एक सरकारी पोर्टल है?', 'रोजगार सेतु हे सरकारी पोर्टल आहे का?'),
       a: tr(
         lang,
-        'No. ROJGAR SETU is an independent social-impact employment connectivity initiative proposed under ABUJMAD FOUNDATION. It is not owned by or affiliated with any government ministry.',
-        'नहीं। रोजगार सेतु ABUJMAD FOUNDATION के अंतर्गत प्रस्तावित एक स्वतंत्र सामाजिक पहल है। यह किसी सरकारी मंत्रालय से संबद्ध नहीं है।',
-        'नाही. रोजगार सेतु हा ABUJMAD FOUNDATION अंतर्गत प्रस्तावित स्वतंत्र सामाजिक उपक्रम आहे. हे कोणतेही सरकारी पोर्टल नाही.'
+        'No. ROJGAR SETU is an independent social-impact employment connectivity platform. It is not owned by or affiliated with any government ministry.',
+        'नहीं। रोजगार सेतु एक स्वतंत्र सामाजिक रोजगार मंच है। यह किसी सरकारी मंत्रालय से संबद्ध नहीं है।',
+        'नाही. रोजगार सेतु हा एक स्वतंत्र सामाजिक रोजगार मंच आहे. हे कोणतेही सरकारी पोर्टल नाही.'
       ),
     },
     {

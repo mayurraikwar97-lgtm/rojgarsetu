@@ -25,7 +25,7 @@ export default defineConfig(() => {
           id: '/',
           name: 'ROJGAR SETU',
           short_name: 'ROJGAR SETU',
-          description: 'Every Hand Deserves an Opportunity. Connecting India’s workforce with employment opportunities under ABUJMAD FOUNDATION.',
+          description: 'Every Hand Deserves an Opportunity. Connecting India’s workforce with employment opportunities on ROJGAR SETU.',
           theme_color: '#0B3B75',
           background_color: '#FFFFFF',
           display: 'standalone',

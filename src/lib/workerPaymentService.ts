@@ -103,7 +103,7 @@ export function loadRazorpayCheckoutScript(): Promise<boolean> {
 }
 
 /**
- * Returns true ONLY after ABUJMAD FOUNDATION Admin has approved the worker registration
+ * Returns true ONLY after ROJGAR SETU Admin has approved the worker registration
  * (unlocking Verified Worker ID RS-W-..., Digital Worker ID Card, and Registration Certificate).
  */
 export function isWorkerPaidBenefitsActive(worker: PublicWorkerProfile | null | undefined): boolean {
@@ -131,7 +131,7 @@ export function isWorkerPaidBenefitsActive(worker: PublicWorkerProfile | null | 
 
 /**
  * Returns true once the worker's ₹250 registration fee has been server-verified as PAID
- * (even while ABUJMAD FOUNDATION Admin approval for ID Card & Certificate is still pending).
+ * (even while ROJGAR SETU Admin approval for ID Card & Certificate is still pending).
  */
 export function isWorkerPaymentPaid(
   worker: PublicWorkerProfile | null | undefined,
@@ -200,8 +200,8 @@ export async function fetchPaymentGatewayConfig(): Promise<PaymentGatewayPublicC
       razorpayMode: 'unconfigured',
       testModeEnforced: true,
       configError: 'Unable to fetch server payment configuration.',
-      officialUpiId: 'rojgarsetu.abujmad@upi',
-      officialUpiPayeeName: 'Rojgar Setu Abujmad Foundation',
+      officialUpiId: 'rojgarsetu@upi',
+      officialUpiPayeeName: 'Rojgar Setu',
       refundPolicySummary:
         'One-time ₹250 registration fee is refundable only for verified duplicate/failed transactions or valid cancellation before benefit activation within 7 days.',
       noEmploymentGuaranteeNotice:

@@ -88,7 +88,7 @@ export const BrandSloganBanner: React.FC<BrandSloganBannerProps> = ({
               {BRAND_MESSAGE_MR}
             </p>
             <p className="text-[11px] font-semibold text-slate-500">
-              ROJGAR SETU · ABUJMAD FOUNDATION
+              ROJGAR SETU
             </p>
           </div>
         </div>

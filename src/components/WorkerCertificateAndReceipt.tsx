@@ -142,7 +142,7 @@ export function downloadOfficialPaymentReceipt(payment: WorkerRegistrationPaymen
     <div class="hdr">
       <div>
         <h1>ROJGAR SETU · OFFICIAL PAYMENT RECEIPT</h1>
-        <p>Abujmad Foundation · “कामगार नाही, आपलीच माणसं!”</p>
+        <p>“कामगार नाही, आपलीच माणसं!”</p>
       </div>
       <span class="badge">Successful · Verified</span>
     </div>
@@ -398,9 +398,9 @@ export const WorkerPaymentCheckoutCard: React.FC<WorkerPaymentCheckoutCardProps>
               verification.activatedOnServer
                 ? tr(
                     lang,
-                    '₹250 PAID & verified on server! Your registration has been sent to the ABUJMAD FOUNDATION Admin Dashboard. Your Worker ID Card & Registration Certificate will be generated after Admin approval.',
-                    '₹250 भुगतान सत्यापित (PAID) हो गया! आपका पंजीकरण ABUJMAD FOUNDATION एडमिन डैशबोर्ड पर भेज दिया गया है। एडमिन स्वीकृति के बाद आपका ID कार्ड और प्रमाणपत्र जारी होगा।',
-                    '₹250 पेमेंट यशस्वी (PAID) व सर्व्हरवर सत्यापित झाले! तुमची नोंदणी ABUJMAD FOUNDATION अ‍ॅडमिन डॅशबोर्डवर तपासणीसाठी पाठवली आहे. अ‍ॅडमिन मंजुरीनंतर कामगार ID कार्ड व प्रमाणपत्र तयार होईल.'
+                    '₹250 PAID & verified on server! Your registration has been sent to the ROJGAR SETU Admin Dashboard. Your Worker ID Card & Registration Certificate will be generated after Admin approval.',
+                    '₹250 भुगतान सत्यापित (PAID) हो गया! आपका पंजीकरण रोजगार सेतु एडमिन डैशबोर्ड पर भेज दिया गया है। एडमिन स्वीकृति के बाद आपका ID कार्ड और प्रमाणपत्र जारी होगा।',
+                    '₹250 पेमेंट यशस्वी (PAID) व सर्व्हरवर सत्यापित झाले! तुमची नोंदणी रोजगार सेतु अ‍ॅडमिन डॅशबोर्डवर तपासणीसाठी पाठवली आहे. अ‍ॅडमिन मंजुरीनंतर कामगार ID कार्ड व प्रमाणपत्र तयार होईल.'
                   )
                 : tr(
                     lang,
@@ -950,7 +950,7 @@ export const WorkerPaymentReceiptCard: React.FC<{
               ROJGAR SETU · OFFICIAL PAYMENT RECEIPT
             </div>
             <div className="text-[11px] text-blue-100">
-              Abujmad Foundation · “कामगार नाही, आपलीच माणसं!”
+              “कामगार नाही, आपलीच माणसं!”
             </div>
           </div>
         </div>
@@ -1183,9 +1183,9 @@ export const WorkerRegistrationCertificateCard: React.FC<{
             {isPaid
               ? tr(
                   lang,
-                  '₹250 Registration Fee PAID — Awaiting ABUJMAD FOUNDATION Admin Approval',
-                  '₹250 शुल्क भुगतान पूर्ण (PAID) — ABUJMAD FOUNDATION एडमिन स्वीकृति लंबित',
-                  '₹250 नोंदणी शुल्क भरले (PAID) — ABUJMAD FOUNDATION अ‍ॅडमिन मंजुरी प्रलंबित'
+                  '₹250 Registration Fee PAID — Awaiting ROJGAR SETU Admin Approval',
+                  '₹250 शुल्क भुगतान पूर्ण (PAID) — रोजगार सेतु एडमिन स्वीकृति लंबित',
+                  '₹250 नोंदणी शुल्क भरले (PAID) — रोजगार सेतु अ‍ॅडमिन मंजुरी प्रलंबित'
                 )
               : tr(
                   lang,
@@ -1198,15 +1198,15 @@ export const WorkerRegistrationCertificateCard: React.FC<{
             {isPaid
               ? tr(
                   lang,
-                  'Your ₹250 registration fee is PAID and sent to the ABUJMAD FOUNDATION Admin Dashboard. Your Official Worker ID Card (RS-W-...) and Registration Certificate will be generated automatically once Admin approves your registration.',
-                  'आपका ₹250 शुल्क PAID हो गया है और ABUJMAD FOUNDATION एडमिन डैशबोर्ड पर सत्यापन हेतु भेजा गया है। एडमिन स्वीकृति के बाद आपका ID कार्ड और प्रमाणपत्र यहाँ खुल जाएगा।',
-                  'तुमचे ₹250 नोंदणी शुल्क भरले (PAID) गेले असून ABUJMAD FOUNDATION अ‍ॅडमिन डॅशबोर्डवर तपासणीसाठी पाठवले आहे. अ‍ॅडमिन मंजुरीनंतर कामगार ID कार्ड व प्रमाणपत्र येथे आपोआप तयार होईल.'
+                  'Your ₹250 registration fee is PAID and sent to the ROJGAR SETU Admin Dashboard. Your Official Worker ID Card (RS-W-...) and Registration Certificate will be generated automatically once Admin approves your registration.',
+                  'आपका ₹250 शुल्क PAID हो गया है और रोजगार सेतु एडमिन डैशबोर्ड पर सत्यापन हेतु भेजा गया है। एडमिन स्वीकृति के बाद आपका ID कार्ड और प्रमाणपत्र यहाँ खुल जाएगा।',
+                  'तुमचे ₹250 नोंदणी शुल्क भरले (PAID) गेले असून रोजगार सेतु अ‍ॅडमिन डॅशबोर्डवर तपासणीसाठी पाठवले आहे. अ‍ॅडमिन मंजुरीनंतर कामगार ID कार्ड व प्रमाणपत्र येथे आपोआप तयार होईल.'
                 )
               : tr(
                   lang,
-                  'Once your one-time ₹250 registration fee is paid and approved by ABUJMAD FOUNDATION Admin, your printable Official Worker Registration Certificate and Verified Worker ID (RS-W-...) will unlock here automatically.',
-                  'एकमुश्त ₹250 शुल्क भुगतान और ABUJMAD FOUNDATION एडमिन स्वीकृति के बाद आपका आधिकारिक पंजीकरण प्रमाणपत्र और सत्यापित कामगार ID यहाँ खुल जाएगा।',
-                  '₹250 नोंदणी शुल्क भरून ABUJMAD FOUNDATION अ‍ॅडमिन मंजुरी मिळाल्यानंतर तुमचे अधिकृत नोंदणी प्रमाणपत्र आणि सत्यापित कामगार ID येथे उपलब्ध होईल.'
+                  'Once your one-time ₹250 registration fee is paid and approved by ROJGAR SETU Admin, your printable Official Worker Registration Certificate and Verified Worker ID (RS-W-...) will unlock here automatically.',
+                  'एकमुश्त ₹250 शुल्क भुगतान और रोजगार सेतु एडमिन स्वीकृति के बाद आपका आधिकारिक पंजीकरण प्रमाणपत्र और सत्यापित कामगार ID यहाँ खुल जाएगा।',
+                  '₹250 नोंदणी शुल्क भरून रोजगार सेतु अ‍ॅडमिन मंजुरी मिळाल्यानंतर तुमचे अधिकृत नोंदणी प्रमाणपत्र आणि सत्यापित कामगार ID येथे उपलब्ध होईल.'
                 )}
           </p>
         </div>
@@ -1233,7 +1233,7 @@ export const WorkerRegistrationCertificateCard: React.FC<{
             <RojgarSetuLogo className="w-11 h-11" />
             <div>
               <div className="text-[11px] font-extrabold uppercase tracking-widest text-[#E06D1B]">
-                ROJGAR SETU · ABUJMAD FOUNDATION
+                ROJGAR SETU
               </div>
               <h3 className="font-display text-lg sm:text-xl font-extrabold text-[#0B3B75]">
                 {tr(lang, 'OFFICIAL WORKER REGISTRATION CERTIFICATE', 'आधिकारिक कामगार पंजीकरण प्रमाणपत्र', 'अधिकृत कामगार नोंदणी प्रमाणपत्र')}

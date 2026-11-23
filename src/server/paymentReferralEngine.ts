@@ -237,9 +237,9 @@ export function getPaymentGatewayPublicConfig(): PaymentGatewayPublicConfig {
     configError = `Missing server environment variable(s): ${missingGatewayEnvVars.join(', ')}.`;
   }
 
-  const officialUpiId = (process.env.OFFICIAL_UPI_ID || 'rojgarsetu.abujmad@upi').trim();
+  const officialUpiId = (process.env.OFFICIAL_UPI_ID || 'rojgarsetu@upi').trim();
   const officialUpiPayeeName = (
-    process.env.OFFICIAL_UPI_PAYEE_NAME || 'Rojgar Setu Abujmad Foundation'
+    process.env.OFFICIAL_UPI_PAYEE_NAME || 'Rojgar Setu'
   ).trim();
 
   return {
@@ -734,7 +734,7 @@ async function activateWorkerRegistrationOnServer(params: {
       referralCredited: false,
       referralMessage: alreadyAdminApproved
         ? 'Registration payment was already PAID and Admin-approved (idempotent no-op).'
-        : 'Registration payment is already PAID and awaiting ABUJMAD FOUNDATION Admin approval (idempotent no-op).',
+        : 'Registration payment is already PAID and awaiting ROJGAR SETU Admin approval (idempotent no-op).',
     };
   }
 
@@ -799,7 +799,7 @@ async function activateWorkerRegistrationOnServer(params: {
       verifiedByUid: params.source,
       verifiedAtIso,
       adminNotes:
-        '₹250 PAID via Razorpay (signature & capture verified). Sent to ABUJMAD FOUNDATION Admin Dashboard for approval before Worker ID Card & Certificate generation.',
+        '₹250 PAID via Razorpay (signature & capture verified). Sent to ROJGAR SETU Admin Dashboard for approval before Worker ID Card & Certificate generation.',
       updatedAt: FieldValue.serverTimestamp(),
       ...(paySnap.exists ? {} : { createdAt: FieldValue.serverTimestamp() }),
     },
@@ -810,7 +810,7 @@ async function activateWorkerRegistrationOnServer(params: {
     batch.update(pubRef, {
       registrationPaymentStatus: 'verified',
       paymentReceiptNo: receiptNo,
-      // Worker ID Card (RS-W-...) and Registration Certificate unlock ONLY after ABUJMAD FOUNDATION Admin approval
+      // Worker ID Card (RS-W-...) and Registration Certificate unlock ONLY after ROJGAR SETU Admin approval
       verificationStatus: alreadyAdminApproved ? 'verified' : 'pending',
       paidBenefitsActive: alreadyAdminApproved ? true : false,
       updatedAt: FieldValue.serverTimestamp(),
@@ -855,7 +855,7 @@ async function activateWorkerRegistrationOnServer(params: {
     certificateNo: alreadyAdminApproved ? String(existingPub?.certificateNo || '') : undefined,
     referralCredited: false,
     referralMessage:
-      '₹250 payment verified as PAID and sent to ABUJMAD FOUNDATION Admin Dashboard. Worker ID Card, Certificate & any ₹50 referral reward activate after Admin approval.',
+      '₹250 payment verified as PAID and sent to ROJGAR SETU Admin Dashboard. Worker ID Card, Certificate & any ₹50 referral reward activate after Admin approval.',
   };
 }
 
@@ -1459,7 +1459,7 @@ export async function handleCreatePaymentOrder(params: {
             ...(registrationId ? { registrationId } : {}),
             orderRef,
             mode: 'test',
-            purpose: 'ABUJMAD FOUNDATION Worker Registration Fee (ID Card & Certificate)',
+            purpose: 'ROJGAR SETU Worker Registration Fee (ID Card & Certificate)',
           },
         }),
       });
@@ -1627,7 +1627,7 @@ export async function handleVerifyGatewayPayment(params: {
     };
   }
 
-  // Step 3: Record PAID status in DB & queue registration for ABUJMAD FOUNDATION Admin Dashboard approval
+  // Step 3: Record PAID status in DB & queue registration for ROJGAR SETU Admin Dashboard approval
   const runtime = params.runtimeOverride ?? getPaymentAdminRuntime(params.rootDir);
   let activation: Awaited<ReturnType<typeof activateWorkerRegistrationOnServer>>;
   try {
@@ -1688,7 +1688,7 @@ export async function handleVerifyGatewayPayment(params: {
       referralMessage: activation.referralMessage,
       reason: activation.alreadyVerified
         ? 'Razorpay payment was already recorded as PAID (duplicate callback ignored idempotently).'
-        : 'Razorpay Test Mode signature and ₹250 capture verified on backend. Payment marked PAID and sent to ABUJMAD FOUNDATION Admin Dashboard for approval.',
+        : 'Razorpay Test Mode signature and ₹250 capture verified on backend. Payment marked PAID and sent to ROJGAR SETU Admin Dashboard for approval.',
     },
   };
 }

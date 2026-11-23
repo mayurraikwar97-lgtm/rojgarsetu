@@ -1999,9 +1999,9 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
             <p className="text-xs text-slate-500">
               {tr(
                 lang,
-                'Issued under ROJGAR SETU (ABUJMAD FOUNDATION) for identification on work requests.',
-                'कार्य अवसरों पर पहचान के लिए रोजगार सेतु (ABUJMAD FOUNDATION) द्वारा जारी।',
-                'कामाच्या ठिकाणी ओळखीसाठी रोजगार सेतु (ABUJMAD FOUNDATION) अंतर्गत जारी.'
+                'Issued under ROJGAR SETU for identification on work requests.',
+                'कार्य अवसरों पर पहचान के लिए रोजगार सेतु द्वारा जारी।',
+                'कामाच्या ठिकाणी ओळखीसाठी रोजगार सेतु अंतर्गत जारी.'
               )}
             </p>
           </div>
@@ -2061,7 +2061,7 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
             </div>
           </div>
           <div className="px-4 sm:px-5 py-2 bg-[#072A54] text-[10px] text-blue-100 flex items-center justify-between">
-            <span>ABUJMAD FOUNDATION · Social-Impact Workforce Initiative</span>
+            <span>ROJGAR SETU · Social-Impact Workforce Platform</span>
             <span>Not a Government ID</span>
           </div>
         </div>
@@ -3777,7 +3777,7 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
             </div>
           </div>
           <div className="px-4 sm:px-5 py-2 bg-[#072A54] text-[10px] text-blue-100 flex items-center justify-between">
-            <span>ABUJMAD FOUNDATION · Social-Impact Workforce Initiative</span>
+            <span>ROJGAR SETU · Social-Impact Workforce Platform</span>
             <span>Not a Government Document</span>
           </div>
         </div>
@@ -4066,7 +4066,7 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
 
       <div className="bg-white border border-slate-200 rounded-lg p-6 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <p className="text-xs font-semibold text-[#C25E00]">ABUJMAD FOUNDATION · Governance Console</p>
+          <p className="text-xs font-semibold text-[#C25E00]">ROJGAR SETU · Governance Console</p>
           <h1 className="font-display text-2xl font-bold text-[#0B3B75]">{t.dashboards.adminTitle}</h1>
         </div>
         <div className="flex flex-wrap gap-3 text-xs font-mono-tabular">
@@ -4215,7 +4215,7 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h2 className="font-display text-lg font-bold text-[#0B3B75]">
-                ABUJMAD FOUNDATION — Registered Workers
+                ROJGAR SETU — Registered Workers
               </h2>
               <p className="text-xs text-slate-500">
                 Review ₹250 Razorpay payment status and approve registrations to generate Worker ID Card &amp; Registration Certificate.
@@ -4383,7 +4383,7 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
                                     allRewards: adminRewards,
                                     adminUid: user.uid,
                                     adminEmail,
-                                    adminNotes: 'Approved from ABUJMAD FOUNDATION Registered Workers table.',
+                                    adminNotes: 'Approved from ROJGAR SETU Registered Workers table.',
                                     autoApproveReferral: true,
                                   });
                                   setWorkerApprovalMessage(
