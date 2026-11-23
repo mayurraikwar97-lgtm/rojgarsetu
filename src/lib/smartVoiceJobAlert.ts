@@ -407,8 +407,8 @@ export function buildSmartJobNotificationContent(params: {
 
   if (lang === 'mr') {
     return {
-      title: `नवीन ${localizedCat} काम: ${title}`.slice(0, 155),
-      body: `${customerName} · ${approxLocationLabel}${distText}${wagePart}. ॲप उघडून ऑफर पाठवा.`.slice(0, 480),
+      title: `नवीन काम उपलब्ध! · ${localizedCat}`.slice(0, 155),
+      body: `आपल्या परिसरात ${localizedCat}चे काम आले आहे (${approxLocationLabel}${distText}${wagePart}). नवीन ग्राहक ऑर्डर – त्वरित तपासा.`.slice(0, 480),
       voiceScript,
     };
   }

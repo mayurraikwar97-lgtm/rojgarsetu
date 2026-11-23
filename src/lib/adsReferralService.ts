@@ -162,16 +162,16 @@ export const DEFAULT_AD_TARGET_CATEGORIES: AdTargetCategoryOption[] = [
 ];
 
 export const DEFAULT_REFERRAL_CONFIG: PlatformReferralConfig = {
-  paidRegistrationEnabled: false,
+  paidRegistrationEnabled: true,
   registrationFeeInr: 250,
   referralRewardInr: 50,
   holdingDays: 7,
   programNoticeEn:
-    'Worker registration is currently 100% FREE. Share your personal referral link to invite fellow workers now. When ₹250 paid registration is activated in the future, verified paid referrals earn ₹50 reward.',
+    'One-time worker registration fee is ₹250 (includes Verified Worker ID, Digital ID Card & Registration Certificate). Earn ₹50 single-level referral reward for each directly referred worker whose ₹250 payment & mobile OTP are verified.',
   programNoticeHi:
-    'कामगार पंजीकरण अभी 100% निःशुल्क है। अपने रेफरल लिंक से साथियों को जोड़ें। भविष्य में ₹250 शुल्क पंजीकरण शुरू होने पर सत्यापित रेफरल पर ₹50 पुरस्कार मिलेगा।',
+    'एकमुश्त कामगार पंजीकरण शुल्क ₹250 है (सत्यापित कामगार आईडी, डिजिटल पहचान पत्र और पंजीकरण प्रमाण-पत्र सहित)। प्रत्येक सीधे रेफर किए गए सत्यापित कामगार पर ₹50 पुरस्कार पाएं।',
   programNoticeMr:
-    'कामगार नोंदणी सध्या 100% मोफत आहे. तुमच्या रेफरल लिंकवरून इतर कामगारांना जोडा. भविष्यात ₹250 सशुल्क नोंदणी सुरू झाल्यावर सत्यापित नोंदणीवर ₹50 बक्षीस लागू होईल.',
+    'एकदाच कामगार नोंदणी शुल्क ₹250 आहे (सत्यापित कामगार आयडी, डिजिटल ओळखपत्र व नोंदणी प्रमाणपत्रासह). तुमच्या रेफरल कोडवरून ₹250 नोंदणी व OTP सत्यापित झाल्यावर थेट ₹50 बक्षीस मिळवा.',
   updatedByUid: 'system',
 };
 
@@ -895,12 +895,12 @@ export function buildWorkerReferralLink(referralCode: string): string {
 export function buildReferralShareMessage(referralCode: string, lang: Language): string {
   const link = buildWorkerReferralLink(referralCode);
   if (lang === 'mr') {
-    return `नमस्कार! रोजगार सेतूवर मोफत कामगार नोंदणी सुरू आहे. तुमच्या कौशल्यानुसार काम शोधण्यासाठी आजच नोंदणी करा. माझ्या रेफरल लिंकवरून नोंदणी करा: ${link}`;
+    return `नमस्कार! "कामगार नाही, आपलीच माणसं!" रोजगार सेतूवर ₹250 एकदाच शुल्कात अधिकृत डिजिटल कामगार ओळखपत्र आणि नोंदणी प्रमाणपत्र मिळवा. माझ्या रेफरल कोड (${referralCode.toUpperCase()}) वरून नोंदणी करा: ${link}`;
   }
   if (lang === 'hi') {
-    return `नमस्कार! रोजगार सेतु पर निःशुल्क कामगार पंजीकरण शुरू है। अपने कौशल के अनुसार काम पाने के लिए आज ही पंजीकरण करें। मेरे रेफरल लिंक से जुड़ें: ${link}`;
+    return `नमस्कार! "कामगार नाही, आपलीच माणसं!" रोजगार सेतु पर ₹250 एकमुश्त पंजीकरण के साथ अपना सत्यापित कामगार आईडी कार्ड और प्रमाण-पत्र प्राप्त करें। मेरे रेफरल कोड (${referralCode.toUpperCase()}) से जुड़ें: ${link}`;
   }
-  return `Hello! Free worker registration is open on ROJGAR SETU. Register today to receive direct work opportunities matching your skills. Join using my personal referral link: ${link}`;
+  return `Hello! "कामगार नाही, आपलीच माणसं!" Join ROJGAR SETU with one-time ₹250 registration to receive your Verified Digital Worker ID Card & Official Registration Certificate. Register using my referral code (${referralCode.toUpperCase()}): ${link}`;
 }
 
 export function buildReferralWhatsAppShareUrl(referralCode: string, lang: Language): string {
@@ -1088,10 +1088,12 @@ export async function recordWorkerReferralAttribution(params: {
     referredRegistrationId: params.referredRegistrationId.slice(0, 40),
     referredMobileHash: mobileHash,
     sourceChannel: params.sourceChannel,
-    registrationPaymentStatus: 'free_launch',
+    registrationPaymentStatus: 'payment_pending',
     registrationFeePaidInr: 0,
-    rewardStatus: 'free_not_eligible',
+    rewardStatus: 'pending_verification',
     rewardAmountInr: 0,
+    otpVerified: true,
+    singleLevelVerified: true,
     locked: true,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -1230,6 +1232,8 @@ export async function callServerReferralEligibilityCheck(payload: {
   paidRegistrationEnabled: boolean;
   configuredFeeInr: number;
   configuredRewardInr: number;
+  otpVerified?: boolean;
+  referralLevel?: number;
   testSimulation?: boolean;
 }): Promise<{
   eligible: boolean;

@@ -1,9 +1,32 @@
 {
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
+  "headers": [
+    {
+      "source": "/firebase-messaging-sw.js",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" },
+        { "key": "Service-Worker-Allowed", "value": "/" }
+      ]
+    },
+    {
+      "source": "/sw.js",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" },
+        { "key": "Service-Worker-Allowed", "value": "/" }
+      ]
+    },
+    {
+      "source": "/manifest.json",
+      "headers": [
+        { "key": "Content-Type", "value": "application/manifest+json; charset=utf-8" },
+        { "key": "Cache-Control", "value": "no-cache" }
+      ]
+    }
+  ],
   "rewrites": [
     {
-      "source": "/((?!api/).*)",
+      "source": "/((?!api/|assets/|manifest\\.json|manifest\\.webmanifest|sw\\.js|workbox-|firebase-messaging-sw\\.js|pwa-|apple-touch-icon\\.png|icon\\.svg|logo-horizontal\\.svg|favicon\\.ico).*)",
       "destination": "/index.html"
     }
   ]

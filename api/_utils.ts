@@ -53,6 +53,20 @@ export async function readJsonBody(req: ServerlessRequest): Promise<Record<strin
   });
 }
 
+export async function readRawBody(req: ServerlessRequest): Promise<string> {
+  if (typeof req.body === 'string') return req.body;
+  if (Buffer.isBuffer(req.body)) return req.body.toString('utf8');
+  if (req.body && typeof req.body === 'object') {
+    return JSON.stringify(req.body);
+  }
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (chunk: Buffer) => chunks.push(chunk));
+    req.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+    req.on('error', () => resolve(''));
+  });
+}
+
 export function sendJson(res: ServerlessResponse, statusCode: number, data: Record<string, unknown>): void {
   res.setHeader('Content-Type', 'application/json; charset=utf-8');
   res.setHeader('Cache-Control', 'no-store');

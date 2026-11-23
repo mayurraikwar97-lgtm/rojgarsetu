@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { doc, getDoc } from 'firebase/firestore';
 import {
-  BadgeCheck,
   BellRing,
   Briefcase,
   CheckCircle2,
@@ -15,10 +14,7 @@ import {
   Navigation,
   Play,
   Power,
-  Printer,
-  ShieldCheck,
   Star,
-  User,
   Wrench,
   X,
   XCircle,
@@ -42,24 +38,32 @@ import {
 } from '../lib/firestoreService';
 import { getSafeCustomerLabelForJobOrApp } from '../lib/customerPrivacy';
 import {
-  SERVICE_RADIUS_STAGES,
   calculateValidDistanceKm,
   getLocalizedCategoryLabel,
   getPublicJobLocationText,
 } from '../lib/smartVoiceJobAlert';
+import {
+  isWorkerPaidBenefitsActive,
+  subscribeWorkerOwnPayment,
+} from '../lib/workerPaymentService';
 import type {
   AppNotificationRecord,
   JobApplication,
   JobPosting,
   Language,
   PageRoute,
-  ServiceRadiusKm,
+  WorkerRegistrationPayment,
 } from '../types/domain';
 import { BrandSloganBanner } from './BrandSloganBanner';
 import { DealCoordinationPanel } from './DealCoordinationPanel';
-import { RojgarSetuLogo } from './RojgarSetuLogo';
-import { SecureAvatar } from './SecureAvatar';
 import { UserNotificationCenter } from './UserNotificationCenter';
+import {
+  PaymentStatusBadge,
+  WorkerDigitalIdCard,
+  WorkerPaymentCheckoutCard,
+  WorkerPaymentReceiptCard,
+  WorkerRegistrationCertificateCard,
+} from './WorkerCertificateAndReceipt';
 import { WorkerReferralsTab } from './WorkerReferralsTab';
 
 interface WorkerAppV2Props {
@@ -123,10 +127,16 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
 
   // Photo Lightbox
   const [lightboxPhoto, setLightboxPhoto] = useState<string | null>(null);
+  const [ownPayment, setOwnPayment] = useState<WorkerRegistrationPayment | null>(null);
 
   useEffect(() => {
     if (!authReady || !user) return;
-    return subscribeWorkerApplications(user.uid, setApplications);
+    const u1 = subscribeWorkerApplications(user.uid, setApplications);
+    const u2 = subscribeWorkerOwnPayment(user.uid, setOwnPayment);
+    return () => {
+      u1();
+      u2();
+    };
   }, [authReady, user]);
 
   // If notification clicked OPEN with highlightedJobId, switch straight to New Requests (or Active Job if already accepted)
@@ -457,9 +467,9 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
         <p className="text-sm text-slate-600">
           {tr(
             lang,
-            'Create your free Worker Profile & Digital ID Card to receive instant job requests within 2 km – 10 km.',
-            '2 किमी से 10 किमी के दायरे में तुरंत काम पाने के लिए मुफ़्त कामगार प्रोफ़ाइल बनाएँ।',
-            '२ किमी ते १० किमी परिसरात थेट कामाच्या संधी मिळवण्यासाठी मोफत कामगार प्रोफाईल तयार करा.'
+            'Complete your ₹250 one-time verified Worker Registration to receive your Unique Worker ID, Digital ID Card, Registration Certificate, and nearby job requests within 2 km – 10 km.',
+            '₹250 एकमुश्त सत्यापित कामगार पंजीकरण पूरा करें और अपना डिजिटल ID कार्ड, पंजीकरण प्रमाणपत्र व 2–10 किमी के दायरे में काम पाएँ।',
+            '₹250 एकवेळ सत्यापित कामगार नोंदणी पूर्ण करा आणि तुमचे डिजिटल ओळखपत्र, प्रमाणपत्र व २–१० किमी परिसरातील कामाच्या संधी मिळवा.'
           )}
         </p>
         <button
@@ -1069,124 +1079,78 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
           </div>
         )}
 
-        {/* ================= TAB 5: PROFILE (WORKER REGISTRATION ID & IDENTITY CARD PRESERVED HERE) ================= */}
+        {/* ================= TAB 5: PROFILE (WORKER REGISTRATION ID, ₹250 PAYMENT, CERTIFICATE & RECEIPT) ================= */}
         {activeTab === 'profile' && (
           <div className="space-y-5">
-            {/* Official Rojgar Setu Worker Identity Card */}
-            <div className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
-              <div className="h-1.5 flex">
-                <div className="flex-1 bg-[#E06D1B]" />
-                <div className="flex-1 bg-white" />
-                <div className="flex-1 bg-[#15803D]" />
+            {!isWorkerPaidBenefitsActive(workerProfile) && (
+              <div className="rounded-xl bg-amber-50 border border-amber-300 p-4 flex flex-wrap items-center justify-between gap-3 text-xs sm:text-sm text-amber-950">
+                <div className="space-y-0.5">
+                  <div className="font-extrabold text-[#0B3B75]">
+                    {tr(
+                      lang,
+                      '₹250 One-Time Registration Verification Required for Paid Benefits',
+                      'भुगतान लाभ सक्रिय करने के लिए ₹250 पंजीकरण सत्यापन आवश्यक है',
+                      'सत्यापित लाभ सुरू करण्यासाठी ₹250 नोंदणी सत्यापन आवश्यक आहे'
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-700">
+                    {tr(
+                      lang,
+                      'Complete or check your ₹250 payment below to unlock your Verified Worker ID (RS-W-...), Official Registration Certificate, and ₹50 Referral Rewards.',
+                      'अपना सत्यापित कामगार ID, पंजीकरण प्रमाणपत्र और ₹50 रेफरल पुरस्कार अनलॉक करने के लिए नीचे ₹250 भुगतान पूरा करें।',
+                      'सत्यापित कामगार ID, अधिकृत प्रमाणपत्र आणि ₹50 रेफरल बक्षीस सुरू करण्यासाठी खाली ₹250 पेमेंट पूर्ण करा.'
+                    )}
+                  </p>
+                </div>
+                <PaymentStatusBadge
+                  status={ownPayment?.status || workerProfile.registrationPaymentStatus || 'pending'}
+                  lang={lang}
+                />
               </div>
-              <div className="p-5 sm:p-6 space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-3 pb-4 border-b border-slate-100">
-                  <div className="flex items-center gap-2.5">
-                    <RojgarSetuLogo className="w-9 h-9" />
-                    <div>
-                      <div className="font-display text-sm font-extrabold text-[#0B3B75]">
-                        ROJGAR SETU · WORKER IDENTITY CARD
-                      </div>
-                      <div className="text-xs font-mono-tabular font-bold text-[#E06D1B]">
-                        ID: {workerProfile.registrationId}
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={() => window.print()}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-50 cursor-pointer"
-                    >
-                      <Printer className="w-3.5 h-3.5" />
-                      {tr(lang, 'Print ID', 'ID प्रिंट करें', 'ID प्रिंट करा')}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onNavigate('register-worker')}
-                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0B3B75] text-white text-xs font-bold hover:bg-[#072A54] cursor-pointer"
-                    >
-                      <User className="w-3.5 h-3.5" />
-                      {tr(lang, 'Edit Profile', 'प्रोफ़ाइल बदलें', 'प्रोफाईल बदला')}
-                    </button>
-                  </div>
-                </div>
+            )}
 
-                <div className="flex flex-col sm:flex-row items-start sm:items-center gap-4">
-                  <SecureAvatar
-                    photoDocId={workerProfile.photoDocId}
-                    name={workerProfile.displayName}
-                    sizeClass="w-16 h-16"
-                    textSizeClass="text-xl"
-                  />
-                  <div className="space-y-1.5 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h3 className="font-display text-xl font-extrabold text-[#0B3B75]">
-                        {workerProfile.displayName}
-                      </h3>
-                      <span
-                        className={`inline-flex items-center gap-1 text-xs font-bold px-2 py-0.5 rounded-md border ${
-                          workerProfile.verificationStatus === 'verified'
-                            ? 'bg-emerald-50 text-[#15803D] border-emerald-200'
-                            : 'bg-amber-50 text-amber-800 border-amber-200'
-                        }`}
-                      >
-                        {workerProfile.verificationStatus === 'verified' ? (
-                          <BadgeCheck className="w-3.5 h-3.5" />
-                        ) : (
-                          <ShieldCheck className="w-3.5 h-3.5" />
-                        )}
-                        {workerProfile.verificationStatus === 'verified'
-                          ? tr(lang, 'Verified Worker', 'सत्यापित कामगार', 'सत्यापित कामगार')
-                          : tr(lang, 'Registered Worker', 'पंजीकृत कामगार', 'नोंदणीकृत कामगार')}
-                      </span>
-                    </div>
-                    <div className="text-sm font-semibold text-slate-700">
-                      {getLocalizedCategoryLabel(workerProfile.primarySkill, lang)} · {workerProfile.experienceYears}{' '}
-                      {tr(lang, 'yrs exp', 'वर्ष अनुभव', 'वर्षे अनुभव')}
-                    </div>
-                    <div className="text-xs text-slate-500">
-                      {workerProfile.cityOrVillage}, {workerProfile.district}, {workerProfile.state}
-                      {workerPrivate?.mobile ? ` · Mobile: ${workerPrivate.mobile}` : ''}
-                    </div>
-                  </div>
-                </div>
+            {/* Upgraded Digital Worker Identity Card */}
+            <WorkerDigitalIdCard
+              workerProfile={workerProfile}
+              workerPrivate={workerPrivate}
+              payment={ownPayment}
+              onEditProfile={() => onNavigate('register-worker')}
+              updatingRadius={updatingRadius}
+              onUpdateRadius={async (km) => {
+                setUpdatingRadius(true);
+                try {
+                  await updateWorkerPreferredRadius(user.uid, km);
+                } finally {
+                  setUpdatingRadius(false);
+                }
+              }}
+            />
 
-                {/* Preferred Job Radius Selector (2 / 5 / 10 / 20 / 30 km) */}
-                <div className="pt-3 border-t border-slate-100 space-y-2">
-                  <div className="text-xs font-bold text-[#0B3B75]">
-                    {tr(lang, 'Job Alert Distance Radius', 'काम अलर्ट दूरी दायरा', 'कामाचे अंतर मर्यादा')}
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    {SERVICE_RADIUS_STAGES.map((km: ServiceRadiusKm) => {
-                      const active = (workerProfile.preferredRadiusKm || 10) === km;
-                      return (
-                        <button
-                          key={km}
-                          type="button"
-                          disabled={updatingRadius}
-                          onClick={async () => {
-                            setUpdatingRadius(true);
-                            try {
-                              await updateWorkerPreferredRadius(user.uid, km);
-                            } finally {
-                              setUpdatingRadius(false);
-                            }
-                          }}
-                          className={`h-9 px-3 rounded-lg border text-xs font-mono-tabular font-bold cursor-pointer ${
-                            active
-                              ? 'bg-[#0B3B75] border-[#0B3B75] text-white'
-                              : 'bg-white border-slate-300 text-slate-700 hover:border-[#0B3B75]'
-                          }`}
-                        >
-                          {km} km
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              </div>
-            </div>
+            {/* ₹250 Registration Payment Checkout (shown whenever payment is not verified) */}
+            {!isWorkerPaidBenefitsActive(workerProfile) && (
+              <WorkerPaymentCheckoutCard
+                workerUid={user.uid}
+                workerName={workerProfile.displayName}
+                workerSkill={workerProfile.primarySkill}
+                workerLocation={`${workerProfile.cityOrVillage}, ${workerProfile.district}, ${workerProfile.state}`}
+                workerMobile={workerPrivate?.mobile || ''}
+                provisionalAppId={workerProfile.registrationId}
+                otpVerified={Boolean(workerPrivate?.mobileVerified)}
+                referredByCode={workerProfile.referredByCode}
+                referredByUid={workerProfile.referredByUid}
+                existingPayment={ownPayment}
+                preAcceptedPolicies={Boolean(workerPrivate?.refundPolicyAccepted)}
+              />
+            )}
+
+            {/* Official Worker Registration Certificate (Unlocked strictly after ₹250 verification) */}
+            <WorkerRegistrationCertificateCard
+              workerProfile={workerProfile}
+              payment={ownPayment}
+            />
+
+            {/* Official Payment Receipt (Shown whenever a payment record exists) */}
+            {ownPayment && <WorkerPaymentReceiptCard payment={ownPayment} />}
 
             {/* Notification Sound & Push Preferences */}
             <UserNotificationCenter

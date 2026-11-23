@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { AlertCircle, CheckCircle2, Compass, Gift, MapPin, Plus, ShieldAlert, X } from 'lucide-react';
+import { AlertCircle, AlertTriangle, CheckCircle2, Compass, Gift, IndianRupee, MapPin, Plus, ShieldAlert, X } from 'lucide-react';
 import { EMPLOYMENT_CATEGORIES } from '../data/categories';
 import { getDistrictCoordinates, INDIA_STATES_DISTRICTS } from '../data/indiaLocations';
 import { useAuth } from '../contexts/AuthContext';
@@ -18,13 +18,30 @@ import {
   deleteProfilePhotoRecord,
   uploadProfilePhotoRecord,
 } from '../lib/photoStorageService';
-import type { PageRoute, VerificationMethod, WageUnit, WorkType } from '../types/domain';
+import {
+  WORKER_REGISTRATION_FEE_INR,
+  isWorkerPaidBenefitsActive,
+  subscribeWorkerOwnPayment,
+} from '../lib/workerPaymentService';
+import type {
+  PageRoute,
+  VerificationMethod,
+  WageUnit,
+  WorkType,
+  WorkerRegistrationPayment,
+} from '../types/domain';
 import { LocationPinModal } from './LocationPinModal';
 import { NotificationOptInButton } from './NotificationOptInButton';
 import { OtpVerificationBox } from './OtpVerificationBox';
 import { ProfilePhotoUploader, type SelectedProfilePhoto } from './ProfilePhotoUploader';
 import { PWAInstallButton } from './PWAControls';
 import { SecureAvatar } from './SecureAvatar';
+import {
+  WorkerDigitalIdCard,
+  WorkerPaymentCheckoutCard,
+  WorkerPaymentReceiptCard,
+  WorkerRegistrationCertificateCard,
+} from './WorkerCertificateAndReceipt';
 
 interface WorkerRegistrationFormProps {
   initialReferralCode?: string;
@@ -71,6 +88,8 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
   const [idVerificationStatus, setIdVerificationStatus] = useState<'not_submitted' | 'voluntary_pending'>('not_submitted');
   const [privacyConsent, setPrivacyConsent] = useState(false);
   const [liveLocationConsent, setLiveLocationConsent] = useState(false);
+  const [refundPolicyAccepted, setRefundPolicyAccepted] = useState(false);
+  const [ownPayment, setOwnPayment] = useState<WorkerRegistrationPayment | null>(null);
 
   const [saving, setSaving] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -179,12 +198,21 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
       );
       setPrivacyConsent(workerPrivate.privacyConsent);
       setLiveLocationConsent(workerPrivate.liveLocationConsent);
+      setRefundPolicyAccepted(Boolean(workerPrivate.refundPolicyAccepted ?? isWorkerPaidBenefitsActive(workerProfile)));
       setSavedId(workerProfile.registrationId);
     } else if (user) {
       setFullName(user.displayName || '');
       setEmail(user.email || '');
     }
   }, [workerProfile, workerPrivate, user]);
+
+  useEffect(() => {
+    if (!user) {
+      setOwnPayment(null);
+      return;
+    }
+    return subscribeWorkerOwnPayment(user.uid, setOwnPayment);
+  }, [user]);
 
   const currentStateObj = INDIA_STATES_DISTRICTS.find((s) => s.name === stateName);
 
@@ -301,6 +329,10 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
       failValidation('Please accept the privacy and worker guidelines consent.');
       return;
     }
+    if (!refundPolicyAccepted) {
+      failValidation('Please read and accept the ₹250 Registration Fee Refund Policy before submitting.');
+      return;
+    }
 
     const langs = languagesInput
       .split(',')
@@ -310,9 +342,10 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
     if (langs.length === 0) langs.push('Hindi');
 
     const normalizedSkills = Array.from(new Set([primarySkill, ...skills])).slice(0, 15);
+    // New registrations receive a provisional RS-APP ID; verified RS-W ID is issued ONLY after ₹250 payment verification.
     const regId =
       workerProfile?.registrationId ||
-      `RS-W-${user.uid.slice(0, 6).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
+      `RS-APP-${user.uid.slice(0, 6).toUpperCase()}-${Math.floor(1000 + Math.random() * 9000)}`;
 
     setSaving(true);
     try {
@@ -394,6 +427,8 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
         preferredWorkLocation: preferredWorkLocation.trim().slice(0, 160),
         liveLocationConsent,
         privacyConsent,
+        refundPolicyAccepted,
+        noEmploymentGuaranteeAccepted: true,
         idVerificationStatus,
         certificateNotes: certificateNotes.trim().slice(0, 500),
         photoUrl: photoUrl.trim().slice(0, 1000),
@@ -414,15 +449,17 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
 
       await saveWorkerRegistration(user.uid, Boolean(workerProfile), publicWorkerData, privateWorkerData);
 
-      // Automatically assign a unique personal referral code & lock referral attribution (non-blocking)
-      try {
-        const assignedCode = await ensureWorkerReferralCode(
-          { id: user.uid, ...publicWorkerData },
-          privateWorkerData
-        );
-        setMyGeneratedReferralCode(assignedCode);
-      } catch {
-        // Non-blocking: WorkerReferralsTab also backfills on open
+      // Activate personal referral code ONLY if worker's paid registration is already verified
+      if (isWorkerPaidBenefitsActive(workerProfile)) {
+        try {
+          const assignedCode = await ensureWorkerReferralCode(
+            { id: user.uid, ...publicWorkerData },
+            privateWorkerData
+          );
+          setMyGeneratedReferralCode(assignedCode);
+        } catch {
+          // Non-blocking
+        }
       }
 
       if (validReferrerForCreate) {
@@ -495,108 +532,185 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
         </div>
       )}
 
-      {savedId && showSuccessScreen && (
-        <section className="mb-8 bg-white border-2 border-[#15803D] rounded-lg overflow-hidden shadow-sm">
-          <div className="bg-[#15803D] text-white px-6 py-4 flex items-start gap-3">
-            <CheckCircle2 className="w-7 h-7 text-amber-300 shrink-0 mt-0.5" />
-            <div>
-              <h2 className="font-display text-xl sm:text-2xl font-extrabold">
-                Welcome to ROJGAR SETU!
-              </h2>
-              <p className="text-sm sm:text-base text-emerald-50 font-semibold mt-0.5">
-                आपका कामगार नोंदणी अर्ज यशस्वी झाला आहे.
-              </p>
+      {/* Clear ₹250 Registration Fee & Benefits Disclosure Banner (Shown before payment) */}
+      {!isWorkerPaidBenefitsActive(workerProfile) && !showSuccessScreen && (
+        <div className="mb-6 bg-white border-2 border-[#0B3B75] rounded-xl overflow-hidden shadow-2xs">
+          <div className="h-1 flex">
+            <div className="flex-1 bg-[#E06D1B]" />
+            <div className="flex-1 bg-white" />
+            <div className="flex-1 bg-[#15803D]" />
+          </div>
+          <div className="p-4 sm:p-5 space-y-2.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <IndianRupee className="w-5 h-5 text-[#15803D]" />
+                <h2 className="font-display text-base sm:text-lg font-extrabold text-[#0B3B75]">
+                  {lang === 'mr'
+                    ? `एकवेळ कामगार नोंदणी शुल्क: ₹${WORKER_REGISTRATION_FEE_INR}`
+                    : lang === 'hi'
+                    ? `एकमुश्त कामगार पंजीकरण शुल्क: ₹${WORKER_REGISTRATION_FEE_INR}`
+                    : `One-Time Worker Registration Fee: ₹${WORKER_REGISTRATION_FEE_INR}`}
+                </h2>
+              </div>
+              <span className="text-xs font-extrabold text-[#15803D]">“कामगार नाही, आपलीच माणसं!”</span>
+            </div>
+            <p className="text-xs sm:text-sm text-slate-700 leading-relaxed">
+              {lang === 'mr'
+                ? 'तुमची प्रोफाईल जतन केल्यानंतर ₹250 एकवेळ शुल्क अधिकृत UPI QR किंवा पेमेंट गेटवेद्वारे भरा. पेमेंट सत्यापित झाल्यावरच तुमचा युनिक कामगार ID (RS-W-...), डिजिटल ओळखपत्र, नोंदणी प्रमाणपत्र, पेमेंट पावती आणि ₹50 सिंगल-लेव्हल रेफरल कोड सुरू होईल.'
+                : lang === 'hi'
+                ? 'प्रोफ़ाइल सहेजने के बाद आधिकारिक UPI QR या पेमेंट गेटवे से ₹250 एकमुश्त शुल्क जमा करें। भुगतान सत्यापित होने पर ही आपका अद्वितीय कामगार ID (RS-W-...), डिजिटल पहचान पत्र, पंजीकरण प्रमाणपत्र, भुगतान रसीद और ₹50 सिंगल-लेवल रेफरल कोड सक्रिय होगा।'
+                : 'After saving your details below, pay the one-time ₹250 registration fee via Official UPI QR or configured Payment Gateway. Your unique Verified Worker ID (RS-W-...), Digital Worker ID Card, Official Registration Certificate, Payment Receipt, and ₹50 Single-Level Referral Code activate only after payment verification.'}
+            </p>
+            <div className="text-[11px] text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-[#E06D1B] shrink-0 mt-0.5" />
+              <span>
+                <strong>Disclosure:</strong> Paying ₹250 activates verified platform registration and does{' '}
+                <strong>not guarantee employment</strong>. Refunds apply only to verified duplicate/failed transactions or valid cancellation before benefit activation within 7 days.
+              </span>
             </div>
           </div>
+        </div>
+      )}
 
-          <div className="p-6 space-y-5">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 bg-slate-50 border border-slate-200 rounded-lg p-4 text-xs sm:text-sm">
-              <div className="flex items-center gap-3">
-                <SecureAvatar
-                  name={fullName || 'Worker'}
-                  photoDocId={workerProfile?.photoDocId || workerPrivate?.photoDocId}
-                  sizeClass="w-12 h-12"
-                />
+      {savedId && showSuccessScreen && (
+        <section className="mb-8 space-y-5">
+          <div className="bg-white border-2 border-[#15803D] rounded-xl overflow-hidden shadow-sm">
+            <div
+              className={`px-6 py-4 flex items-start gap-3 text-white ${
+                isWorkerPaidBenefitsActive(workerProfile) ? 'bg-[#15803D]' : 'bg-[#0B3B75]'
+              }`}
+            >
+              <CheckCircle2 className="w-7 h-7 text-amber-300 shrink-0 mt-0.5" />
+              <div>
+                <h2 className="font-display text-xl sm:text-2xl font-extrabold">
+                  {isWorkerPaidBenefitsActive(workerProfile)
+                    ? 'Verified ROJGAR SETU Worker!'
+                    : 'Step 1 Saved — Complete ₹250 Registration Payment Below'}
+                </h2>
+                <p className="text-sm text-blue-50 font-semibold mt-0.5">
+                  {isWorkerPaidBenefitsActive(workerProfile)
+                    ? 'आपकी कामगार प्रोफ़ाइल और ₹250 पंजीकरण सत्यापित है · “कामगार नाही, आपलीच माणसं!”'
+                    : 'तुमची माहिती जतन झाली आहे. सत्यापित कामगार ID, प्रमाणपत्र व रेफरल कोड सुरू करण्यासाठी खाली ₹250 पेमेंट पूर्ण करा.'}
+                </p>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 bg-slate-50 border border-slate-200 rounded-lg p-4 text-xs sm:text-sm">
+                <div className="flex items-center gap-3">
+                  <SecureAvatar
+                    name={fullName || 'Worker'}
+                    photoDocId={workerProfile?.photoDocId || workerPrivate?.photoDocId}
+                    sizeClass="w-12 h-12"
+                  />
+                  <div>
+                    <div className="text-slate-500 text-xs font-medium">
+                      {lang === 'hi' ? 'कामगार नाम' : lang === 'mr' ? 'कामगार नाव' : 'Worker Name'}
+                    </div>
+                    <div className="font-bold text-[#0B3B75] mt-0.5">{fullName}</div>
+                  </div>
+                </div>
                 <div>
                   <div className="text-slate-500 text-xs font-medium">
-                    {lang === 'hi' ? 'कामगार नाम' : lang === 'mr' ? 'कामगार नाव' : 'Worker Name'}
+                    {isWorkerPaidBenefitsActive(workerProfile) ? 'Verified Worker ID' : 'Provisional Application ID'}
                   </div>
-                  <div className="font-bold text-[#0B3B75] mt-0.5">{fullName}</div>
-                </div>
-              </div>
-              <div>
-                <div className="text-slate-500 text-xs font-medium">{t.workerForm.uniqueIdLabel}</div>
-                <div className="font-mono-tabular font-extrabold text-[#C25E00] mt-0.5">{savedId}</div>
-              </div>
-              <div>
-                <div className="text-slate-500 text-xs font-medium">{t.dashboards.profileStatus}</div>
-                <div className="font-bold text-[#15803D] uppercase mt-0.5">
-                  {workerProfile?.verificationStatus || 'pending'}
-                </div>
-              </div>
-              <div>
-                <div className="text-slate-500 text-xs font-medium">
-                  {lang === 'hi' ? 'पंजीकृत कौशल' : lang === 'mr' ? 'नोंदवलेली कौशल्ये' : 'Registered Skills'}
-                </div>
-                <div className="font-semibold text-slate-800 mt-0.5">{skills.join(' · ')}</div>
-              </div>
-              <div className="sm:col-span-2">
-                <div className="text-slate-500 text-xs font-medium">
-                  {lang === 'hi' ? 'स्थान' : lang === 'mr' ? 'ठिकाण' : 'Location'}
-                </div>
-                <div className="font-semibold text-slate-800 mt-0.5">
-                  {cityOrVillage}, {districtName}, {stateName}
-                </div>
-              </div>
-              {(myGeneratedReferralCode || workerProfile?.referralCode) && (
-                <div className="sm:col-span-3 pt-2 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
-                    <Gift className="w-4 h-4 text-[#E06D1B]" />
-                    <span className="text-xs text-slate-600 font-medium">
-                      {lang === 'mr'
-                        ? 'तुमचा वैयक्तिक रेफरल कोड:'
-                        : lang === 'hi'
-                        ? 'आपका व्यक्तिगत रेफरल कोड:'
-                        : 'Your Personal Referral Code:'}
-                    </span>
-                    <span className="font-mono-tabular font-extrabold text-[#0B3B75]">
-                      {myGeneratedReferralCode || workerProfile?.referralCode}
-                    </span>
+                  <div className="font-mono-tabular font-extrabold text-[#C25E00] mt-0.5">
+                    {workerProfile?.registrationId || savedId}
                   </div>
-                  <span className="text-[11px] font-semibold text-[#15803D]">
-                    {lang === 'mr'
-                      ? 'कामगार डॅशबोर्डमध्ये "माझे रेफरल" मध्ये लिंक शेअर करा'
-                      : lang === 'hi'
-                      ? 'डैशबोर्ड में "मेरे रेफरल" से लिंक शेयर करें'
-                      : 'Share your link from "My Referrals" in Worker Dashboard'}
-                  </span>
                 </div>
-              )}
-            </div>
+                <div>
+                  <div className="text-slate-500 text-xs font-medium">Payment Status</div>
+                  <div className="font-bold text-[#0B3B75] uppercase mt-0.5">
+                    {ownPayment?.status || workerProfile?.registrationPaymentStatus || 'pending'}
+                  </div>
+                </div>
+                <div>
+                  <div className="text-slate-500 text-xs font-medium">
+                    {lang === 'hi' ? 'पंजीकृत कौशल' : lang === 'mr' ? 'नोंदवलेली कौशल्ये' : 'Registered Skills'}
+                  </div>
+                  <div className="font-semibold text-slate-800 mt-0.5">{skills.join(' · ')}</div>
+                </div>
+                <div className="sm:col-span-2">
+                  <div className="text-slate-500 text-xs font-medium">
+                    {lang === 'hi' ? 'स्थान' : lang === 'mr' ? 'ठिकाण' : 'Location'}
+                  </div>
+                  <div className="font-semibold text-slate-800 mt-0.5">
+                    {cityOrVillage}, {districtName}, {stateName}
+                  </div>
+                </div>
+                {isWorkerPaidBenefitsActive(workerProfile) &&
+                  (myGeneratedReferralCode || workerProfile?.referralCode) && (
+                    <div className="sm:col-span-3 pt-2 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2">
+                        <Gift className="w-4 h-4 text-[#E06D1B]" />
+                        <span className="text-xs text-slate-600 font-medium">Your Verified Referral Code:</span>
+                        <span className="font-mono-tabular font-extrabold text-[#0B3B75]">
+                          {myGeneratedReferralCode || workerProfile?.referralCode}
+                        </span>
+                      </div>
+                      <span className="text-[11px] font-semibold text-[#15803D]">
+                        Earn ₹50 per verified direct referral in Worker Dashboard → My Referrals
+                      </span>
+                    </div>
+                  )}
+              </div>
 
-            <div className="rounded-md bg-blue-50 border border-blue-200 p-4 text-sm font-medium text-[#0B3B75]">
-              रोजगार सेतु मोबाईलमध्ये इन्स्टॉल करा. तुमच्या कौशल्यानुसार नवीन कामाच्या संधींच्या सूचना थेट मोबाईलवर मिळवा.
-            </div>
-
-            <div className="flex flex-wrap items-center gap-3">
-              <PWAInstallButton variant="primary" />
-              <NotificationOptInButton role="worker" />
-              <button
-                type="button"
-                onClick={() => onNavigate('worker-dashboard')}
-                className="px-5 py-2.5 rounded-md bg-[#15803D] text-white text-sm font-bold hover:bg-emerald-800 cursor-pointer min-h-[44px]"
-              >
-                Open Worker Dashboard
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowSuccessScreen(false)}
-                className="px-4 py-2.5 rounded-md border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
-              >
-                {lang === 'hi' ? 'प्रोफ़ाइल संपादित करें' : lang === 'mr' ? 'प्रोफाईल बदला' : 'Edit Profile'}
-              </button>
+              <div className="flex flex-wrap items-center gap-3">
+                <PWAInstallButton variant="primary" />
+                <NotificationOptInButton role="worker" />
+                <button
+                  type="button"
+                  onClick={() => onNavigate('worker-dashboard')}
+                  className="px-5 py-2.5 rounded-md bg-[#15803D] text-white text-sm font-bold hover:bg-emerald-800 cursor-pointer min-h-[44px]"
+                >
+                  Open Worker Dashboard
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowSuccessScreen(false)}
+                  className="px-4 py-2.5 rounded-md border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                >
+                  {lang === 'hi' ? 'प्रोफ़ाइल संपादित करें' : lang === 'mr' ? 'प्रोफाईल बदला' : 'Edit Profile'}
+                </button>
+              </div>
             </div>
           </div>
+
+          {/* Step 2: ₹250 Payment Checkout (when not yet verified) */}
+          {user && !isWorkerPaidBenefitsActive(workerProfile) && (
+            <WorkerPaymentCheckoutCard
+              workerUid={user.uid}
+              workerName={fullName.trim() || workerProfile?.displayName || 'Worker'}
+              workerSkill={primarySkill}
+              workerLocation={`${cityOrVillage}, ${districtName}, ${stateName}`}
+              workerMobile={mobile.trim()}
+              provisionalAppId={workerProfile?.registrationId || savedId}
+              otpVerified={mobileVerified}
+              referredByCode={workerProfile?.referredByCode || resolvedReferrer?.referralCode}
+              referredByUid={workerProfile?.referredByUid || resolvedReferrer?.ownerUid}
+              existingPayment={ownPayment}
+              preAcceptedPolicies={refundPolicyAccepted}
+              onPaymentSubmitted={() => void refreshUserProfiles()}
+            />
+          )}
+
+          {/* Receipt Card (shown as soon as payment proof is submitted or verified) */}
+          {ownPayment && <WorkerPaymentReceiptCard payment={ownPayment} />}
+
+          {/* Verified Digital ID Card & Official Certificate (unlocked strictly after verification) */}
+          {workerProfile && isWorkerPaidBenefitsActive(workerProfile) && (
+            <>
+              <WorkerDigitalIdCard
+                workerProfile={workerProfile}
+                workerPrivate={workerPrivate}
+                payment={ownPayment}
+              />
+              <WorkerRegistrationCertificateCard
+                workerProfile={workerProfile}
+                payment={ownPayment}
+              />
+            </>
+          )}
         </section>
       )}
 
@@ -1051,21 +1165,21 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
           <p>{t.workerForm.idNotice}</p>
         </div>
 
-        {/* Optional Worker Referral Code Section (Registration remains 100% FREE) */}
+        {/* Optional Worker Referral Code Section (₹250 Registration → ₹50 Single-Level Referral Reward) */}
         <div className="rounded-lg border border-emerald-200 bg-emerald-50/40 p-4 space-y-2.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2 text-xs sm:text-sm font-bold text-[#0B3B75]">
               <Gift className="w-4 h-4 text-[#E06D1B]" />
               <span>
                 {lang === 'mr'
-                  ? 'रेफरल कोड (ऐच्छिक) · सध्या नोंदणी १००% मोफत'
+                  ? 'रेफरल कोड (ऐच्छिक) · ₹250 एकवेळ नोंदणी शुल्क'
                   : lang === 'hi'
-                  ? 'रेफरल कोड (वैकल्पिक) · वर्तमान पंजीकरण 100% निःशुल्क'
-                  : 'Worker Referral Code (Optional) · 100% Free Registration'}
+                  ? 'रेफरल कोड (वैकल्पिक) · ₹250 एकमुश्त पंजीकरण शुल्क'
+                  : 'Worker Referral Code (Optional) · ₹250 One-Time Registration'}
               </span>
             </div>
             <span className="text-[11px] font-bold text-[#15803D]">
-              {lang === 'mr' ? 'कोणतेही शुल्क नाही (₹0)' : lang === 'hi' ? 'कोई शुल्क नहीं (₹0)' : 'Zero Fee (₹0)'}
+              {lang === 'mr' ? 'सत्यापित रेफरलवर ₹50 बक्षीस' : lang === 'hi' ? 'सत्यापित रेफरल पर ₹50 पुरस्कार' : '₹50 Single-Level Reward'}
             </span>
           </div>
 
@@ -1092,7 +1206,7 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
                       ? 'मित्र कामगाराचा रेफरल कोड (उदा. PRASHANT-7K4M)'
                       : lang === 'hi'
                       ? 'साथी कामगार का रेफरल कोड (उदा. PRASHANT-7K4M)'
-                      : 'Enter fellow worker referral code (e.g., PRASHANT-7K4M)'
+                      : 'Enter verified worker referral code (e.g., PRASHANT-7K4M)'
                   }
                   className="flex-1 px-3 py-2 border border-slate-300 bg-white rounded-md text-sm font-mono-tabular uppercase"
                 />
@@ -1102,10 +1216,10 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
                   <CheckCircle2 className="w-4 h-4 shrink-0" />
                   <span>
                     {lang === 'mr'
-                      ? `रेफर करणारे कामगार: ${resolvedReferrer.workerName} (${resolvedReferrer.referralCode})`
+                      ? `रेफर करणारे कामगार: ${resolvedReferrer.workerName} (${resolvedReferrer.referralCode}) — ₹250 पेमेंट सत्यापित झाल्यावर ₹50 बक्षीस लागू होईल.`
                       : lang === 'hi'
-                      ? `रेफर करने वाले कामगार: ${resolvedReferrer.workerName} (${resolvedReferrer.referralCode})`
-                      : `Referred by: ${resolvedReferrer.workerName} (${resolvedReferrer.referralCode})`}
+                      ? `रेफर करने वाले कामगार: ${resolvedReferrer.workerName} (${resolvedReferrer.referralCode}) — ₹250 भुगतान सत्यापित होने पर ₹50 पुरस्कार मान्य होगा।`
+                      : `Referred by: ${resolvedReferrer.workerName} (${resolvedReferrer.referralCode}) — Eligible for ₹50 single-level reward once ₹250 payment is verified.`}
                   </span>
                 </p>
               )}
@@ -1121,20 +1235,20 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
               {referralLookupState === 'invalid' && referralCodeInput.trim().length > 0 && (
                 <p className="text-xs font-medium text-amber-800">
                   {lang === 'mr'
-                    ? 'हा रेफरल कोड सापडला नाही. तुम्ही कोडशिवायही मोफत नोंदणी करू शकता.'
+                    ? 'हा रेफरल कोड सापडला नाही. तुम्ही कोडशिवायही नोंदणी करू शकता.'
                     : lang === 'hi'
-                    ? 'यह रेफरल कोड नहीं मिला। आप बिना कोड के भी निःशुल्क पंजीकरण कर सकते हैं।'
-                    : 'Referral code not found. You can leave this blank and still register for free.'}
+                    ? 'यह रेफरल कोड नहीं मिला। आप बिना कोड के भी पंजीकरण कर सकते हैं।'
+                    : 'Referral code not found. You can leave this blank and proceed with registration.'}
                 </p>
               )}
             </div>
           ) : (
             <p className="text-xs text-slate-600">
               {lang === 'mr'
-                ? 'तुमचा वैयक्तिक रेफरल कोड कामगार डॅशबोर्डमधील "माझे रेफरल" विभागात उपलब्ध आहे.'
+                ? 'तुमचा वैयक्तिक रेफरल कोड ₹250 पेमेंट सत्यापित झाल्यावर कामगार डॅशबोर्डमधील "माझे रेफरल" विभागात सुरू होईल.'
                 : lang === 'hi'
-                ? 'आपका व्यक्तिगत रेफरल कोड कामगार डैशबोर्ड के "मेरे रेफरल" टैब में उपलब्ध है।'
-                : 'Your personal referral code and share link are available in Worker Dashboard → My Referrals.'}
+                ? 'आपका व्यक्तिगत रेफरल कोड ₹250 सत्यापन के बाद कामगार डैशबोर्ड के "मेरे रेफरल" टैब में सक्रिय होगा।'
+                : 'Your personal referral code activates in Worker Dashboard → My Referrals once your ₹250 registration is verified.'}
             </p>
           )}
         </div>
@@ -1158,6 +1272,22 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
               className="mt-1 h-4 w-4 rounded border-slate-300"
             />
             <span>{t.workerForm.privacyConsent} *</span>
+          </label>
+
+          <label className="flex items-start gap-2.5 text-sm text-slate-700 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={refundPolicyAccepted}
+              onChange={(e) => setRefundPolicyAccepted(e.target.checked)}
+              className="mt-1 h-4 w-4 rounded border-slate-300"
+            />
+            <span>
+              {lang === 'mr'
+                ? 'एकवेळ ₹250 नोंदणी शुल्काचे परतावा धोरण (फक्त सत्यापित दुहेरी/अयशस्वी पेमेंट किंवा लाभ सक्रिय होण्यापूर्वी ७ दिवसांत वैध रद्दबातल) मला मान्य आहे. *'
+                : lang === 'hi'
+                ? 'मैं ₹250 एकमुश्त पंजीकरण शुल्क की रिफंड नीति (केवल सत्यापित डुप्लिकेट/विफल लेनदेन या लाभ सक्रिय होने से पहले 7 दिनों में रद्दीकरण) स्वीकार करता/करती हूँ। *'
+                : 'I accept the ₹250 One-Time Registration Refund Policy (refunds apply only to verified duplicate/failed transactions or valid cancellation before benefit activation within 7 days; refunded registrations revoke paid benefits and reverse referral rewards). *'}
+            </span>
           </label>
 
           <label className="flex items-start gap-2.5 text-sm text-slate-700 cursor-pointer">

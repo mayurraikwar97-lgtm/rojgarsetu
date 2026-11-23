@@ -412,6 +412,45 @@ export async function disablePushNotificationsForUser(uid: string): Promise<void
   }
 }
 
+/**
+ * Deactivates ONLY the current browser/device FCM token when the user logs out,
+ * keeping multi-device tokens active on the user's other logged-in devices.
+ */
+export async function disableCurrentDeviceTokenOnLogout(uid: string): Promise<void> {
+  if (
+    typeof window === 'undefined' ||
+    !('Notification' in window) ||
+    !('serviceWorker' in navigator) ||
+    Notification.permission !== 'granted'
+  ) {
+    return;
+  }
+  const vapidKey = getFirebaseVapidKey();
+  if (!vapidKey) return;
+
+  try {
+    const messaging = await getFirebaseMessaging();
+    if (!messaging) return;
+    const swReg = await navigator.serviceWorker.getRegistration('/firebase-cloud-messaging-push-scope');
+    if (!swReg) return;
+    const currentToken = await getToken(messaging, {
+      vapidKey,
+      serviceWorkerRegistration: swReg,
+    }).catch(() => '');
+
+    if (currentToken) {
+      const tokenId = hashTokenDocId(uid, currentToken);
+      await updateDoc(doc(db, 'device_tokens', tokenId), {
+        enabled: false,
+        updatedAt: serverTimestamp(),
+      }).catch(() => undefined);
+    }
+    await deleteToken(messaging).catch(() => undefined);
+  } catch {
+    // Non-blocking cleanup on logout
+  }
+}
+
 export async function subscribeForegroundPush(
   onReceive: (payload: {
     title: string;

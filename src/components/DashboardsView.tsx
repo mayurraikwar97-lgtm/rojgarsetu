@@ -4041,7 +4041,7 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
             { id: 'jobs', label: `Jobs (${jobs.length})`, icon: FileText },
             { id: 'categories', label: `Services & Radius (${SERVICE_CATALOG_V2.length})`, icon: Radar },
             { id: 'advertisements', label: 'Advertisement Management', icon: Megaphone },
-            { id: 'referrals', label: 'Referrals & Rewards', icon: Gift },
+            { id: 'referrals', label: 'Payments, Referrals & Finance', icon: Gift },
             { id: 'notifications', label: '📲 Live Notification Demo', icon: BellRing },
             { id: 'grievances', label: `${t.dashboards.grievances} (${grievances.length})`, icon: AlertTriangle },
             { id: 'enquiries', label: `${t.dashboards.enquiries} (${enquiries.length})`, icon: Shield },

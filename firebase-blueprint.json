@@ -32,7 +32,7 @@
       "type": "object",
       "properties": {
         "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
-        "registrationId": { "type": "string", "minLength": 5, "maxLength": 40, "pattern": "^RS-W-[A-Z0-9\\-]+$" },
+        "registrationId": { "type": "string", "minLength": 5, "maxLength": 40, "pattern": "^RS-(W|APP)-[A-Z0-9\\-]+$" },
         "displayName": { "type": "string", "minLength": 2, "maxLength": 120 },
         "primarySkill": { "type": "string", "minLength": 2, "maxLength": 80 },
         "skills": { "type": "array", "description": "Bounded list of up to 15 skill identifiers." },
@@ -50,6 +50,11 @@
         "gender": { "type": "string", "enum": ["female", "male", "other", "prefer_not_to_say"] },
         "education": { "type": "string", "maxLength": 100 },
         "verificationStatus": { "type": "string", "enum": ["pending", "verified", "suspended"] },
+        "registrationPaymentStatus": { "type": "string", "enum": ["pending", "verified", "failed", "refunded"] },
+        "paidBenefitsActive": { "type": "boolean" },
+        "paymentReceiptNo": { "type": "string", "maxLength": 60 },
+        "certificateNo": { "type": "string", "maxLength": 60 },
+        "verifiedAtIso": { "type": "string", "maxLength": 40 },
         "isWomenEnterprise": { "type": "boolean" },
         "photoDocId": { "type": "string", "maxLength": 128 },
         "preferredLanguage": { "type": "string", "enum": ["en", "hi", "mr"] },
@@ -89,6 +94,9 @@
         "preferredWorkLocation": { "type": "string", "maxLength": 160 },
         "liveLocationConsent": { "type": "boolean" },
         "privacyConsent": { "type": "boolean" },
+        "refundPolicyAccepted": { "type": "boolean" },
+        "noEmploymentGuaranteeAccepted": { "type": "boolean" },
+        "registrationPaymentStatus": { "type": "string", "enum": ["pending", "verified", "failed", "refunded"] },
         "idVerificationStatus": { "type": "string", "enum": ["not_submitted", "voluntary_pending", "verified"] },
         "certificateNotes": { "type": "string", "maxLength": 500 },
         "photoUrl": { "type": "string", "maxLength": 1000 },
@@ -1097,9 +1105,12 @@
         "sourceChannel": { "type": "string", "enum": ["url_link", "manual_code"] },
         "registrationPaymentStatus": { "type": "string", "enum": ["free_launch", "payment_pending", "paid_verified", "payment_failed", "refunded", "cancelled"] },
         "registrationFeePaidInr": { "type": "number" },
-        "rewardStatus": { "type": "string", "enum": ["free_not_eligible", "pending_verification", "approved", "paid", "rejected"] },
+        "rewardStatus": { "type": "string", "enum": ["free_not_eligible", "pending_verification", "approved", "paid", "rejected", "held", "reversed"] },
         "rewardAmountInr": { "type": "number" },
         "paymentReference": { "type": "string", "maxLength": 120 },
+        "paymentId": { "type": "string", "maxLength": 128 },
+        "otpVerified": { "type": "boolean" },
+        "singleLevelVerified": { "type": "boolean" },
         "fraudFlags": { "type": "array", "description": "Up to 10 fraud/review flags." },
         "adminNotes": { "type": "string", "maxLength": 500 },
         "isSimulation": { "type": "boolean" },
@@ -1111,7 +1122,7 @@
     },
     "ReferralRewardRecord": {
       "title": "ReferralRewardRecord",
-      "description": "Admin-verified referral reward ledger entry (₹50 only when future ₹250 paid registration is enabled and verified).",
+      "description": "Admin-verified single-level referral reward ledger entry (₹50 upon verified ₹250 worker registration payment).",
       "type": "object",
       "properties": {
         "referralId": { "type": "string", "minLength": 1, "maxLength": 128 },
@@ -1122,12 +1133,14 @@
         "referralCode": { "type": "string", "minLength": 4, "maxLength": 32 },
         "registrationFeeInr": { "type": "number" },
         "rewardAmountInr": { "type": "number" },
-        "status": { "type": "string", "enum": ["pending", "approved", "paid", "rejected"] },
+        "status": { "type": "string", "enum": ["pending", "approved", "paid", "rejected", "held", "reversed"] },
         "eligibilityReason": { "type": "string", "minLength": 3, "maxLength": 300 },
+        "paymentId": { "type": "string", "maxLength": 128 },
         "paymentReference": { "type": "string", "maxLength": 120 },
         "payoutId": { "type": "string", "maxLength": 128 },
         "reviewedByUid": { "type": "string", "maxLength": 128 },
         "adminNotes": { "type": "string", "maxLength": 500 },
+        "reversedReason": { "type": "string", "maxLength": 300 },
         "isSimulation": { "type": "boolean" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -1136,16 +1149,21 @@
     },
     "ReferralWallet": {
       "title": "ReferralWallet",
-      "description": "Read-only for worker, admin-controlled referral reward wallet balances.",
+      "description": "Separate worker referral wallet tracking referrals, earnings, available balance, and withdrawals.",
       "type": "object",
       "properties": {
         "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
         "referralCode": { "type": "string", "minLength": 4, "maxLength": 32 },
         "totalReferrals": { "type": "number" },
         "verifiedPaidReferrals": { "type": "number" },
+        "pendingReferrals": { "type": "number" },
         "pendingBalanceInr": { "type": "number" },
         "approvedBalanceInr": { "type": "number" },
         "paidBalanceInr": { "type": "number" },
+        "availableBalanceInr": { "type": "number" },
+        "pendingWithdrawalInr": { "type": "number" },
+        "withdrawnBalanceInr": { "type": "number" },
+        "reversedBalanceInr": { "type": "number" },
         "totalEarnedInr": { "type": "number" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -1171,6 +1189,127 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["referrerUid", "referrerName", "rewardIds", "amountInr", "payoutMethod", "transactionReference", "status", "recordedByUid", "paidAt", "createdAt", "updatedAt"]
+    },
+    "WorkerRegistrationPayment": {
+      "title": "WorkerRegistrationPayment",
+      "description": "One-time ₹250 worker registration payment record with server/admin verification status, receipt, and certificate metadata.",
+      "type": "object",
+      "properties": {
+        "workerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workerName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "workerSkill": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "workerLocation": { "type": "string", "minLength": 2, "maxLength": 160 },
+        "workerMobileMasked": { "type": "string", "minLength": 6, "maxLength": 24 },
+        "provisionalAppId": { "type": "string", "minLength": 5, "maxLength": 40 },
+        "verifiedWorkerId": { "type": "string", "minLength": 5, "maxLength": 40 },
+        "amountInr": { "type": "number" },
+        "paymentMethod": { "type": "string", "enum": ["gateway", "upi_qr"] },
+        "status": { "type": "string", "enum": ["pending", "verified", "failed", "refunded"] },
+        "orderRef": { "type": "string", "minLength": 4, "maxLength": 80 },
+        "utrOrGatewayRef": { "type": "string", "minLength": 4, "maxLength": 120 },
+        "payerUpiOrName": { "type": "string", "maxLength": 120 },
+        "gatewayOrderId": { "type": "string", "maxLength": 120 },
+        "gatewayPaymentId": { "type": "string", "maxLength": 120 },
+        "gatewaySignatureVerified": { "type": "boolean" },
+        "receiptNo": { "type": "string", "maxLength": 60 },
+        "certificateNo": { "type": "string", "maxLength": 60 },
+        "refundPolicyAccepted": { "type": "boolean" },
+        "noEmploymentGuaranteeAccepted": { "type": "boolean" },
+        "otpVerified": { "type": "boolean" },
+        "referredByCode": { "type": "string", "maxLength": 32 },
+        "referredByUid": { "type": "string", "maxLength": 128 },
+        "adminNotes": { "type": "string", "maxLength": 500 },
+        "verifiedByUid": { "type": "string", "maxLength": 128 },
+        "verifiedAtIso": { "type": "string", "maxLength": 40 },
+        "refundReference": { "type": "string", "maxLength": 120 },
+        "refundReason": { "type": "string", "maxLength": 300 },
+        "refundedAtIso": { "type": "string", "maxLength": 40 },
+        "isDemo": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "workerUid", "workerName", "workerSkill", "workerLocation", "workerMobileMasked",
+        "provisionalAppId", "amountInr", "paymentMethod", "status", "orderRef",
+        "utrOrGatewayRef", "gatewaySignatureVerified", "refundPolicyAccepted",
+        "noEmploymentGuaranteeAccepted", "otpVerified", "createdAt", "updatedAt"
+      ]
+    },
+    "ReferralWithdrawalRequest": {
+      "title": "ReferralWithdrawalRequest",
+      "description": "Worker referral wallet withdrawal request with masked payout destination only (full bank/UPI details isolated in workerPayoutSecrets).",
+      "type": "object",
+      "properties": {
+        "workerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "workerName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "referralCode": { "type": "string", "minLength": 4, "maxLength": 32 },
+        "amountInr": { "type": "number" },
+        "payoutMethod": { "type": "string", "enum": ["upi", "bank_transfer"] },
+        "maskedDestination": { "type": "string", "minLength": 4, "maxLength": 140 },
+        "status": { "type": "string", "enum": ["pending", "approved", "paid", "rejected"] },
+        "transactionReference": { "type": "string", "maxLength": 120 },
+        "adminNotes": { "type": "string", "maxLength": 500 },
+        "reviewedByUid": { "type": "string", "maxLength": 128 },
+        "paidAtIso": { "type": "string", "maxLength": 40 },
+        "isDemo": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "workerUid", "workerName", "referralCode", "amountInr", "payoutMethod",
+        "maskedDestination", "status", "createdAt", "updatedAt"
+      ]
+    },
+    "WorkerPayoutSecret": {
+      "title": "WorkerPayoutSecret",
+      "description": "Strictly isolated private worker UPI or Bank Account details readable ONLY by the worker owner and authorized admin.",
+      "type": "object",
+      "properties": {
+        "withdrawalId": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "ownerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "payoutMethod": { "type": "string", "enum": ["upi", "bank_transfer"] },
+        "upiId": { "type": "string", "maxLength": 100 },
+        "accountHolderName": { "type": "string", "maxLength": 120 },
+        "accountNumber": { "type": "string", "maxLength": 40 },
+        "ifscCode": { "type": "string", "maxLength": 20 },
+        "bankName": { "type": "string", "maxLength": 100 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["withdrawalId", "ownerUid", "payoutMethod", "createdAt", "updatedAt"]
+    },
+    "FinancialLedgerEntry": {
+      "title": "FinancialLedgerEntry",
+      "description": "Immutable auditable financial ledger entry separating registration revenue, referral rewards, refunds, reward reversals, and withdrawal payouts.",
+      "type": "object",
+      "properties": {
+        "entryType": {
+          "type": "string",
+          "enum": [
+            "registration_payment",
+            "registration_refund",
+            "referral_reward_credit",
+            "referral_reward_reversal",
+            "withdrawal_payout"
+          ]
+        },
+        "direction": { "type": "string", "enum": ["credit", "debit"] },
+        "amountInr": { "type": "number" },
+        "workerUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "workerName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "referenceId": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "paymentOrUtrRef": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "description": { "type": "string", "minLength": 3, "maxLength": 400 },
+        "recordedByUid": { "type": "string", "minLength": 1, "maxLength": 128 },
+        "recordedByEmail": { "type": "string", "minLength": 3, "maxLength": 200 },
+        "isDemo": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "entryType", "direction", "amountInr", "workerUid", "workerName",
+        "referenceId", "paymentOrUtrRef", "description", "recordedByUid",
+        "recordedByEmail", "createdAt"
+      ]
     },
     "OrderExactAddress": {
       "title": "OrderExactAddress",
@@ -1402,6 +1541,22 @@
     "/maskedCallSessions/{sessionId}": {
       "schema": { "$ref": "#/entities/MaskedCallSession" },
       "description": "In-app masked calling bridge sessions between confirmed customer and assigned worker with zero personal mobile exposure."
+    },
+    "/workerRegistrationPayments/{paymentId}": {
+      "schema": { "$ref": "#/entities/WorkerRegistrationPayment" },
+      "description": "One-time ₹250 worker registration payment records with Pending, Verified, Failed, or Refunded statuses."
+    },
+    "/referralWithdrawals/{withdrawalId}": {
+      "schema": { "$ref": "#/entities/ReferralWithdrawalRequest" },
+      "description": "Worker referral wallet withdrawal requests showing masked payout destinations."
+    },
+    "/workerPayoutSecrets/{withdrawalId}": {
+      "schema": { "$ref": "#/entities/WorkerPayoutSecret" },
+      "description": "Isolated private UPI and bank account details accessible strictly by the owning worker and authorized admin."
+    },
+    "/financialLedger/{entryId}": {
+      "schema": { "$ref": "#/entities/FinancialLedgerEntry" },
+      "description": "Immutable admin-auditable financial ledger separating Gross Registration Revenue, Referral Rewards, Refunds, and Net Balance."
     }
   }
 }

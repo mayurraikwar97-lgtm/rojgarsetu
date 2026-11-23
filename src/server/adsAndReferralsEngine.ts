@@ -189,6 +189,8 @@ export interface ReferralEligibilityInput {
   paidRegistrationEnabled: boolean;
   configuredFeeInr: number;
   configuredRewardInr: number;
+  otpVerified?: boolean;
+  referralLevel?: number;
   testSimulation?: boolean;
 }
 
@@ -204,7 +206,8 @@ export interface ReferralEligibilityDecision {
 
 /**
  * Authoritative server-side referral fraud prevention & reward calculator.
- * Never trusts client-submitted reward amounts.
+ * Enforces single-level referral only, OTP verification, anti-self-referral,
+ * duplicate account/reward protection, and verified ₹250 payment checks.
  */
 export function evaluateReferralRewardEligibility(
   input: ReferralEligibilityInput
@@ -238,6 +241,18 @@ export function evaluateReferralRewardEligibility(
     };
   };
 
+  // 0. Strict Single-Level Enforcement (NO multi-level / MLM / tier-2 rewards)
+  const level = input.referralLevel === undefined ? 1 : Number(input.referralLevel);
+  if (!Number.isFinite(level) || level !== 1) {
+    fraudFlags.push('MULTI_LEVEL_BLOCKED');
+    return buildResult(
+      false,
+      0,
+      'rejected',
+      'Only single-level direct referrals are eligible for the ₹50 reward. Multi-level/chain rewards are strictly blocked.'
+    );
+  }
+
   // 1. Self-referral block (UID or same mobile hash)
   if (!input.referrerUid || !input.referredUid || input.referrerUid === input.referredUid) {
     fraudFlags.push('SELF_REFERRAL_UID');
@@ -254,6 +269,17 @@ export function evaluateReferralRewardEligibility(
       0,
       'rejected',
       'Self-referral is strictly blocked (referrer and referred worker share the same mobile number).'
+    );
+  }
+
+  // 1b. Mobile OTP Verification Mandatory Check
+  if (input.otpVerified === false) {
+    fraudFlags.push('OTP_NOT_VERIFIED');
+    return buildResult(
+      false,
+      0,
+      'rejected',
+      'Referred worker mobile OTP verification is required before crediting any referral reward.'
     );
   }
 
@@ -285,13 +311,13 @@ export function evaluateReferralRewardEligibility(
     );
   }
 
-  // 4. Free Launch mode check (unless admin runs explicit isolated testSimulation)
+  // 4. Paid Registration mode check (unless admin runs explicit isolated testSimulation)
   if (!input.paidRegistrationEnabled && !input.testSimulation) {
     return buildResult(
       false,
       0,
       'free_not_eligible',
-      'Worker registration is currently FREE. Referral attribution is recorded, and ₹50 rewards apply only after future ₹250 paid registration is enabled.'
+      'Paid registration is currently paused. Referral attribution is recorded, and ₹50 rewards apply only for verified ₹250 registrations.'
     );
   }
 
@@ -327,17 +353,77 @@ export function evaluateReferralRewardEligibility(
       false,
       0,
       'rejected',
-      'Verified payment gateway reference / transaction ID is required before crediting reward.'
+      'Verified payment gateway reference / UTR transaction ID is required before crediting reward.'
     );
   }
 
-  // 6. All fraud and payment checks passed — issue server-calculated ₹50 reward in pending_verification state
+  // 6. All fraud, OTP, single-level, and payment checks passed — issue server-calculated ₹50 reward
   return buildResult(
     true,
     configuredReward,
     'pending_verification',
-    `Verified ₹${paidAmount} registration payment (${input.paymentReference.trim()}). Server calculated ₹${configuredReward} referral reward (pending admin approval).`
+    `Verified ₹${paidAmount} registration payment (${input.paymentReference.trim()}). Single-level direct referral verified: ₹${configuredReward} reward eligible (subject to admin approval).`
   );
+}
+
+export async function handleEvaluateReferralEligibility(params: {
+  authHeader: string;
+  body: Record<string, unknown>;
+  rootDir: string;
+}): Promise<{ httpStatus: number; payload: Record<string, unknown> }> {
+  const match = (params.authHeader || '').match(/^Bearer\s+(.+)$/i);
+  if (!match) {
+    return { httpStatus: 401, payload: { error: 'Authentication required. Please sign in.' } };
+  }
+  let isAdmin = false;
+  try {
+    const app = getAuthApp(params.rootDir);
+    const decoded = await getAuth(app).verifyIdToken(match[1]);
+    isAdmin = decoded.email === BOOTSTRAPPED_ADMIN_EMAIL && decoded.email_verified === true;
+  } catch {
+    return { httpStatus: 401, payload: { error: 'Authentication required. Please sign in.' } };
+  }
+
+  const body = (params.body || {}) as Partial<ReferralEligibilityInput>;
+
+  const wantsPaidOrSim =
+    body.testSimulation === true ||
+    body.registrationPaymentStatus === 'paid_verified' ||
+    body.paidRegistrationEnabled === true;
+
+  if (wantsPaidOrSim && !isAdmin) {
+    return {
+      httpStatus: 403,
+      payload: {
+        error: 'Only platform administrators can verify paid registrations or evaluate paid referral rewards.',
+      },
+    };
+  }
+
+  const decision = evaluateReferralRewardEligibility({
+    referrerUid: String(body.referrerUid || '').trim(),
+    referredUid: String(body.referredUid || '').trim(),
+    referrerMobileHash: body.referrerMobileHash ? String(body.referrerMobileHash).trim() : undefined,
+    referredMobileHash: String(body.referredMobileHash || '').trim(),
+    existingReferredMobileHashes: Array.isArray(body.existingReferredMobileHashes)
+      ? body.existingReferredMobileHashes.map((v) => String(v))
+      : [],
+    existingRewardReferralIds: Array.isArray(body.existingRewardReferralIds)
+      ? body.existingRewardReferralIds.map((v) => String(v))
+      : [],
+    referralId: String(body.referralId || '').trim(),
+    registrationPaymentStatus: (body.registrationPaymentStatus || 'payment_pending') as ReferralEligibilityInput['registrationPaymentStatus'],
+    registrationFeePaidInr: Number(body.registrationFeePaidInr) || 0,
+    paymentReference: body.paymentReference ? String(body.paymentReference).trim() : undefined,
+    paidRegistrationEnabled: Boolean(body.paidRegistrationEnabled),
+    configuredFeeInr: Number(body.configuredFeeInr) || 250,
+    configuredRewardInr: Number(body.configuredRewardInr) || 50,
+    otpVerified: body.otpVerified !== undefined ? Boolean(body.otpVerified) : true,
+    referralLevel: body.referralLevel !== undefined ? Number(body.referralLevel) : 1,
+    testSimulation: Boolean(body.testSimulation),
+  });
+
+  return { httpStatus: 200, payload: decision as unknown as Record<string, unknown> };
 }
 
 export function registerAdsAndReferralsRoutes(app: Express, rootDir: string): void {
@@ -350,48 +436,11 @@ export function registerAdsAndReferralsRoutes(app: Express, rootDir: string): vo
 
   // 2. Server-side referral reward & fraud evaluation engine (Authenticated)
   app.post('/api/referrals/evaluate-eligibility', async (req: Request, res: Response) => {
-    const authUser = await verifyBearerUser(req, rootDir);
-    if (!authUser) {
-      res.status(401).json({ error: 'Authentication required. Please sign in.' });
-      return;
-    }
-
-    const body = (req.body || {}) as Partial<ReferralEligibilityInput>;
-
-    // Only Admin can evaluate paid_verified rewards or run testSimulation
-    const wantsPaidOrSim =
-      body.testSimulation === true ||
-      body.registrationPaymentStatus === 'paid_verified' ||
-      body.paidRegistrationEnabled === true;
-
-    if (wantsPaidOrSim && !authUser.isAdmin) {
-      res.status(403).json({
-        error: 'Only platform administrators can verify paid registrations or simulate paid referral rewards.',
-      });
-      return;
-    }
-
-    const decision = evaluateReferralRewardEligibility({
-      referrerUid: String(body.referrerUid || '').trim(),
-      referredUid: String(body.referredUid || '').trim(),
-      referrerMobileHash: body.referrerMobileHash ? String(body.referrerMobileHash).trim() : undefined,
-      referredMobileHash: String(body.referredMobileHash || '').trim(),
-      existingReferredMobileHashes: Array.isArray(body.existingReferredMobileHashes)
-        ? body.existingReferredMobileHashes.map((v) => String(v))
-        : [],
-      existingRewardReferralIds: Array.isArray(body.existingRewardReferralIds)
-        ? body.existingRewardReferralIds.map((v) => String(v))
-        : [],
-      referralId: String(body.referralId || '').trim(),
-      registrationPaymentStatus: (body.registrationPaymentStatus || 'free_launch') as ReferralEligibilityInput['registrationPaymentStatus'],
-      registrationFeePaidInr: Number(body.registrationFeePaidInr) || 0,
-      paymentReference: body.paymentReference ? String(body.paymentReference).trim() : undefined,
-      paidRegistrationEnabled: Boolean(body.paidRegistrationEnabled),
-      configuredFeeInr: Number(body.configuredFeeInr) || 250,
-      configuredRewardInr: Number(body.configuredRewardInr) || 50,
-      testSimulation: Boolean(body.testSimulation),
+    const out = await handleEvaluateReferralEligibility({
+      authHeader: req.headers.authorization || '',
+      body: (req.body || {}) as Record<string, unknown>,
+      rootDir,
     });
-
-    res.status(200).json(decision);
+    res.status(out.httpStatus).json(out.payload);
   });
 }

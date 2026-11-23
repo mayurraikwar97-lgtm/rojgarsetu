@@ -27,20 +27,49 @@ function detectDeviceEnvironment(): { platform: DevicePlatform; browser: Browser
   return { platform, browser };
 }
 
+function checkStandaloneInstalled(): boolean {
+  if (typeof window === 'undefined') return false;
+  return (
+    window.matchMedia('(display-mode: standalone)').matches ||
+    window.matchMedia('(display-mode: fullscreen)').matches ||
+    (window.navigator as unknown as { standalone?: boolean }).standalone === true
+  );
+}
+
 export function usePWAInstall() {
   const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
-  const [isInstalled, setIsInstalled] = useState(false);
+  const [isInstalled, setIsInstalled] = useState<boolean>(() => checkStandaloneInstalled());
   const [env, setEnv] = useState<{ platform: DevicePlatform; browser: BrowserFamily }>({
     platform: 'desktop',
     browser: 'other',
   });
 
   useEffect(() => {
-    const isStandalone =
-      window.matchMedia('(display-mode: standalone)').matches ||
-      (window.navigator as unknown as { standalone?: boolean }).standalone === true;
-    setIsInstalled(isStandalone);
+    setIsInstalled(checkStandaloneInstalled());
     setEnv(detectDeviceEnvironment());
+
+    // Check Web App Installed Related Apps API where supported (Android Chrome / Desktop Chromium)
+    const navWithRelated = window.navigator as Navigator & {
+      getInstalledRelatedApps?: () => Promise<Array<{ platform?: string; url?: string }>>;
+    };
+    if (typeof navWithRelated.getInstalledRelatedApps === 'function') {
+      navWithRelated
+        .getInstalledRelatedApps()
+        .then((apps) => {
+          if (Array.isArray(apps) && apps.length > 0) {
+            setIsInstalled(true);
+          }
+        })
+        .catch(() => undefined);
+    }
+
+    const mediaQuery = window.matchMedia('(display-mode: standalone)');
+    const handleDisplayModeChange = (event: MediaQueryListEvent) => {
+      if (event.matches) {
+        setIsInstalled(true);
+        setDeferredPrompt(null);
+      }
+    };
 
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
@@ -54,10 +83,16 @@ export function usePWAInstall() {
 
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
     window.addEventListener('appinstalled', handleAppInstalled);
+    if (typeof mediaQuery.addEventListener === 'function') {
+      mediaQuery.addEventListener('change', handleDisplayModeChange);
+    }
 
     return () => {
       window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
       window.removeEventListener('appinstalled', handleAppInstalled);
+      if (typeof mediaQuery.removeEventListener === 'function') {
+        mediaQuery.removeEventListener('change', handleDisplayModeChange);
+      }
     };
   }, []);
 

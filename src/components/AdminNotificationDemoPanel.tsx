@@ -96,8 +96,19 @@ export const AdminNotificationDemoPanel: React.FC<AdminNotificationDemoPanelProp
   const [annAudience, setAnnAudience] = useState<'demo_only' | 'all_opted_in'>('demo_only');
   const [historyFilter, setHistoryFilter] = useState<'all' | 'failed'>('all');
 
+  // Targeted Broadcast by Skill Category & Location
+  const [targetSkill, setTargetSkill] = useState<string>('ALL');
+  const [targetState, setTargetState] = useState<string>('');
+  const [targetDistrict, setTargetDistrict] = useState<string>('');
+  const [targetCity, setTargetCity] = useState<string>('');
+  const [targetOnlyAvailable, setTargetOnlyAvailable] = useState<boolean>(true);
+  const [targetTitle, setTargetTitle] = useState<string>('नवीन काम उपलब्ध!');
+  const [targetBody, setTargetBody] = useState<string>(
+    'आपल्या परिसरात प्लंबरचे काम आले आहे. नवीन ग्राहक ऑर्डर – त्वरित तपासा.'
+  );
+
   const [confirmModal, setConfirmModal] = useState<{
-    action: 'test_all_demo_workers' | 'demo_announcement';
+    action: 'test_all_demo_workers' | 'demo_announcement' | 'targeted_skill_location';
     title: string;
     description: string;
   } | null>(null);
@@ -157,23 +168,54 @@ export const AdminNotificationDemoPanel: React.FC<AdminNotificationDemoPanelProp
     const enabledWorkerUids = new Set(
       deviceTokens.filter((t) => t.enabled && !t.isDemo).map((t) => t.ownerUid)
     );
+    const totalSubscriberUids = new Set(
+      deviceTokens.filter((t) => t.enabled).map((t) => t.ownerUid)
+    );
     const activeTokensCount = deviceTokens.filter((t) => t.enabled).length;
+    const inactiveTokensCount = deviceTokens.filter((t) => !t.enabled).length;
     const activeDemoTokensCount = deviceTokens.filter((t) => t.enabled && t.isDemo).length;
     const sentLogs = deliveryLogs.filter((l) => l.status === 'sent').length;
     const failedLogs = deliveryLogs.filter((l) => l.status === 'failed').length;
 
     return {
+      totalSubscribers: totalSubscriberUids.size,
       totalWorkers: workers.length,
       workersEnabled: workers.filter((w) => enabledWorkerUids.has(w.ownerUid)).length,
       workersDisabled: workers.filter((w) => !enabledWorkerUids.has(w.ownerUid)).length,
       totalCustomers: employers.length,
       activeTokensCount,
+      inactiveTokensCount,
       activeDemoTokensCount,
       totalSentAttempted: deliveryLogs.length,
       deliveredCount: sentLogs,
       failedCount: failedLogs,
     };
   }, [workers, employers, deviceTokens, deliveryLogs]);
+
+  const estimatedTargetedWorkers = useMemo(() => {
+    return workers.filter((w) => {
+      if (w.verificationStatus === 'suspended') return false;
+      if (targetOnlyAvailable && w.availabilityStatus !== 'available') return false;
+      if (targetSkill !== 'ALL') {
+        const lower = targetSkill.toLowerCase();
+        const matchesPrimary = (w.primarySkill || '').toLowerCase() === lower;
+        const matchesList = (w.skills || []).some((s) => s.toLowerCase() === lower);
+        if (!matchesPrimary && !matchesList) return false;
+      }
+      if (targetState && (w.state || '').toLowerCase() !== targetState.toLowerCase()) return false;
+      if (targetDistrict && (w.district || '').toLowerCase() !== targetDistrict.toLowerCase()) return false;
+      if (
+        targetCity.trim() &&
+        !(w.cityOrVillage || '').toLowerCase().includes(targetCity.trim().toLowerCase()) &&
+        !(w.district || '').toLowerCase().includes(targetCity.trim().toLowerCase())
+      ) {
+        return false;
+      }
+      return true;
+    }).length;
+  }, [workers, targetSkill, targetState, targetDistrict, targetCity, targetOnlyAvailable]);
+
+  const targetStateObj = INDIA_STATES_DISTRICTS.find((s) => s.name === targetState);
 
   const workerDropdownOptions = useMemo(() => {
     const enabledUids = new Set(deviceTokens.filter((t) => t.enabled).map((t) => t.ownerUid));
@@ -229,6 +271,33 @@ export const AdminNotificationDemoPanel: React.FC<AdminNotificationDemoPanelProp
         ok: false,
         errorCode: 'NETWORK_ERROR',
         message: err instanceof Error ? err.message : 'Request failed.',
+      });
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const runTargetedBroadcastApi = async () => {
+    setBusyAction('targeted_skill_location');
+    setDispatchResult(null);
+    try {
+      const res = await callNotificationApi<DispatchApiResponse>('/api/notifications/admin-targeted', {
+        confirmed: true,
+        skillCategory: targetSkill,
+        state: targetState,
+        district: targetDistrict,
+        cityOrVillage: targetCity.trim(),
+        onlyAvailable: targetOnlyAvailable,
+        language: lang,
+        title: targetTitle.trim(),
+        body: targetBody.trim(),
+      });
+      setDispatchResult(res.data);
+    } catch (err) {
+      setDispatchResult({
+        ok: false,
+        errorCode: 'NETWORK_ERROR',
+        message: err instanceof Error ? err.message : 'Targeted notification request failed.',
       });
     } finally {
       setBusyAction(null);
@@ -397,14 +466,15 @@ export const AdminNotificationDemoPanel: React.FC<AdminNotificationDemoPanelProp
         </div>
 
         {/* Live Metrics */}
-        <div className="p-5 grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3">
+        <div className="p-5 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-9 gap-3">
           {[
-            { label: 'Total Workers', val: metrics.totalWorkers, cls: 'text-[#0B3B75]' },
-            { label: 'Notif Enabled', val: metrics.workersEnabled, cls: 'text-[#15803D]' },
-            { label: 'Notif Disabled', val: metrics.workersDisabled, cls: 'text-slate-600' },
+            { label: 'Total Subscribers', val: metrics.totalSubscribers, cls: 'text-[#0B3B75]' },
+            { label: 'Active Tokens', val: metrics.activeTokensCount, cls: 'text-[#15803D]' },
+            { label: 'Inactive Tokens', val: metrics.inactiveTokensCount, cls: 'text-slate-600' },
+            { label: 'Workers Opt-In', val: metrics.workersEnabled, cls: 'text-[#15803D]' },
+            { label: 'Workers No Push', val: metrics.workersDisabled, cls: 'text-slate-500' },
             { label: 'Total Customers', val: metrics.totalCustomers, cls: 'text-[#0B3B75]' },
-            { label: 'Active Tokens', val: metrics.activeTokensCount, cls: 'text-[#C25E00]' },
-            { label: 'Demo Tokens', val: metrics.activeDemoTokensCount, cls: 'text-amber-700' },
+            { label: 'Demo Tokens', val: metrics.activeDemoTokensCount, cls: 'text-[#C25E00]' },
             { label: 'Delivered', val: metrics.deliveredCount, cls: 'text-[#15803D]' },
             { label: 'Failed', val: metrics.failedCount, cls: 'text-red-700' },
           ].map((m) => (
@@ -581,6 +651,157 @@ export const AdminNotificationDemoPanel: React.FC<AdminNotificationDemoPanelProp
               >
                 <Megaphone className="w-3.5 h-3.5" />
                 Send Sample Announcement
+              </button>
+            </div>
+          </div>
+
+          {/* Targeted Broadcast by Skill Category & Location */}
+          <div className="lg:col-span-2 border-2 border-[#0B3B75]/30 rounded-lg p-4 space-y-3 bg-blue-50/30">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="text-xs font-extrabold uppercase tracking-wider text-[#0B3B75]">
+                  F. Send Push Notification by Skill Category &amp; Location
+                </div>
+                <p className="text-xs text-slate-600 mt-0.5">
+                  Target registered workers by trade, state, district, or city/village with Marathi/Hindi/English job alerts.
+                </p>
+              </div>
+              <span className="px-2.5 py-1 rounded bg-[#0B3B75] text-white text-xs font-mono-tabular font-bold">
+                Matched Workers: {estimatedTargetedWorkers}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Skill Category</label>
+                <select
+                  value={targetSkill}
+                  onChange={(e) => setTargetSkill(e.target.value)}
+                  className="w-full px-2.5 py-2 border border-slate-300 rounded bg-white"
+                >
+                  <option value="ALL">All Skill Categories</option>
+                  {EMPLOYMENT_CATEGORIES.map((c) => (
+                    <option key={c.id} value={c.en}>
+                      {c.en}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">State (Optional)</label>
+                <select
+                  value={targetState}
+                  onChange={(e) => {
+                    setTargetState(e.target.value);
+                    setTargetDistrict('');
+                  }}
+                  className="w-full px-2.5 py-2 border border-slate-300 rounded bg-white"
+                >
+                  <option value="">All States (India)</option>
+                  {INDIA_STATES_DISTRICTS.map((st) => (
+                    <option key={st.name} value={st.name}>
+                      {st.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">District (Optional)</label>
+                <select
+                  value={targetDistrict}
+                  onChange={(e) => setTargetDistrict(e.target.value)}
+                  disabled={!targetState}
+                  className="w-full px-2.5 py-2 border border-slate-300 rounded bg-white disabled:bg-slate-100"
+                >
+                  <option value="">All Districts</option>
+                  {targetStateObj?.districts.map((d) => (
+                    <option key={d.name} value={d.name}>
+                      {d.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">City / Village Filter</label>
+                <input
+                  type="text"
+                  value={targetCity}
+                  onChange={(e) => setTargetCity(e.target.value)}
+                  placeholder="e.g., Chandrapur, Nagpur..."
+                  className="w-full px-2.5 py-2 border border-slate-300 rounded bg-white"
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Notification Title</label>
+                <input
+                  type="text"
+                  value={targetTitle}
+                  onChange={(e) => setTargetTitle(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded bg-white"
+                />
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Notification Body</label>
+                <input
+                  type="text"
+                  value={targetBody}
+                  onChange={(e) => setTargetBody(e.target.value)}
+                  className="w-full px-3 py-2 border border-slate-300 rounded bg-white"
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+              <div className="flex flex-wrap items-center gap-2 text-[11px]">
+                <span className="font-bold text-slate-600">Marathi Presets:</span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTargetTitle('नवीन काम उपलब्ध!');
+                    setTargetBody('आपल्या परिसरात प्लंबरचे काम आले आहे.');
+                  }}
+                  className="px-2 py-1 rounded border border-slate-300 bg-white hover:bg-slate-100 font-semibold text-[#0B3B75] cursor-pointer"
+                >
+                  प्लंबर काम
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setTargetTitle('नवीन ग्राहक ऑर्डर – त्वरित तपासा.');
+                    setTargetBody('नवीन काम उपलब्ध! रोजगार सेतू ॲप उघडून लगेच ऑफर पाठवा.');
+                  }}
+                  className="px-2 py-1 rounded border border-slate-300 bg-white hover:bg-slate-100 font-semibold text-[#0B3B75] cursor-pointer"
+                >
+                  नवीन ग्राहक ऑर्डर
+                </button>
+                <label className="inline-flex items-center gap-1.5 ml-2 font-semibold text-slate-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={targetOnlyAvailable}
+                    onChange={(e) => setTargetOnlyAvailable(e.target.checked)}
+                    className="h-3.5 w-3.5 rounded border-slate-300"
+                  />
+                  Only Available Workers
+                </label>
+              </div>
+
+              <button
+                type="button"
+                disabled={busyAction !== null || !targetTitle.trim() || !targetBody.trim()}
+                onClick={() =>
+                  setConfirmModal({
+                    action: 'targeted_skill_location',
+                    title: 'Confirm Targeted Push Broadcast',
+                    description: `Send push notification "${targetTitle}" to ~${estimatedTargetedWorkers} matching worker(s) (Skill: ${targetSkill}, Location: ${targetDistrict || targetState || 'All India'})?`,
+                  })
+                }
+                className="inline-flex items-center gap-1.5 px-4 py-2 rounded bg-[#15803D] text-white text-xs font-extrabold hover:bg-emerald-800 cursor-pointer disabled:opacity-50"
+              >
+                <Send className="w-3.5 h-3.5" />
+                Send Targeted Push ({estimatedTargetedWorkers})
               </button>
             </div>
           </div>
@@ -1001,10 +1222,14 @@ export const AdminNotificationDemoPanel: React.FC<AdminNotificationDemoPanelProp
                 onClick={async () => {
                   const act = confirmModal.action;
                   setConfirmModal(null);
-                  await runAdminDemoApi(act, {
-                    confirmed: true,
-                    ...(act === 'demo_announcement' ? { audience: annAudience } : {}),
-                  });
+                  if (act === 'targeted_skill_location') {
+                    await runTargetedBroadcastApi();
+                  } else {
+                    await runAdminDemoApi(act, {
+                      confirmed: true,
+                      ...(act === 'demo_announcement' ? { audience: annAudience } : {}),
+                    });
+                  }
                 }}
                 className="px-4 py-2 rounded bg-[#E06D1B] text-white text-xs font-bold hover:bg-[#c55b10] cursor-pointer"
               >

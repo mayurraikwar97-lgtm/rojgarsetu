@@ -86,7 +86,9 @@ service cloud.firestore {
           'experienceYears', 'expectedWage', 'wageUnit', 'preferredWorkType',
           'availabilityStatus', 'state', 'district', 'cityOrVillage',
           'approxLat', 'approxLng', 'languagesKnown', 'gender', 'education',
-          'verificationStatus', 'isWomenEnterprise', 'photoDocId',
+          'verificationStatus', 'registrationPaymentStatus', 'paidBenefitsActive',
+          'paymentReceiptNo', 'certificateNo', 'verifiedAtIso',
+          'isWomenEnterprise', 'photoDocId',
           'preferredLanguage', 'preferredRadiusKm', 'voiceAlertsEnabled',
           'completedJobsCount', 'ratingAvg', 'lastRatedApplicationId',
           'referralCode', 'referredByCode', 'referredByUid', 'referredByName',
@@ -111,6 +113,11 @@ service cloud.firestore {
         && (!('gender' in data) || data.gender in ['female', 'male', 'other', 'prefer_not_to_say'])
         && (!('education' in data) || (data.education is string && data.education.size() <= 100))
         && data.verificationStatus in ['pending', 'verified', 'suspended']
+        && (!('registrationPaymentStatus' in data) || data.registrationPaymentStatus in ['pending', 'verified', 'failed', 'refunded'])
+        && (!('paidBenefitsActive' in data) || data.paidBenefitsActive is bool)
+        && (!('paymentReceiptNo' in data) || (data.paymentReceiptNo is string && data.paymentReceiptNo.size() <= 60))
+        && (!('certificateNo' in data) || (data.certificateNo is string && data.certificateNo.size() <= 60))
+        && (!('verifiedAtIso' in data) || (data.verifiedAtIso is string && data.verifiedAtIso.size() <= 40))
         && (!('isWomenEnterprise' in data) || data.isWomenEnterprise is bool)
         && (!('photoDocId' in data) || isValidId(data.photoDocId))
         && (!('preferredLanguage' in data) || data.preferredLanguage in ['en', 'hi', 'mr'])
@@ -136,7 +143,9 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'ownerUid', 'fullName', 'mobile', 'mobileVerified', 'verificationMethod',
           'testPinHash', 'email', 'ageConfirmed', 'preferredWorkLocation',
-          'liveLocationConsent', 'privacyConsent', 'idVerificationStatus',
+          'liveLocationConsent', 'privacyConsent', 'refundPolicyAccepted',
+          'noEmploymentGuaranteeAccepted', 'registrationPaymentStatus',
+          'idVerificationStatus',
           'certificateNotes', 'photoUrl', 'photoDocId',
           'referralCode', 'referredByCode', 'referredByUid', 'referredByName',
           'createdAt', 'updatedAt'
@@ -152,6 +161,9 @@ service cloud.firestore {
         && (!('preferredWorkLocation' in data) || (data.preferredWorkLocation is string && data.preferredWorkLocation.size() <= 160))
         && data.liveLocationConsent is bool
         && data.privacyConsent is bool
+        && (!('refundPolicyAccepted' in data) || data.refundPolicyAccepted is bool)
+        && (!('noEmploymentGuaranteeAccepted' in data) || data.noEmploymentGuaranteeAccepted is bool)
+        && (!('registrationPaymentStatus' in data) || data.registrationPaymentStatus in ['pending', 'verified', 'failed', 'refunded'])
         && data.idVerificationStatus in ['not_submitted', 'voluntary_pending', 'verified']
         && (!('certificateNotes' in data) || (data.certificateNotes is string && data.certificateNotes.size() <= 500))
         && (!('photoUrl' in data) || (data.photoUrl is string && data.photoUrl.size() <= 1000))
@@ -1172,6 +1184,10 @@ service cloud.firestore {
         && isValidPublicWorker(incoming())
         && incoming().ownerUid == request.auth.uid
         && incoming().verificationStatus == 'pending'
+        && (!('registrationPaymentStatus' in incoming()) || incoming().registrationPaymentStatus == 'pending')
+        && (!('paidBenefitsActive' in incoming()) || incoming().paidBenefitsActive == false)
+        && !('paymentReceiptNo' in incoming())
+        && !('certificateNo' in incoming())
         && incoming().completedJobsCount == 0
         && incoming().ratingAvg == 0
         && isValidTimestampOnCreate();
@@ -1180,11 +1196,11 @@ service cloud.firestore {
         && isValidPublicWorker(incoming())
         && isValidTimestampOnUpdate()
         && incoming().ownerUid == existing().ownerUid
-        && incoming().registrationId == existing().registrationId
         && (
           isAdmin() ||
           (
             isOwner(existing().ownerUid)
+            && incoming().registrationId == existing().registrationId
             && existing().verificationStatus != 'suspended'
             && (!('referralCode' in existing()) || incoming().referralCode == existing().referralCode)
             && incoming().diff(existing()).affectedKeys().hasOnly([
@@ -1196,7 +1212,8 @@ service cloud.firestore {
             ])
           ) ||
           (
-            existing().verificationStatus != 'suspended'
+            incoming().registrationId == existing().registrationId
+            && existing().verificationStatus != 'suspended'
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'ratingAvg', 'completedJobsCount', 'lastRatedApplicationId', 'updatedAt'
             ])
@@ -1239,7 +1256,8 @@ service cloud.firestore {
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'fullName', 'mobile', 'mobileVerified', 'verificationMethod', 'testPinHash',
               'email', 'ageConfirmed', 'preferredWorkLocation', 'liveLocationConsent',
-              'privacyConsent', 'idVerificationStatus', 'certificateNotes', 'photoUrl',
+              'privacyConsent', 'refundPolicyAccepted', 'noEmploymentGuaranteeAccepted',
+              'idVerificationStatus', 'certificateNotes', 'photoUrl',
               'photoDocId', 'referralCode', 'updatedAt'
             ])
             && incoming().idVerificationStatus in ['not_submitted', 'voluntary_pending']
@@ -2308,9 +2326,12 @@ service cloud.firestore {
         && data.sourceChannel in ['url_link', 'manual_code']
         && data.registrationPaymentStatus in ['free_launch', 'payment_pending', 'paid_verified', 'payment_failed', 'refunded', 'cancelled']
         && data.registrationFeePaidInr is number && data.registrationFeePaidInr >= 0 && data.registrationFeePaidInr <= 50000
-        && data.rewardStatus in ['free_not_eligible', 'pending_verification', 'approved', 'paid', 'rejected']
+        && data.rewardStatus in ['free_not_eligible', 'pending_verification', 'approved', 'paid', 'rejected', 'held', 'reversed']
         && data.rewardAmountInr is number && data.rewardAmountInr >= 0 && data.rewardAmountInr <= 10000
         && (!('paymentReference' in data) || (data.paymentReference is string && data.paymentReference.size() <= 120))
+        && (!('paymentId' in data) || isValidId(data.paymentId))
+        && (!('otpVerified' in data) || data.otpVerified is bool)
+        && (!('singleLevelVerified' in data) || data.singleLevelVerified is bool)
         && (!('fraudFlags' in data) || (data.fraudFlags is list && data.fraudFlags.size() <= 10 && (data.fraudFlags.size() == 0 || data.fraudFlags[0] is string)))
         && (!('adminNotes' in data) || (data.adminNotes is string && data.adminNotes.size() <= 500))
         && (!('isSimulation' in data) || data.isSimulation is bool)
@@ -2328,8 +2349,8 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'referralId', 'referrerUid', 'referrerName', 'referredUid', 'referredWorkerName',
           'referralCode', 'registrationFeeInr', 'rewardAmountInr', 'status',
-          'eligibilityReason', 'paymentReference', 'payoutId', 'reviewedByUid',
-          'adminNotes', 'isSimulation', 'createdAt', 'updatedAt'
+          'eligibilityReason', 'paymentId', 'paymentReference', 'payoutId', 'reviewedByUid',
+          'adminNotes', 'reversedReason', 'isSimulation', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.referralId)
         && isValidId(data.referrerUid)
@@ -2340,12 +2361,14 @@ service cloud.firestore {
         && data.referralCode is string && data.referralCode.size() >= 4 && data.referralCode.size() <= 32
         && data.registrationFeeInr is number && data.registrationFeeInr >= 0 && data.registrationFeeInr <= 50000
         && data.rewardAmountInr is number && data.rewardAmountInr >= 0 && data.rewardAmountInr <= 10000
-        && data.status in ['pending', 'approved', 'paid', 'rejected']
+        && data.status in ['pending', 'approved', 'paid', 'rejected', 'held', 'reversed']
         && data.eligibilityReason is string && data.eligibilityReason.size() >= 3 && data.eligibilityReason.size() <= 300
+        && (!('paymentId' in data) || isValidId(data.paymentId))
         && (!('paymentReference' in data) || (data.paymentReference is string && data.paymentReference.size() <= 120))
         && (!('payoutId' in data) || isValidId(data.payoutId))
         && (!('reviewedByUid' in data) || isValidId(data.reviewedByUid))
         && (!('adminNotes' in data) || (data.adminNotes is string && data.adminNotes.size() <= 500))
+        && (!('reversedReason' in data) || (data.reversedReason is string && data.reversedReason.size() <= 300))
         && (!('isSimulation' in data) || data.isSimulation is bool)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -2359,16 +2382,22 @@ service cloud.firestore {
         ])
         && data.keys().hasOnly([
           'ownerUid', 'referralCode', 'totalReferrals', 'verifiedPaidReferrals',
-          'pendingBalanceInr', 'approvedBalanceInr', 'paidBalanceInr', 'totalEarnedInr',
-          'createdAt', 'updatedAt'
+          'pendingReferrals', 'pendingBalanceInr', 'approvedBalanceInr', 'paidBalanceInr',
+          'availableBalanceInr', 'pendingWithdrawalInr', 'withdrawnBalanceInr', 'reversedBalanceInr',
+          'totalEarnedInr', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.ownerUid)
         && data.referralCode is string && data.referralCode.size() >= 4 && data.referralCode.size() <= 32
         && data.totalReferrals is number && data.totalReferrals >= 0 && data.totalReferrals <= 100000
         && data.verifiedPaidReferrals is number && data.verifiedPaidReferrals >= 0 && data.verifiedPaidReferrals <= 100000
+        && (!('pendingReferrals' in data) || (data.pendingReferrals is number && data.pendingReferrals >= 0 && data.pendingReferrals <= 100000))
         && data.pendingBalanceInr is number && data.pendingBalanceInr >= 0 && data.pendingBalanceInr <= 10000000
         && data.approvedBalanceInr is number && data.approvedBalanceInr >= 0 && data.approvedBalanceInr <= 10000000
         && data.paidBalanceInr is number && data.paidBalanceInr >= 0 && data.paidBalanceInr <= 10000000
+        && (!('availableBalanceInr' in data) || (data.availableBalanceInr is number && data.availableBalanceInr >= 0 && data.availableBalanceInr <= 10000000))
+        && (!('pendingWithdrawalInr' in data) || (data.pendingWithdrawalInr is number && data.pendingWithdrawalInr >= 0 && data.pendingWithdrawalInr <= 10000000))
+        && (!('withdrawnBalanceInr' in data) || (data.withdrawnBalanceInr is number && data.withdrawnBalanceInr >= 0 && data.withdrawnBalanceInr <= 10000000))
+        && (!('reversedBalanceInr' in data) || (data.reversedBalanceInr is number && data.reversedBalanceInr >= 0 && data.reversedBalanceInr <= 10000000))
         && data.totalEarnedInr is number && data.totalEarnedInr >= 0 && data.totalEarnedInr <= 10000000
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -2395,6 +2424,129 @@ service cloud.firestore {
         && data.paidAt is string && data.paidAt.size() >= 8 && data.paidAt.size() <= 40
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
+    }
+
+    function isValidWorkerRegistrationPayment(data) {
+      return data.keys().hasAll([
+          'workerUid', 'workerName', 'workerSkill', 'workerLocation', 'workerMobileMasked',
+          'provisionalAppId', 'amountInr', 'paymentMethod', 'status', 'orderRef',
+          'utrOrGatewayRef', 'gatewaySignatureVerified', 'refundPolicyAccepted',
+          'noEmploymentGuaranteeAccepted', 'otpVerified', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'workerUid', 'workerName', 'workerSkill', 'workerLocation', 'workerMobileMasked',
+          'provisionalAppId', 'verifiedWorkerId', 'amountInr', 'paymentMethod', 'status',
+          'orderRef', 'utrOrGatewayRef', 'payerUpiOrName', 'gatewayOrderId', 'gatewayPaymentId',
+          'gatewaySignatureVerified', 'receiptNo', 'certificateNo', 'refundPolicyAccepted',
+          'noEmploymentGuaranteeAccepted', 'otpVerified', 'referredByCode', 'referredByUid',
+          'adminNotes', 'verifiedByUid', 'verifiedAtIso', 'refundReference', 'refundReason',
+          'refundedAtIso', 'isDemo', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.workerUid)
+        && data.workerName is string && data.workerName.size() >= 2 && data.workerName.size() <= 120
+        && data.workerSkill is string && data.workerSkill.size() >= 2 && data.workerSkill.size() <= 80
+        && data.workerLocation is string && data.workerLocation.size() >= 2 && data.workerLocation.size() <= 160
+        && data.workerMobileMasked is string && data.workerMobileMasked.size() >= 6 && data.workerMobileMasked.size() <= 24
+        && data.provisionalAppId is string && data.provisionalAppId.size() >= 5 && data.provisionalAppId.size() <= 40
+        && (!('verifiedWorkerId' in data) || (data.verifiedWorkerId is string && data.verifiedWorkerId.size() >= 5 && data.verifiedWorkerId.size() <= 40))
+        && data.amountInr is number && data.amountInr >= 1 && data.amountInr <= 50000
+        && data.paymentMethod in ['gateway', 'upi_qr']
+        && data.status in ['pending', 'verified', 'failed', 'refunded']
+        && data.orderRef is string && data.orderRef.size() >= 4 && data.orderRef.size() <= 80
+        && data.utrOrGatewayRef is string && data.utrOrGatewayRef.size() >= 4 && data.utrOrGatewayRef.size() <= 120
+        && (!('payerUpiOrName' in data) || (data.payerUpiOrName is string && data.payerUpiOrName.size() <= 120))
+        && (!('gatewayOrderId' in data) || (data.gatewayOrderId is string && data.gatewayOrderId.size() <= 120))
+        && (!('gatewayPaymentId' in data) || (data.gatewayPaymentId is string && data.gatewayPaymentId.size() <= 120))
+        && data.gatewaySignatureVerified is bool
+        && (!('receiptNo' in data) || (data.receiptNo is string && data.receiptNo.size() <= 60))
+        && (!('certificateNo' in data) || (data.certificateNo is string && data.certificateNo.size() <= 60))
+        && data.refundPolicyAccepted is bool
+        && data.noEmploymentGuaranteeAccepted is bool
+        && data.otpVerified is bool
+        && (!('referredByCode' in data) || (data.referredByCode is string && data.referredByCode.size() <= 32))
+        && (!('referredByUid' in data) || isValidId(data.referredByUid))
+        && (!('adminNotes' in data) || (data.adminNotes is string && data.adminNotes.size() <= 500))
+        && (!('verifiedByUid' in data) || isValidId(data.verifiedByUid))
+        && (!('verifiedAtIso' in data) || (data.verifiedAtIso is string && data.verifiedAtIso.size() <= 40))
+        && (!('refundReference' in data) || (data.refundReference is string && data.refundReference.size() <= 120))
+        && (!('refundReason' in data) || (data.refundReason is string && data.refundReason.size() <= 300))
+        && (!('refundedAtIso' in data) || (data.refundedAtIso is string && data.refundedAtIso.size() <= 40))
+        && (!('isDemo' in data) || data.isDemo is bool)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidReferralWithdrawalRequest(data) {
+      return data.keys().hasAll([
+          'workerUid', 'workerName', 'referralCode', 'amountInr', 'payoutMethod',
+          'maskedDestination', 'status', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'workerUid', 'workerName', 'referralCode', 'amountInr', 'payoutMethod',
+          'maskedDestination', 'status', 'transactionReference', 'adminNotes',
+          'reviewedByUid', 'paidAtIso', 'isDemo', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.workerUid)
+        && data.workerName is string && data.workerName.size() >= 2 && data.workerName.size() <= 120
+        && data.referralCode is string && data.referralCode.size() >= 4 && data.referralCode.size() <= 32
+        && data.amountInr is number && data.amountInr >= 50 && data.amountInr <= 500000
+        && data.payoutMethod in ['upi', 'bank_transfer']
+        && data.maskedDestination is string && data.maskedDestination.size() >= 4 && data.maskedDestination.size() <= 140
+        && data.status in ['pending', 'approved', 'paid', 'rejected']
+        && (!('transactionReference' in data) || (data.transactionReference is string && data.transactionReference.size() <= 120))
+        && (!('adminNotes' in data) || (data.adminNotes is string && data.adminNotes.size() <= 500))
+        && (!('reviewedByUid' in data) || isValidId(data.reviewedByUid))
+        && (!('paidAtIso' in data) || (data.paidAtIso is string && data.paidAtIso.size() <= 40))
+        && (!('isDemo' in data) || data.isDemo is bool)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidWorkerPayoutSecret(data) {
+      return data.keys().hasAll(['withdrawalId', 'ownerUid', 'payoutMethod', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'withdrawalId', 'ownerUid', 'payoutMethod', 'upiId',
+          'accountHolderName', 'accountNumber', 'ifscCode', 'bankName',
+          'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.withdrawalId)
+        && isValidId(data.ownerUid)
+        && data.payoutMethod in ['upi', 'bank_transfer']
+        && (!('upiId' in data) || (data.upiId is string && data.upiId.size() <= 100))
+        && (!('accountHolderName' in data) || (data.accountHolderName is string && data.accountHolderName.size() <= 120))
+        && (!('accountNumber' in data) || (data.accountNumber is string && data.accountNumber.size() <= 40))
+        && (!('ifscCode' in data) || (data.ifscCode is string && data.ifscCode.size() <= 20))
+        && (!('bankName' in data) || (data.bankName is string && data.bankName.size() <= 100))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidFinancialLedgerEntry(data) {
+      return data.keys().hasAll([
+          'entryType', 'direction', 'amountInr', 'workerUid', 'workerName',
+          'referenceId', 'paymentOrUtrRef', 'description', 'recordedByUid',
+          'recordedByEmail', 'createdAt'
+        ])
+        && data.keys().hasOnly([
+          'entryType', 'direction', 'amountInr', 'workerUid', 'workerName',
+          'referenceId', 'paymentOrUtrRef', 'description', 'recordedByUid',
+          'recordedByEmail', 'isDemo', 'createdAt'
+        ])
+        && data.entryType in [
+          'registration_payment', 'registration_refund',
+          'referral_reward_credit', 'referral_reward_reversal', 'withdrawal_payout'
+        ]
+        && data.direction in ['credit', 'debit']
+        && data.amountInr is number && data.amountInr > 0 && data.amountInr <= 1000000
+        && isValidId(data.workerUid)
+        && data.workerName is string && data.workerName.size() >= 2 && data.workerName.size() <= 120
+        && isValidId(data.referenceId)
+        && data.paymentOrUtrRef is string && data.paymentOrUtrRef.size() >= 2 && data.paymentOrUtrRef.size() <= 120
+        && data.description is string && data.description.size() >= 3 && data.description.size() <= 400
+        && isValidId(data.recordedByUid)
+        && data.recordedByEmail is string && data.recordedByEmail.size() >= 3 && data.recordedByEmail.size() <= 200
+        && (!('isDemo' in data) || data.isDemo is bool)
+        && data.createdAt is timestamp;
     }
 
     // ============================================================
@@ -2617,14 +2769,14 @@ service cloud.firestore {
         && (
           isAdmin() ||
           (
-            // One locked referral record per newly registered worker, doc ID == referredUid, no self-referral, ₹0 during free launch
+            // One locked single-level referral record per newly registered worker, doc ID == referredUid, no self-referral, ₹0 until verified
             referralId == request.auth.uid
             && incoming().referredUid == request.auth.uid
             && incoming().referrerUid != request.auth.uid
             && incoming().locked == true
-            && incoming().registrationPaymentStatus == 'free_launch'
+            && incoming().registrationPaymentStatus in ['free_launch', 'payment_pending']
             && incoming().registrationFeePaidInr == 0
-            && incoming().rewardStatus == 'free_not_eligible'
+            && incoming().rewardStatus in ['free_not_eligible', 'pending_verification']
             && incoming().rewardAmountInr == 0
             && (!('isSimulation' in incoming()) || incoming().isSimulation == false)
             && !exists(/databases/$(database)/documents/workerReferrals/$(referralId))
@@ -2796,6 +2948,126 @@ service cloud.firestore {
           )
         );
       allow delete: if isValidId(sessionId) && isAdmin();
+    }
+
+    // ============================================================
+    // WORKER ₹250 REGISTRATION PAYMENTS, WITHDRAWALS & AUDIT LEDGER
+    // ============================================================
+
+    match /workerRegistrationPayments/{paymentId} {
+      allow get: if isValidId(paymentId)
+        && isVerifiedUser()
+        && (isAdmin() || existing().workerUid == request.auth.uid);
+      allow list: if isVerifiedUser()
+        && (isAdmin() || existing().workerUid == request.auth.uid);
+      allow create: if isValidId(paymentId)
+        && isVerifiedUser()
+        && isValidWorkerRegistrationPayment(incoming())
+        && isValidTimestampOnCreate()
+        && (
+          isAdmin() ||
+          (
+            // Workers can ONLY submit a pending ₹250 payment record — never self-verify!
+            paymentId == request.auth.uid
+            && incoming().workerUid == request.auth.uid
+            && incoming().amountInr == 250
+            && incoming().status == 'pending'
+            && incoming().gatewaySignatureVerified == false
+            && !('verifiedWorkerId' in incoming())
+            && !('receiptNo' in incoming())
+            && !('certificateNo' in incoming())
+            && !('verifiedByUid' in incoming())
+            && !('refundReference' in incoming())
+            && (!('isDemo' in incoming()) || incoming().isDemo == false)
+          )
+        );
+      allow update: if isValidId(paymentId)
+        && isVerifiedUser()
+        && isValidWorkerRegistrationPayment(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().workerUid == existing().workerUid
+        && (
+          isAdmin() ||
+          (
+            // Worker can resubmit UTR/payment proof ONLY while pending or failed; status remains strictly pending
+            isOwner(existing().workerUid)
+            && existing().status in ['pending', 'failed']
+            && incoming().status == 'pending'
+            && incoming().amountInr == existing().amountInr
+            && incoming().gatewaySignatureVerified == false
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'paymentMethod', 'orderRef', 'utrOrGatewayRef', 'payerUpiOrName',
+              'gatewayOrderId', 'gatewayPaymentId', 'status', 'refundPolicyAccepted',
+              'noEmploymentGuaranteeAccepted', 'otpVerified', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isValidId(paymentId) && isAdmin();
+    }
+
+    match /referralWithdrawals/{withdrawalId} {
+      allow get: if isValidId(withdrawalId)
+        && isVerifiedUser()
+        && (isAdmin() || existing().workerUid == request.auth.uid);
+      allow list: if isVerifiedUser()
+        && (isAdmin() || existing().workerUid == request.auth.uid);
+      allow create: if isValidId(withdrawalId)
+        && isVerifiedUser()
+        && isValidReferralWithdrawalRequest(incoming())
+        && isValidTimestampOnCreate()
+        && (
+          isAdmin() ||
+          (
+            incoming().workerUid == request.auth.uid
+            && incoming().status == 'pending'
+            && !('transactionReference' in incoming())
+            && !('reviewedByUid' in incoming())
+            && !('paidAtIso' in incoming())
+            && (!('isDemo' in incoming()) || incoming().isDemo == false)
+          )
+        );
+      allow update: if isValidId(withdrawalId)
+        && isAdmin()
+        && isValidReferralWithdrawalRequest(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().workerUid == existing().workerUid
+        && incoming().amountInr == existing().amountInr;
+      allow delete: if isValidId(withdrawalId) && isAdmin();
+    }
+
+    match /workerPayoutSecrets/{withdrawalId} {
+      // Strictly private banking / UPI payout details: ONLY the owning worker and authorized Admin
+      allow get: if isValidId(withdrawalId)
+        && isVerifiedUser()
+        && (isAdmin() || existing().ownerUid == request.auth.uid);
+      allow list: if isVerifiedUser()
+        && (isAdmin() || existing().ownerUid == request.auth.uid);
+      allow create: if isValidId(withdrawalId)
+        && isVerifiedUser()
+        && isValidWorkerPayoutSecret(incoming())
+        && incoming().withdrawalId == withdrawalId
+        && isValidTimestampOnCreate()
+        && (isAdmin() || incoming().ownerUid == request.auth.uid);
+      allow update: if isValidId(withdrawalId)
+        && isAdmin()
+        && isValidWorkerPayoutSecret(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().withdrawalId == existing().withdrawalId;
+      allow delete: if isValidId(withdrawalId) && isAdmin();
+    }
+
+    match /financialLedger/{entryId} {
+      // Auditable immutable financial transaction ledger — Admin only
+      allow get: if isValidId(entryId) && isAdmin();
+      allow list: if isAdmin();
+      allow create: if isValidId(entryId)
+        && isAdmin()
+        && isValidFinancialLedgerEntry(incoming())
+        && incoming().recordedByUid == request.auth.uid
+        && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isValidId(entryId) && isAdmin();
     }
   }
 }

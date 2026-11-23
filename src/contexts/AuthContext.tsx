@@ -21,6 +21,7 @@ import type {
 } from '../types/domain';
 import { subscribeCustomerPreference } from '../lib/firestoreService';
 import { clearPhotoCache } from '../lib/photoStorageService';
+import { disableCurrentDeviceTokenOnLogout } from '../lib/pushNotifications';
 import { useLanguage } from '../i18n/LanguageContext';
 
 interface AuthContextValue {
@@ -168,8 +169,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const clearAuthError = () => setAuthError('');
 
   const logout = async () => {
+    const currentUid = user?.uid;
     clearPhotoCache();
     setAuthError('');
+    if (currentUid) {
+      await disableCurrentDeviceTokenOnLogout(currentUid).catch(() => undefined);
+    }
     await signOut(auth);
   };
 

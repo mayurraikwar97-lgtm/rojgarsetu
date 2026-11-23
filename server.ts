@@ -13,6 +13,7 @@ import { classifyRequestRuleBased } from './src/lib/aiFallbackClassifier.ts';
 import { registerNotificationRoutes } from './src/server/notificationsEngine.ts';
 import { registerAdsAndReferralsRoutes } from './src/server/adsAndReferralsEngine.ts';
 import { registerPrivacyAndCallRoutes } from './src/server/privacyAndCallEngine.ts';
+import { registerPaymentAndFinanceRoutes } from './src/server/paymentReferralEngine.ts';
 import { getOtpPublicConfig, handleOtpRequest, handleOtpVerify } from './src/server/otpEngine.ts';
 
 dotenv.config();
@@ -345,7 +346,14 @@ function extractGoogleGeoFields(
 async function startServer() {
   const app = express();
   const httpServer = http.createServer(app);
-  app.use(express.json({ limit: '15mb' }));
+  app.use(
+    express.json({
+      limit: '15mb',
+      verify: (req, _res, buf) => {
+        (req as Request & { rawBody?: string }).rawBody = buf.toString('utf8');
+      },
+    })
+  );
 
   app.get('/api/health', (_req: Request, res: Response) => {
     res.json({
@@ -374,6 +382,7 @@ async function startServer() {
   registerNotificationRoutes(app, __dirname);
   registerAdsAndReferralsRoutes(app, __dirname);
   registerPrivacyAndCallRoutes(app, __dirname);
+  registerPaymentAndFinanceRoutes(app, __dirname);
 
   // Google Maps Geocoding API v4 Reverse Proxy (handles CORS & attribution header)
   app.get('/api/geocode/reverse', async (req: Request, res: Response) => {

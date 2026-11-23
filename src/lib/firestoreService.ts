@@ -278,6 +278,8 @@ export async function saveWorkerRegistration(
         tx.set(pubRef, {
           ...cleanPub,
           verificationStatus: 'pending',
+          registrationPaymentStatus: 'pending',
+          paidBenefitsActive: false,
           completedJobsCount: 0,
           ratingAvg: 0,
           createdAt: serverTimestamp(),
@@ -317,6 +319,7 @@ export async function saveWorkerRegistration(
       if (!privSnap.exists()) {
         tx.set(privRef, {
           ...cleanPriv,
+          registrationPaymentStatus: 'pending',
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
@@ -332,6 +335,12 @@ export async function saveWorkerRegistration(
           ...(cleanPriv.preferredWorkLocation ? { preferredWorkLocation: cleanPriv.preferredWorkLocation } : {}),
           liveLocationConsent: cleanPriv.liveLocationConsent,
           privacyConsent: cleanPriv.privacyConsent,
+          ...(typeof cleanPriv.refundPolicyAccepted === 'boolean'
+            ? { refundPolicyAccepted: cleanPriv.refundPolicyAccepted }
+            : {}),
+          ...(typeof cleanPriv.noEmploymentGuaranteeAccepted === 'boolean'
+            ? { noEmploymentGuaranteeAccepted: cleanPriv.noEmploymentGuaranteeAccepted }
+            : {}),
           idVerificationStatus: cleanPriv.idVerificationStatus,
           ...(cleanPriv.certificateNotes ? { certificateNotes: cleanPriv.certificateNotes } : {}),
           ...(cleanPriv.photoUrl ? { photoUrl: cleanPriv.photoUrl } : {}),

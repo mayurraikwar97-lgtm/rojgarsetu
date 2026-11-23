@@ -93,6 +93,9 @@ export interface UserAccount {
 
 export type ServiceRadiusKm = 2 | 5 | 10 | 20 | 30;
 
+export type RegistrationPaymentStatus = 'pending' | 'verified' | 'failed' | 'refunded';
+export type PaymentMethodType = 'gateway' | 'upi_qr';
+
 export interface PublicWorkerProfile {
   id: string;
   ownerUid: string;
@@ -114,6 +117,11 @@ export interface PublicWorkerProfile {
   gender?: 'female' | 'male' | 'other' | 'prefer_not_to_say';
   education?: string;
   verificationStatus: VerificationStatus;
+  registrationPaymentStatus?: RegistrationPaymentStatus;
+  paidBenefitsActive?: boolean;
+  paymentReceiptNo?: string;
+  certificateNo?: string;
+  verifiedAtIso?: string;
   isWomenEnterprise?: boolean;
   photoDocId?: string;
   preferredLanguage?: Language;
@@ -142,6 +150,9 @@ export interface WorkerPrivateInfo {
   preferredWorkLocation?: string;
   liveLocationConsent: boolean;
   privacyConsent: boolean;
+  refundPolicyAccepted?: boolean;
+  noEmploymentGuaranteeAccepted?: boolean;
+  registrationPaymentStatus?: RegistrationPaymentStatus;
   idVerificationStatus: 'not_submitted' | 'voluntary_pending' | 'verified';
   certificateNotes?: string;
   photoUrl?: string;
@@ -1022,7 +1033,9 @@ export type ReferralRewardStatus =
   | 'pending_verification'
   | 'approved'
   | 'paid'
-  | 'rejected';
+  | 'rejected'
+  | 'held'
+  | 'reversed';
 
 export interface WorkerReferralRecord {
   id: string; // equals referredUid to guarantee 1 locked referral owner per worker
@@ -1039,6 +1052,9 @@ export interface WorkerReferralRecord {
   rewardStatus: ReferralRewardStatus;
   rewardAmountInr: number;
   paymentReference?: string;
+  paymentId?: string;
+  otpVerified?: boolean;
+  singleLevelVerified?: boolean;
   fraudFlags?: string[];
   adminNotes?: string;
   isSimulation?: boolean;
@@ -1057,12 +1073,14 @@ export interface ReferralRewardRecord {
   referralCode: string;
   registrationFeeInr: number;
   rewardAmountInr: number;
-  status: 'pending' | 'approved' | 'paid' | 'rejected';
+  status: 'pending' | 'approved' | 'paid' | 'rejected' | 'held' | 'reversed';
   eligibilityReason: string;
+  paymentId?: string;
   paymentReference?: string;
   payoutId?: string;
   reviewedByUid?: string;
   adminNotes?: string;
+  reversedReason?: string;
   isSimulation?: boolean;
   createdAt?: unknown;
   updatedAt?: unknown;
@@ -1074,9 +1092,14 @@ export interface ReferralWallet {
   referralCode: string;
   totalReferrals: number;
   verifiedPaidReferrals: number;
+  pendingReferrals?: number;
   pendingBalanceInr: number;
   approvedBalanceInr: number;
   paidBalanceInr: number;
+  availableBalanceInr?: number;
+  pendingWithdrawalInr?: number;
+  withdrawnBalanceInr?: number;
+  reversedBalanceInr?: number;
   totalEarnedInr: number;
   createdAt?: unknown;
   updatedAt?: unknown;
@@ -1097,5 +1120,114 @@ export interface ReferralPayoutRecord {
   createdAt?: unknown;
   updatedAt?: unknown;
 }
+
+export interface WorkerRegistrationPayment {
+  id: string;
+  workerUid: string;
+  workerName: string;
+  workerSkill: string;
+  workerLocation: string;
+  workerMobileMasked: string;
+  provisionalAppId: string;
+  verifiedWorkerId?: string;
+  amountInr: number;
+  paymentMethod: PaymentMethodType;
+  status: RegistrationPaymentStatus;
+  orderRef: string;
+  utrOrGatewayRef: string;
+  payerUpiOrName?: string;
+  gatewayOrderId?: string;
+  gatewayPaymentId?: string;
+  gatewaySignatureVerified: boolean;
+  receiptNo?: string;
+  certificateNo?: string;
+  refundPolicyAccepted: boolean;
+  noEmploymentGuaranteeAccepted: boolean;
+  otpVerified: boolean;
+  referredByCode?: string;
+  referredByUid?: string;
+  adminNotes?: string;
+  verifiedByUid?: string;
+  verifiedAtIso?: string;
+  refundReference?: string;
+  refundReason?: string;
+  refundedAtIso?: string;
+  isDemo?: boolean;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export type WithdrawalRequestStatus = 'pending' | 'approved' | 'paid' | 'rejected';
+
+export interface ReferralWithdrawalRequest {
+  id: string;
+  workerUid: string;
+  workerName: string;
+  referralCode: string;
+  amountInr: number;
+  payoutMethod: 'upi' | 'bank_transfer';
+  maskedDestination: string;
+  status: WithdrawalRequestStatus;
+  transactionReference?: string;
+  adminNotes?: string;
+  reviewedByUid?: string;
+  paidAtIso?: string;
+  isDemo?: boolean;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface WorkerPayoutSecret {
+  id?: string;
+  withdrawalId: string;
+  ownerUid: string;
+  payoutMethod: 'upi' | 'bank_transfer';
+  upiId?: string;
+  accountHolderName?: string;
+  accountNumber?: string;
+  ifscCode?: string;
+  bankName?: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export type FinancialLedgerEntryType =
+  | 'registration_payment'
+  | 'registration_refund'
+  | 'referral_reward_credit'
+  | 'referral_reward_reversal'
+  | 'withdrawal_payout';
+
+export interface FinancialLedgerEntry {
+  id: string;
+  entryType: FinancialLedgerEntryType;
+  direction: 'credit' | 'debit';
+  amountInr: number;
+  workerUid: string;
+  workerName: string;
+  referenceId: string;
+  paymentOrUtrRef: string;
+  description: string;
+  recordedByUid: string;
+  recordedByEmail: string;
+  isDemo?: boolean;
+  createdAt?: unknown;
+}
+
+export interface FinancialReportSummary {
+  grossRegistrationRevenueInr: number;
+  verifiedRegistrationCount: number;
+  pendingRegistrationCount: number;
+  failedRegistrationCount: number;
+  refundsInr: number;
+  refundedCount: number;
+  referralRewardsGrossInr: number;
+  referralRewardsReversedInr: number;
+  referralRewardsNetInr: number;
+  withdrawalsPaidInr: number;
+  withdrawalsPendingInr: number;
+  netBalanceInr: number;
+}
+
 
 

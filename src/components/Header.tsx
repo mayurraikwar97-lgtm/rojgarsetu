@@ -140,7 +140,7 @@ export const Header: React.FC<HeaderProps> = ({
     },
     {
       id: 'register-worker',
-      label: tr(lang, 'Worker Registration (Free)', 'कामगार पंजीकरण (निःशुल्क)', 'कामगार नोंदणी (मोफत)'),
+      label: tr(lang, 'Worker Registration (₹250)', 'कामगार पंजीकरण (₹250)', 'कामगार नोंदणी (₹250)'),
     },
     {
       id: 'register-employer',
@@ -229,8 +229,8 @@ export const Header: React.FC<HeaderProps> = ({
               ))}
             </div>
 
-            <div className="hidden md:block">
-              <PWAInstallButton />
+            <div className="shrink-0">
+              <PWAInstallButton variant="header" />
             </div>
 
             {/* 3-Language Switcher */}

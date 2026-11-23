@@ -1,6 +1,6 @@
-import { EMPLOYMENT_CATEGORIES } from '../data/categories';
-import { INDIA_STATES_DISTRICTS } from '../data/indiaLocations';
-import type { Language, VehicleTripType, VehicleType } from '../types/domain';
+import { EMPLOYMENT_CATEGORIES } from '../data/categories.ts';
+import { INDIA_STATES_DISTRICTS } from '../data/indiaLocations.ts';
+import type { Language, VehicleTripType, VehicleType } from '../types/domain.ts';
 
 export interface StructuredWorkClassification {
   transcript: string;

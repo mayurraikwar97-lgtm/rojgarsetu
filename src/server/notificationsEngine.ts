@@ -14,6 +14,7 @@ import {
   SERVICE_RADIUS_STAGES,
   buildApproxLocationLabel,
   buildSmartJobNotificationContent,
+  doesCategoryMatch,
   evaluateWorkerEligibilityForJob,
   getNextRadiusStage,
   normalizeRadiusKm,
@@ -2014,6 +2015,15 @@ export function registerNotificationRoutes(
     res.status(result.httpStatus).json(result.payload);
   });
 
+  app.post('/api/notifications/admin-targeted', async (req: Request, res: Response) => {
+    const result = await handleAdminTargetedBroadcast({
+      authHeader: req.headers.authorization || '',
+      body: (req.body || {}) as Record<string, unknown>,
+      rootDir,
+    });
+    res.status(result.httpStatus).json(result.payload);
+  });
+
   app.post('/api/notifications/demo-push', async (req: Request, res: Response) => {
     const result = await handleDemoPushDispatch({
       authHeader: req.headers.authorization || '',
@@ -2022,6 +2032,175 @@ export function registerNotificationRoutes(
     });
     res.status(result.httpStatus).json(result.payload);
   });
+}
+
+export async function handleAdminTargetedBroadcast(params: {
+  authHeader: string;
+  body: Record<string, unknown>;
+  rootDir: string;
+}): Promise<{ httpStatus: number; payload: Record<string, unknown> }> {
+  const runtime = getAdminRuntime(params.rootDir);
+  const authUser = await verifyAuthHeader(params.authHeader, runtime);
+  if (!authUser || !authUser.isAdmin) {
+    return {
+      httpStatus: 403,
+      payload: { ok: false, errorCode: 'FORBIDDEN', message: 'Authorized admin access required.' },
+    };
+  }
+  if (!checkRateLimit(`admin_targeted:${authUser.decoded.uid}`, 30)) {
+    return {
+      httpStatus: 429,
+      payload: { ok: false, errorCode: 'RATE_LIMITED', message: 'Too many targeted broadcast requests.' },
+    };
+  }
+
+  const confirmed = Boolean(params.body?.confirmed);
+  if (!confirmed) {
+    return {
+      httpStatus: 400,
+      payload: { ok: false, errorCode: 'CONFIRMATION_REQUIRED', message: 'Explicit admin confirmation is required.' },
+    };
+  }
+
+  const skillCategory = typeof params.body?.skillCategory === 'string' ? params.body.skillCategory.trim() : 'ALL';
+  const stateFilter = typeof params.body?.state === 'string' ? params.body.state.trim() : '';
+  const districtFilter = typeof params.body?.district === 'string' ? params.body.district.trim() : '';
+  const cityFilter = typeof params.body?.cityOrVillage === 'string' ? params.body.cityOrVillage.trim() : '';
+  const onlyAvailable = params.body?.onlyAvailable === true;
+  const lang = getLanguageOrDefault(params.body?.language);
+  const title =
+    typeof params.body?.title === 'string' && params.body.title.trim()
+      ? params.body.title.trim().slice(0, 140)
+      : 'नवीन काम उपलब्ध!';
+  const body =
+    typeof params.body?.body === 'string' && params.body.body.trim()
+      ? params.body.body.trim().slice(0, 420)
+      : 'नवीन ग्राहक ऑर्डर – त्वरित तपासा.';
+
+  if (!runtime.hasMessagingCredentials) {
+    return {
+      httpStatus: 503,
+      payload: {
+        ok: false,
+        errorCode: 'MISSING_ADMIN_CREDENTIALS',
+        message: 'Server Firebase Admin credentials (FIREBASE_SERVICE_ACCOUNT_JSON) are not configured for FCM dispatch.',
+      },
+    };
+  }
+
+  try {
+    const [workersSnap, tokensSnap, prefsSnap] = await Promise.all([
+      runtime.db.collection('publicWorkers').get(),
+      runtime.db.collection('device_tokens').where('enabled', '==', true).get(),
+      runtime.db.collection('notification_preferences').get(),
+    ]);
+
+    const prefsByUid = new Map<string, Record<string, unknown>>();
+    prefsSnap.docs.forEach((d) => prefsByUid.set(d.id, d.data()));
+
+    const tokensByUid = new Map<string, Array<{ docId: string; token: string; preferredLanguage?: string }>>();
+    tokensSnap.docs.forEach((d) => {
+      const data = d.data();
+      if (!data.token || !data.ownerUid) return;
+      const list = tokensByUid.get(data.ownerUid) || [];
+      list.push({ docId: d.id, token: data.token, preferredLanguage: data.preferredLanguage });
+      tokensByUid.set(data.ownerUid, list);
+    });
+
+    const targets: DeliveryTarget[] = [];
+    let matchedWorkersCount = 0;
+    const dedupeBatchId = Date.now().toString(36);
+
+    for (const wDoc of workersSnap.docs) {
+      const w = wDoc.data();
+      const uid = String(w.ownerUid || wDoc.id);
+      if (w.verificationStatus === 'suspended') continue;
+      if (onlyAvailable && w.availabilityStatus !== 'available') continue;
+
+      if (skillCategory && skillCategory !== 'ALL') {
+        const skillsArr = Array.isArray(w.skills) ? w.skills.map(String) : [];
+        const matchedSkill = doesCategoryMatch(skillCategory, [], String(w.primarySkill || ''), skillsArr);
+        if (!matchedSkill) continue;
+      }
+
+      if (stateFilter && String(w.state || '').toLowerCase() !== stateFilter.toLowerCase()) continue;
+      if (districtFilter && String(w.district || '').toLowerCase() !== districtFilter.toLowerCase()) continue;
+      if (
+        cityFilter &&
+        !String(w.cityOrVillage || '').toLowerCase().includes(cityFilter.toLowerCase()) &&
+        !String(w.district || '').toLowerCase().includes(cityFilter.toLowerCase())
+      ) {
+        continue;
+      }
+
+      const pref = prefsByUid.get(uid);
+      if (pref && pref.masterEnabled === false) continue;
+
+      matchedWorkersCount += 1;
+      const workerTokens = tokensByUid.get(uid) || [];
+      const targetLang = getLanguageOrDefault(pref?.preferredLanguage || workerTokens[0]?.preferredLanguage || lang);
+
+      targets.push({
+        uid,
+        label: String(w.displayName || `Worker (${uid.slice(0, 6)})`),
+        role: 'worker',
+        isDemo: false,
+        language: targetLang,
+        tokens: workerTokens.map((t) => ({ docId: t.docId, token: t.token })),
+        title,
+        body,
+        category: 'matchingJobs',
+        targetRoute: 'worker-dashboard',
+        clickUrl: '/?route=worker-dashboard',
+        dedupeKey: `admin_targeted_${dedupeBatchId}_${uid}`,
+      });
+    }
+
+    if (targets.length === 0) {
+      return {
+        httpStatus: 200,
+        payload: {
+          ok: false,
+          errorCode: 'NO_MATCHING_WORKERS',
+          matchedWorkersCount: 0,
+          attemptedTokens: 0,
+          sentCount: 0,
+          failedCount: 0,
+          message: 'No registered workers matched the selected skill category and location filters.',
+        },
+      };
+    }
+
+    const dispatchResult = await dispatchAndRecordTargets({
+      runtime,
+      targets,
+      sentByUid: authUser.decoded.uid,
+    });
+
+    await runtime.db
+      .collection('auditLogs')
+      .add({
+        adminUid: authUser.decoded.uid,
+        adminEmail: authUser.decoded.email || 'admin@rojgarsetu',
+        action: 'notification_targeted_broadcast',
+        targetCollection: 'notification_delivery_logs',
+        targetId: `${skillCategory}_${districtFilter || stateFilter || 'INDIA'}`,
+        details: `Matched=${matchedWorkersCount}, AttemptedTokens=${dispatchResult.attemptedTokens}, Sent=${dispatchResult.sentCount}, Failed=${dispatchResult.failedCount}`,
+        createdAt: FieldValue.serverTimestamp(),
+      })
+      .catch(() => undefined);
+
+    return {
+      httpStatus: 200,
+      payload: {
+        ...dispatchResult,
+        matchedWorkersCount,
+      },
+    };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'Targeted notification broadcast error';
+    return { httpStatus: 500, payload: { ok: false, errorCode: 'SERVER_ERROR', message } };
+  }
 }
 
 export async function handleDemoPushDispatch(params: {
