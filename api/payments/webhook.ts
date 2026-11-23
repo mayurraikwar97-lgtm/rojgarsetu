@@ -17,9 +17,14 @@ export default async function handler(req: ServerlessRequest, res: ServerlessRes
     typeof req.headers['x-razorpay-signature'] === 'string'
       ? req.headers['x-razorpay-signature']
       : '';
+  const eventIdHeader =
+    typeof req.headers['x-razorpay-event-id'] === 'string'
+      ? req.headers['x-razorpay-event-id']
+      : '';
   const out = await handleRazorpayWebhook({
     rawBody,
     signatureHeader: sigHeader,
+    eventIdHeader,
     rootDir: process.cwd(),
   });
   sendJson(res, out.httpStatus, out.payload);

@@ -44,6 +44,9 @@ export interface PaymentGatewayPublicConfig {
   webhookConfigured?: boolean;
   serverAdminDbConfigured?: boolean;
   gatewayProvider: 'razorpay' | 'upi_qr';
+  razorpayMode?: 'test' | 'live_blocked' | 'unconfigured';
+  testModeEnforced?: boolean;
+  configError?: string;
   razorpayKeyId?: string;
   missingGatewayEnvVars?: string[];
   officialUpiId: string;
@@ -55,6 +58,9 @@ export interface PaymentGatewayPublicConfig {
 export interface CreatedPaymentOrder {
   mode: 'gateway' | 'upi_qr';
   gatewayProvider: 'razorpay' | 'upi_qr';
+  razorpayMode?: 'test' | 'live_blocked' | 'unconfigured';
+  testModeEnforced?: boolean;
+  configError?: string;
   gatewayConfigured?: boolean;
   missingGatewayEnvVars?: string[];
   razorpayKeyId?: string;
@@ -168,12 +174,15 @@ export async function fetchPaymentGatewayConfig(): Promise<PaymentGatewayPublicC
       referralRewardInr: SINGLE_LEVEL_REFERRAL_REWARD_INR,
       gatewayConfigured: false,
       gatewayProvider: 'upi_qr',
+      razorpayMode: 'unconfigured',
+      testModeEnforced: true,
+      configError: 'Unable to fetch server payment configuration.',
       officialUpiId: 'rojgarsetu.abujmad@upi',
       officialUpiPayeeName: 'Rojgar Setu Abujmad Foundation',
       refundPolicySummary:
         'One-time ₹250 registration fee is refundable only for verified duplicate/failed transactions or valid cancellation before benefit activation within 7 days.',
       noEmploymentGuaranteeNotice:
-        'Rojgar Setu is a public-service workforce connection portal. Paying ₹250 does not guarantee employment or fixed income.',
+        'Registration fee payment does not guarantee employment or job allocation.',
     };
   }
   return (await resp.json()) as PaymentGatewayPublicConfig;
@@ -231,6 +240,8 @@ export async function verifyGatewaySignatureOnServer(params: {
 }): Promise<{
   verified: boolean;
   captured?: boolean;
+  alreadyVerified?: boolean;
+  razorpayMode?: string;
   verifiedAtIso?: string;
   activatedOnServer?: boolean;
   verifiedWorkerId?: string;
@@ -253,6 +264,8 @@ export async function verifyGatewaySignatureOnServer(params: {
   const data = (await resp.json()) as {
     verified?: boolean;
     captured?: boolean;
+    alreadyVerified?: boolean;
+    razorpayMode?: string;
     verifiedAtIso?: string;
     activatedOnServer?: boolean;
     verifiedWorkerId?: string;
@@ -269,6 +282,8 @@ export async function verifyGatewaySignatureOnServer(params: {
   return {
     verified: true,
     captured: data.captured,
+    alreadyVerified: data.alreadyVerified,
+    razorpayMode: data.razorpayMode,
     verifiedAtIso: data.verifiedAtIso,
     activatedOnServer: data.activatedOnServer,
     verifiedWorkerId: data.verifiedWorkerId,
@@ -278,6 +293,31 @@ export async function verifyGatewaySignatureOnServer(params: {
     referralMessage: data.referralMessage,
     reason: data.reason,
   };
+}
+
+export async function recordGatewayAttemptOnServer(params: {
+  outcome: 'failed' | 'cancelled';
+  gatewayOrderId?: string;
+  gatewayPaymentId?: string;
+  orderRef?: string;
+  reason?: string;
+}): Promise<{ ok: boolean; status?: string }> {
+  try {
+    const token = await auth.currentUser?.getIdToken();
+    if (!token) return { ok: false };
+    const resp = await fetch('/api/payments/record-attempt', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(params),
+    });
+    if (!resp.ok) return { ok: false };
+    return (await resp.json()) as { ok: boolean; status?: string };
+  } catch {
+    return { ok: false };
+  }
 }
 
 export interface ServerDemoVerificationStep {

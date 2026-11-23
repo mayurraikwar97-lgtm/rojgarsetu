@@ -61,6 +61,7 @@ import {
   PaymentStatusBadge,
   WorkerDigitalIdCard,
   WorkerPaymentCheckoutCard,
+  WorkerPaymentHistoryCard,
   WorkerPaymentReceiptCard,
   WorkerRegistrationCertificateCard,
 } from './WorkerCertificateAndReceipt';
@@ -1145,6 +1146,12 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
 
             {/* Official Worker Registration Certificate (Unlocked strictly after ₹250 verification) */}
             <WorkerRegistrationCertificateCard
+              workerProfile={workerProfile}
+              payment={ownPayment}
+            />
+
+            {/* Registration Payment Status & History (Always visible in Worker Dashboard) */}
+            <WorkerPaymentHistoryCard
               workerProfile={workerProfile}
               payment={ownPayment}
             />

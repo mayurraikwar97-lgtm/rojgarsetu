@@ -37,10 +37,13 @@ import { ProfilePhotoUploader, type SelectedProfilePhoto } from './ProfilePhotoU
 import { PWAInstallButton } from './PWAControls';
 import { SecureAvatar } from './SecureAvatar';
 import {
+  PaymentStatusBadge,
   WorkerDigitalIdCard,
   WorkerPaymentCheckoutCard,
+  WorkerPaymentHistoryCard,
   WorkerPaymentReceiptCard,
   WorkerRegistrationCertificateCard,
+  downloadOfficialPaymentReceipt,
 } from './WorkerCertificateAndReceipt';
 
 interface WorkerRegistrationFormProps {
@@ -561,11 +564,47 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
                 ? 'प्रोफ़ाइल सहेजने के बाद आधिकारिक UPI QR या पेमेंट गेटवे से ₹250 एकमुश्त शुल्क जमा करें। भुगतान सत्यापित होने पर ही आपका अद्वितीय कामगार ID (RS-W-...), डिजिटल पहचान पत्र, पंजीकरण प्रमाणपत्र, भुगतान रसीद और ₹50 सिंगल-लेवल रेफरल कोड सक्रिय होगा।'
                 : 'After saving your details below, pay the one-time ₹250 registration fee via Official UPI QR or configured Payment Gateway. Your unique Verified Worker ID (RS-W-...), Digital Worker ID Card, Official Registration Certificate, Payment Receipt, and ₹50 Single-Level Referral Code activate only after payment verification.'}
             </p>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs">
+              <div>
+                <div className="text-[11px] font-bold uppercase text-slate-500">Registration Fee</div>
+                <div className="font-mono-tabular text-sm font-extrabold text-[#0B3B75] mt-0.5">
+                  ₹{WORKER_REGISTRATION_FEE_INR}
+                </div>
+              </div>
+              <div>
+                <div className="text-[11px] font-bold uppercase text-slate-500">Payment Method</div>
+                <div className="font-extrabold text-[#0B3B75] mt-0.5">Razorpay</div>
+              </div>
+              <div>
+                <div className="text-[11px] font-bold uppercase text-slate-500">Payment Status</div>
+                <div className="mt-0.5">
+                  <PaymentStatusBadge
+                    status={ownPayment?.status || workerProfile?.registrationPaymentStatus || 'pending'}
+                    lang={lang}
+                  />
+                </div>
+              </div>
+              <div>
+                <div className="text-[11px] font-bold uppercase text-slate-500">Payment Receipt</div>
+                <div className="mt-0.5">
+                  {ownPayment && ownPayment.status === 'verified' ? (
+                    <button
+                      type="button"
+                      onClick={() => downloadOfficialPaymentReceipt(ownPayment)}
+                      className="text-xs font-extrabold text-[#15803D] underline cursor-pointer"
+                    >
+                      Download
+                    </button>
+                  ) : (
+                    <span className="text-[11px] font-semibold text-slate-500">After verification</span>
+                  )}
+                </div>
+              </div>
+            </div>
             <div className="text-[11px] text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 text-[#E06D1B] shrink-0 mt-0.5" />
               <span>
-                <strong>Disclosure:</strong> Paying ₹250 activates verified platform registration and does{' '}
-                <strong>not guarantee employment</strong>. Refunds apply only to verified duplicate/failed transactions or valid cancellation before benefit activation within 7 days.
+                <strong>Disclosure:</strong> Registration fee payment does not guarantee employment or job allocation. Refunds apply only to verified duplicate/failed transactions or valid cancellation before benefit activation within 7 days.
               </span>
             </div>
           </div>
@@ -620,8 +659,11 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
                 </div>
                 <div>
                   <div className="text-slate-500 text-xs font-medium">Payment Status</div>
-                  <div className="font-bold text-[#0B3B75] uppercase mt-0.5">
-                    {ownPayment?.status || workerProfile?.registrationPaymentStatus || 'pending'}
+                  <div className="mt-1">
+                    <PaymentStatusBadge
+                      status={ownPayment?.status || workerProfile?.registrationPaymentStatus || 'pending'}
+                      lang={lang}
+                    />
                   </div>
                 </div>
                 <div>
@@ -693,6 +735,9 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
               onPaymentSubmitted={() => void refreshUserProfiles()}
             />
           )}
+
+          {/* Registration Payment Status & History */}
+          <WorkerPaymentHistoryCard workerProfile={workerProfile} payment={ownPayment} />
 
           {/* Receipt Card (shown as soon as payment proof is submitted or verified) */}
           {ownPayment && <WorkerPaymentReceiptCard payment={ownPayment} />}

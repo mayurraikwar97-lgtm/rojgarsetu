@@ -26,8 +26,25 @@ export const SINGLE_LEVEL_REFERRAL_REWARD_INR = 50;
 
 const paymentRateBuckets = new Map<string, number[]>();
 const seenUtrReferences = new Map<string, { workerUid: string; recordedAt: number }>();
+const processedWebhookEvents = new Map<string, number>();
 
-interface PaymentAdminRuntime {
+export function isRazorpayTestKey(keyId: string): boolean {
+  return keyId.trim().startsWith('rzp_test_');
+}
+
+export function isRazorpayLiveKey(keyId: string): boolean {
+  return keyId.trim().startsWith('rzp_live_');
+}
+
+function recordProcessedWebhookEventMem(key: string): void {
+  processedWebhookEvents.set(key, Date.now());
+  if (processedWebhookEvents.size > 5000) {
+    const oldest = processedWebhookEvents.keys().next().value;
+    if (oldest) processedWebhookEvents.delete(oldest);
+  }
+}
+
+export interface PaymentAdminRuntime {
   app: App;
   db: Firestore;
   hasFirestoreCredentials: boolean;
@@ -174,8 +191,11 @@ export interface PaymentGatewayPublicConfig {
   webhookConfigured: boolean;
   serverAdminDbConfigured: boolean;
   gatewayProvider: 'razorpay' | 'upi_qr';
+  razorpayMode: 'test' | 'live_blocked' | 'unconfigured';
+  testModeEnforced: boolean;
   razorpayKeyId?: string;
   missingGatewayEnvVars: string[];
+  configError?: string;
   officialUpiId: string;
   officialUpiPayeeName: string;
   refundPolicySummary: string;
@@ -186,7 +206,9 @@ export function getPaymentGatewayPublicConfig(): PaymentGatewayPublicConfig {
   const keyId = (process.env.RAZORPAY_KEY_ID || '').trim();
   const keySecret = (process.env.RAZORPAY_KEY_SECRET || '').trim();
   const webhookSecret = (process.env.RAZORPAY_WEBHOOK_SECRET || '').trim();
-  const gatewayConfigured = Boolean(keyId && keySecret);
+  const liveKeyBlocked = isRazorpayLiveKey(keyId);
+  const testKeyValid = isRazorpayTestKey(keyId);
+  const gatewayConfigured = Boolean(testKeyValid && keySecret && !liveKeyBlocked);
   const webhookConfigured = Boolean(webhookSecret);
   const serverAdminDbConfigured = Boolean(
     (process.env.FIREBASE_SERVICE_ACCOUNT_JSON || '').trim() ||
@@ -200,6 +222,21 @@ export function getPaymentGatewayPublicConfig(): PaymentGatewayPublicConfig {
   if (!keySecret) missingGatewayEnvVars.push('RAZORPAY_KEY_SECRET');
   if (!webhookSecret) missingGatewayEnvVars.push('RAZORPAY_WEBHOOK_SECRET');
 
+  let razorpayMode: 'test' | 'live_blocked' | 'unconfigured' = 'unconfigured';
+  let configError: string | undefined;
+  if (liveKeyBlocked) {
+    razorpayMode = 'live_blocked';
+    configError =
+      'Live Razorpay key (rzp_live_*) detected and blocked. Rojgar Setu is locked to Razorpay Test Mode (rzp_test_*) until Live Mode is explicitly approved.';
+  } else if (keyId && !testKeyValid) {
+    razorpayMode = 'unconfigured';
+    configError = 'RAZORPAY_KEY_ID must be a valid Razorpay Test Mode key starting with rzp_test_.';
+  } else if (gatewayConfigured) {
+    razorpayMode = 'test';
+  } else if (missingGatewayEnvVars.length > 0) {
+    configError = `Missing server environment variable(s): ${missingGatewayEnvVars.join(', ')}.`;
+  }
+
   const officialUpiId = (process.env.OFFICIAL_UPI_ID || 'rojgarsetu.abujmad@upi').trim();
   const officialUpiPayeeName = (
     process.env.OFFICIAL_UPI_PAYEE_NAME || 'Rojgar Setu Abujmad Foundation'
@@ -212,14 +249,17 @@ export function getPaymentGatewayPublicConfig(): PaymentGatewayPublicConfig {
     webhookConfigured,
     serverAdminDbConfigured,
     gatewayProvider: gatewayConfigured ? 'razorpay' : 'upi_qr',
+    razorpayMode,
+    testModeEnforced: true,
     ...(gatewayConfigured ? { razorpayKeyId: keyId } : {}),
     missingGatewayEnvVars,
+    ...(configError ? { configError } : {}),
     officialUpiId,
     officialUpiPayeeName,
     refundPolicySummary:
       'One-time ₹250 registration fee is refundable only for verified duplicate/failed transactions or valid cancellation requests before benefit activation within 7 days. Refunded registrations deactivate paid benefits and reverse any associated ₹50 referral reward.',
     noEmploymentGuaranteeNotice:
-      'Rojgar Setu is a public-service workforce discovery and connection portal. Paying the ₹250 registration fee activates your verified digital ID card, registration certificate, and referral eligibility, and does NOT guarantee employment or fixed income.',
+      'Registration fee payment does not guarantee employment or job allocation. Paying the ₹250 registration fee activates your verified Digital Worker ID, registration certificate, payment receipt, and referral eligibility.',
   };
 }
 
@@ -338,6 +378,8 @@ export async function fetchAndVerifyRazorpayCapturedPayment(params: {
   razorpayPaymentId: string;
   expectedOrderId: string;
   expectedAmountPaise?: number;
+  expectedWorkerUid?: string;
+  fetchImpl?: typeof fetch;
 }): Promise<RazorpayPaymentFetchCheck> {
   const keyId = (process.env.RAZORPAY_KEY_ID || '').trim();
   const keySecret = (process.env.RAZORPAY_KEY_SECRET || '').trim();
@@ -352,6 +394,18 @@ export async function fetchAndVerifyRazorpayCapturedPayment(params: {
       currency: 'INR',
       orderId: '',
       reason: 'RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET are required to verify captured payment status.',
+    };
+  }
+
+  if (isRazorpayLiveKey(keyId) || !isRazorpayTestKey(keyId)) {
+    return {
+      ok: false,
+      captured: false,
+      paymentStatus: 'live_blocked',
+      amountPaise: 0,
+      currency: 'INR',
+      orderId: '',
+      reason: 'Only Razorpay Test Mode keys (rzp_test_*) are permitted. Live Mode is blocked.',
     };
   }
 
@@ -370,7 +424,8 @@ export async function fetchAndVerifyRazorpayCapturedPayment(params: {
 
   try {
     const authBasic = Buffer.from(`${keyId}:${keySecret}`).toString('base64');
-    const resp = await fetch(`https://api.razorpay.com/v1/payments/${encodeURIComponent(safePaymentId)}`, {
+    const doFetch = params.fetchImpl ?? fetch;
+    const resp = await doFetch(`https://api.razorpay.com/v1/payments/${encodeURIComponent(safePaymentId)}`, {
       method: 'GET',
       headers: {
         Authorization: `Basic ${authBasic}`,
@@ -397,12 +452,14 @@ export async function fetchAndVerifyRazorpayCapturedPayment(params: {
       order_id?: string;
       method?: string;
       vpa?: string;
+      notes?: { workerUid?: string };
     };
 
     const status = String(data.status || 'unknown').toLowerCase();
     const amountPaise = Number(data.amount) || 0;
     const currency = String(data.currency || '').toUpperCase();
     const orderId = String(data.order_id || '');
+    const notesWorkerUid = String(data.notes?.workerUid || '').trim();
 
     if (orderId !== params.expectedOrderId.trim()) {
       return {
@@ -413,6 +470,18 @@ export async function fetchAndVerifyRazorpayCapturedPayment(params: {
         currency,
         orderId,
         reason: 'Razorpay payment order_id does not match the expected registration order.',
+      };
+    }
+
+    if (params.expectedWorkerUid && notesWorkerUid && notesWorkerUid !== params.expectedWorkerUid) {
+      return {
+        ok: false,
+        captured: false,
+        paymentStatus: 'owner_mismatch',
+        amountPaise,
+        currency,
+        orderId,
+        reason: 'Razorpay payment belongs to a different worker account.',
       };
     }
 
@@ -451,7 +520,7 @@ export async function fetchAndVerifyRazorpayCapturedPayment(params: {
       orderId,
       method: data.method,
       vpa: data.vpa,
-      reason: 'Razorpay payment confirmed as captured for ₹250 INR.',
+      reason: 'Razorpay Test Mode payment confirmed as captured for ₹250 INR.',
     };
   } catch (err) {
     return {
@@ -644,6 +713,21 @@ async function activateWorkerRegistrationOnServer(params: {
       referralCredited: false,
       referralMessage: 'Registration payment was already verified (idempotent no-op).',
     };
+  }
+
+  // Prevent replay of a Razorpay payment ID already used by a different worker
+  if (params.razorpayPaymentId) {
+    const dupPaySnap = await db
+      .collection('workerRegistrationPayments')
+      .where('gatewayPaymentId', '==', params.razorpayPaymentId)
+      .limit(2)
+      .get();
+    const ownedByOther = dupPaySnap.docs.find(
+      (d) => d.id !== workerUid && d.data()?.status === 'verified'
+    );
+    if (ownedByOther) {
+      throw new Error('DUPLICATE_PAYMENT_ID: This Razorpay Payment ID is already linked to another verified worker registration.');
+    }
   }
 
   const existingRegId = String(existingPub?.registrationId || '');
@@ -1388,15 +1472,22 @@ export function handlePaymentConfig(): { httpStatus: number; payload: Record<str
 export async function handleCreatePaymentOrder(params: {
   authHeader: string;
   rootDir: string;
+  fetchImpl?: typeof fetch;
+  runtimeOverride?: PaymentAdminRuntime;
+  authUidOverride?: string;
 }): Promise<{ httpStatus: number; payload: Record<string, unknown> }> {
-  const authUser = await verifyBearerHeader(params.authHeader, params.rootDir);
-  if (!authUser) {
-    return {
-      httpStatus: 401,
-      payload: { error: 'Authentication required to initiate registration payment.' },
-    };
+  let uid = params.authUidOverride || '';
+  if (!uid) {
+    const authUser = await verifyBearerHeader(params.authHeader, params.rootDir);
+    if (!authUser) {
+      return {
+        httpStatus: 401,
+        payload: { error: 'Authentication required to initiate registration payment.' },
+      };
+    }
+    uid = authUser.decoded.uid;
   }
-  const uid = authUser.decoded.uid;
+
   if (!checkRateLimit(`pay_order:${uid}`, 15, 10 * 60 * 1000)) {
     return {
       httpStatus: 429,
@@ -1405,7 +1496,7 @@ export async function handleCreatePaymentOrder(params: {
   }
 
   // Prevent duplicate charges & duplicate activation when Admin Firestore is available
-  const runtime = getPaymentAdminRuntime(params.rootDir);
+  const runtime = params.runtimeOverride ?? getPaymentAdminRuntime(params.rootDir);
   if (runtime.hasFirestoreCredentials) {
     try {
       const [paySnap, pubSnap] = await Promise.all([
@@ -1436,6 +1527,17 @@ export async function handleCreatePaymentOrder(params: {
   }
 
   const cfg = getPaymentGatewayPublicConfig();
+  if (cfg.razorpayMode === 'live_blocked') {
+    return {
+      httpStatus: 403,
+      payload: {
+        errorCode: 'LIVE_MODE_BLOCKED',
+        razorpayMode: 'live_blocked',
+        error: cfg.configError || 'Razorpay Live Mode keys are blocked. Configure Test Mode keys (rzp_test_*).',
+      },
+    };
+  }
+
   const orderRef = `RS-ORD-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
   const orderToken = signOrderRef(orderRef, uid, cfg.registrationFeeInr);
   const upiUri = buildOfficialUpiIntentUri({
@@ -1445,11 +1547,12 @@ export async function handleCreatePaymentOrder(params: {
     orderRef,
   });
 
-  if (cfg.gatewayConfigured && cfg.razorpayKeyId) {
+  if (cfg.gatewayConfigured && cfg.razorpayKeyId && cfg.razorpayMode === 'test') {
     try {
       const keySecret = (process.env.RAZORPAY_KEY_SECRET || '').trim();
       const authBasic = Buffer.from(`${cfg.razorpayKeyId}:${keySecret}`).toString('base64');
-      const gwRes = await fetch('https://api.razorpay.com/v1/orders', {
+      const doFetch = params.fetchImpl ?? fetch;
+      const gwRes = await doFetch('https://api.razorpay.com/v1/orders', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1462,6 +1565,7 @@ export async function handleCreatePaymentOrder(params: {
           notes: {
             workerUid: uid,
             orderRef,
+            mode: 'test',
             purpose: 'Rojgar Setu Worker Registration Fee',
           },
         }),
@@ -1496,6 +1600,8 @@ export async function handleCreatePaymentOrder(params: {
               mode: 'gateway',
               gatewayProvider: 'razorpay',
               gatewayConfigured: true,
+              razorpayMode: 'test',
+              testModeEnforced: true,
               razorpayKeyId: cfg.razorpayKeyId,
               gatewayOrderId: gwData.id,
               orderRef,
@@ -1514,7 +1620,7 @@ export async function handleCreatePaymentOrder(params: {
           httpStatus: 502,
           payload: {
             errorCode: 'RAZORPAY_ORDER_FAILED',
-            error: `Razorpay order creation failed (HTTP ${gwRes.status}). Check RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET.`,
+            error: `Razorpay Test Mode order creation failed (HTTP ${gwRes.status}). Check RAZORPAY_KEY_ID / RAZORPAY_KEY_SECRET.`,
             details: errText.slice(0, 200),
           },
         };
@@ -1536,6 +1642,9 @@ export async function handleCreatePaymentOrder(params: {
       mode: 'upi_qr',
       gatewayProvider: 'upi_qr',
       gatewayConfigured: false,
+      razorpayMode: cfg.razorpayMode,
+      testModeEnforced: true,
+      configError: cfg.configError,
       missingGatewayEnvVars: cfg.missingGatewayEnvVars,
       orderRef,
       orderToken,
@@ -1552,10 +1661,29 @@ export async function handleVerifyGatewayPayment(params: {
   authHeader: string;
   body: Record<string, unknown>;
   rootDir: string;
+  fetchImpl?: typeof fetch;
+  runtimeOverride?: PaymentAdminRuntime;
+  authUidOverride?: string;
 }): Promise<{ httpStatus: number; payload: Record<string, unknown> }> {
-  const authUser = await verifyBearerHeader(params.authHeader, params.rootDir);
-  if (!authUser) {
-    return { httpStatus: 401, payload: { verified: false, error: 'Authentication required.' } };
+  let workerUid = params.authUidOverride || '';
+  if (!workerUid) {
+    const authUser = await verifyBearerHeader(params.authHeader, params.rootDir);
+    if (!authUser) {
+      return { httpStatus: 401, payload: { verified: false, error: 'Authentication required.' } };
+    }
+    workerUid = authUser.decoded.uid;
+  }
+
+  const cfg = getPaymentGatewayPublicConfig();
+  if (cfg.razorpayMode === 'live_blocked') {
+    return {
+      httpStatus: 403,
+      payload: {
+        verified: false,
+        errorCode: 'LIVE_MODE_BLOCKED',
+        error: cfg.configError || 'Razorpay Live Mode is blocked. Only Test Mode keys are allowed.',
+      },
+    };
   }
 
   const razorpayOrderId = String(params.body.razorpayOrderId || '').trim();
@@ -1570,18 +1698,27 @@ export async function handleVerifyGatewayPayment(params: {
     razorpaySignature,
   });
   if (!sigResult.valid) {
-    return { httpStatus: 403, payload: { verified: false, error: sigResult.reason } };
+    return {
+      httpStatus: 403,
+      payload: { verified: false, errorCode: 'INVALID_SIGNATURE', error: sigResult.reason },
+    };
   }
 
-  // Step 2: Confirm actual captured payment status & exact ₹250 amount directly from Razorpay API
+  // Step 2: Confirm actual captured payment status, owner binding & exact ₹250 amount directly from Razorpay API
   const captureCheck = await fetchAndVerifyRazorpayCapturedPayment({
     razorpayPaymentId,
     expectedOrderId: razorpayOrderId,
     expectedAmountPaise: WORKER_REGISTRATION_FEE_PAISE,
+    expectedWorkerUid: workerUid,
+    fetchImpl: params.fetchImpl,
   });
   if (!captureCheck.ok || !captureCheck.captured) {
+    const status =
+      captureCheck.paymentStatus === 'owner_mismatch' || captureCheck.paymentStatus === 'live_blocked'
+        ? 403
+        : 402;
     return {
-      httpStatus: 402,
+      httpStatus: status,
       payload: {
         verified: false,
         paymentStatus: captureCheck.paymentStatus,
@@ -1590,21 +1727,36 @@ export async function handleVerifyGatewayPayment(params: {
     };
   }
 
-  // Step 3: Atomically activate worker account, issue RS-W ID & certificate, and credit single-level ₹50 referral
-  const runtime = getPaymentAdminRuntime(params.rootDir);
-  const activation = await activateWorkerRegistrationOnServer({
-    runtime,
-    workerUid: authUser.decoded.uid,
-    razorpayOrderId,
-    razorpayPaymentId,
-    orderRef: orderRef || razorpayOrderId,
-    payerVpaOrMethod: captureCheck.vpa || captureCheck.method,
-    source: 'verify_api',
-  });
+  // Step 3: Atomically & idempotently activate worker account, issue RS-W ID & certificate, and credit single-level ₹50 referral
+  const runtime = params.runtimeOverride ?? getPaymentAdminRuntime(params.rootDir);
+  let activation: Awaited<ReturnType<typeof activateWorkerRegistrationOnServer>>;
+  try {
+    activation = await activateWorkerRegistrationOnServer({
+      runtime,
+      workerUid,
+      razorpayOrderId,
+      razorpayPaymentId,
+      orderRef: orderRef || razorpayOrderId,
+      payerVpaOrMethod: captureCheck.vpa || captureCheck.method,
+      source: 'verify_api',
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unable to activate worker account.';
+    if (msg.includes('DUPLICATE_PAYMENT_ID')) {
+      return {
+        httpStatus: 409,
+        payload: { verified: false, errorCode: 'DUPLICATE_PAYMENT_ID', error: msg },
+      };
+    }
+    return {
+      httpStatus: 503,
+      payload: { verified: false, errorCode: 'ACTIVATION_DB_ERROR', error: msg },
+    };
+  }
 
   const verificationReceiptToken = crypto
     .createHmac('sha256', getOrderHmacSecret())
-    .update(`verified|${authUser.decoded.uid}|${razorpayPaymentId}`)
+    .update(`verified|${workerUid}|${razorpayPaymentId}`)
     .digest('hex')
     .slice(0, 32);
 
@@ -1613,6 +1765,7 @@ export async function handleVerifyGatewayPayment(params: {
     payload: {
       verified: true,
       captured: true,
+      razorpayMode: 'test',
       paymentStatus: 'captured',
       amountInr: WORKER_REGISTRATION_FEE_INR,
       verifiedAtIso: new Date().toISOString(),
@@ -1624,15 +1777,138 @@ export async function handleVerifyGatewayPayment(params: {
       certificateNo: activation.certificateNo,
       referralCredited: activation.referralCredited,
       referralMessage: activation.referralMessage,
-      reason: 'Razorpay signature and captured ₹250 payment verified on backend.',
+      reason: activation.alreadyVerified
+        ? 'Razorpay payment was already verified and worker account is active (duplicate callback ignored idempotently).'
+        : 'Razorpay Test Mode signature and captured ₹250 payment verified on backend.',
     },
   };
+}
+
+export async function handleRecordGatewayAttempt(params: {
+  authHeader: string;
+  body: Record<string, unknown>;
+  rootDir: string;
+  runtimeOverride?: PaymentAdminRuntime;
+  authUidOverride?: string;
+}): Promise<{ httpStatus: number; payload: Record<string, unknown> }> {
+  let workerUid = params.authUidOverride || '';
+  if (!workerUid) {
+    const authUser = await verifyBearerHeader(params.authHeader, params.rootDir);
+    if (!authUser) {
+      return { httpStatus: 401, payload: { ok: false, error: 'Authentication required.' } };
+    }
+    workerUid = authUser.decoded.uid;
+  }
+
+  const rawOutcome = String(params.body.outcome || '').trim().toLowerCase();
+  // STRICTLY forbid client-side verified/captured status transitions
+  if (rawOutcome !== 'failed' && rawOutcome !== 'cancelled') {
+    return {
+      httpStatus: 400,
+      payload: {
+        ok: false,
+        errorCode: 'INVALID_OUTCOME',
+        error: 'Only failed or cancelled checkout outcomes may be reported by the client.',
+      },
+    };
+  }
+
+  const gatewayOrderId = String(params.body.gatewayOrderId || '').trim().slice(0, 120);
+  const gatewayPaymentId = String(params.body.gatewayPaymentId || '').trim().slice(0, 120);
+  const orderRef = String(params.body.orderRef || '').trim().slice(0, 80);
+  const reason = String(
+    params.body.reason ||
+      (rawOutcome === 'cancelled'
+        ? 'Razorpay Checkout window closed before payment completion.'
+        : 'Razorpay Test Mode payment failed.')
+  )
+    .trim()
+    .slice(0, 300);
+
+  const nextStatus: 'failed' | 'pending' = rawOutcome === 'failed' ? 'failed' : 'pending';
+  const runtime = params.runtimeOverride ?? getPaymentAdminRuntime(params.rootDir);
+  if (!runtime.hasFirestoreCredentials) {
+    return {
+      httpStatus: 200,
+      payload: {
+        ok: true,
+        recordedInDb: false,
+        status: nextStatus,
+        reason: 'Attempt acknowledged; server database not configured in this environment.',
+      },
+    };
+  }
+
+  try {
+    const payRef = runtime.db.collection('workerRegistrationPayments').doc(workerUid);
+    const snap = await payRef.get();
+    if (snap.exists && snap.data()?.status === 'verified') {
+      return {
+        httpStatus: 200,
+        payload: {
+          ok: true,
+          ignored: true,
+          status: 'verified',
+          reason: 'Worker registration is already verified and cannot be downgraded.',
+        },
+      };
+    }
+
+    await payRef.set(
+      {
+        workerUid,
+        amountInr: WORKER_REGISTRATION_FEE_INR,
+        paymentMethod: 'gateway',
+        status: nextStatus,
+        ...(orderRef ? { orderRef } : {}),
+        ...(gatewayOrderId ? { gatewayOrderId } : {}),
+        ...(gatewayPaymentId ? { gatewayPaymentId, utrOrGatewayRef: gatewayPaymentId } : {}),
+        gatewaySignatureVerified: false,
+        adminNotes: reason,
+        updatedAt: FieldValue.serverTimestamp(),
+        ...(snap.exists ? {} : { createdAt: FieldValue.serverTimestamp() }),
+      },
+      { merge: true }
+    );
+
+    if (nextStatus === 'failed') {
+      const pubRef = runtime.db.collection('publicWorkers').doc(workerUid);
+      const pubSnap = await pubRef.get();
+      if (pubSnap.exists && pubSnap.data()?.paidBenefitsActive !== true) {
+        await pubRef.update({
+          registrationPaymentStatus: 'failed',
+          paidBenefitsActive: false,
+          updatedAt: FieldValue.serverTimestamp(),
+        });
+      }
+    }
+
+    return {
+      httpStatus: 200,
+      payload: {
+        ok: true,
+        recordedInDb: true,
+        status: nextStatus,
+        gatewayOrderId,
+      },
+    };
+  } catch (err) {
+    return {
+      httpStatus: 503,
+      payload: {
+        ok: false,
+        error: err instanceof Error ? err.message : 'Unable to record payment attempt.',
+      },
+    };
+  }
 }
 
 export async function handleRazorpayWebhook(params: {
   rawBody: string;
   signatureHeader: string;
+  eventIdHeader?: string;
   rootDir: string;
+  runtimeOverride?: PaymentAdminRuntime;
 }): Promise<{ httpStatus: number; payload: Record<string, unknown> }> {
   const sigCheck = verifyRazorpayWebhookSignature({
     rawBody: params.rawBody,
@@ -1640,7 +1916,10 @@ export async function handleRazorpayWebhook(params: {
   });
   if (!sigCheck.valid) {
     const status = sigCheck.reason.includes('not configured') ? 503 : 401;
-    return { httpStatus: status, payload: { ok: false, error: sigCheck.reason } };
+    return {
+      httpStatus: status,
+      payload: { ok: false, errorCode: status === 401 ? 'INVALID_WEBHOOK_SIGNATURE' : 'WEBHOOK_NOT_CONFIGURED', error: sigCheck.reason },
+    };
   }
 
   let eventPayload: {
@@ -1685,7 +1964,7 @@ export async function handleRazorpayWebhook(params: {
   }
 
   const eventName = String(eventPayload.event || '');
-  const runtime = getPaymentAdminRuntime(params.rootDir);
+  const runtime = params.runtimeOverride ?? getPaymentAdminRuntime(params.rootDir);
   const paymentEntity = eventPayload.payload?.payment?.entity;
   const orderEntity = eventPayload.payload?.order?.entity;
   const refundEntity = eventPayload.payload?.refund?.entity;
@@ -1698,6 +1977,26 @@ export async function handleRazorpayWebhook(params: {
       refundEntity?.notes?.workerUid ||
       ''
   ).trim();
+
+  // Deterministic webhook idempotency key (uses x-razorpay-event-id when provided)
+  const rawEventKey =
+    (params.eventIdHeader || '').trim() ||
+    `${eventName}:${gatewayPaymentId || refundEntity?.id || 'none'}:${gatewayOrderId || 'none'}`;
+  const safeEventDocId = crypto.createHash('sha256').update(rawEventKey).digest('hex').slice(0, 40);
+
+  if (processedWebhookEvents.has(safeEventDocId)) {
+    return {
+      httpStatus: 200,
+      payload: {
+        ok: true,
+        event: eventName,
+        idempotent: true,
+        duplicateEvent: true,
+        processed: false,
+        reason: 'Duplicate webhook event ignored idempotently.',
+      },
+    };
+  }
 
   if (
     eventName === 'payment.captured' ||
@@ -1721,6 +2020,34 @@ export async function handleRazorpayWebhook(params: {
   }
 
   try {
+    const webhookEventRef = runtime.db.collection('processedPaymentWebhooks').doc(safeEventDocId);
+    const existingWebhookSnap = await webhookEventRef.get();
+    if (existingWebhookSnap.exists) {
+      recordProcessedWebhookEventMem(safeEventDocId);
+      return {
+        httpStatus: 200,
+        payload: {
+          ok: true,
+          event: eventName,
+          idempotent: true,
+          duplicateEvent: true,
+          processed: false,
+          reason: 'Duplicate webhook event already recorded in database (idempotent no-op).',
+        },
+      };
+    }
+
+    const markWebhookProcessed = async () => {
+      await webhookEventRef.set({
+        eventId: rawEventKey.slice(0, 160),
+        eventName,
+        gatewayOrderId,
+        gatewayPaymentId,
+        processedAt: FieldValue.serverTimestamp(),
+      });
+      recordProcessedWebhookEventMem(safeEventDocId);
+    };
+
     if (eventName === 'payment.captured' || eventName === 'order.paid') {
       const amountPaise = Number(paymentEntity?.amount ?? WORKER_REGISTRATION_FEE_PAISE);
       const currency = String(paymentEntity?.currency || 'INR').toUpperCase();
@@ -1753,6 +2080,7 @@ export async function handleRazorpayWebhook(params: {
         payerVpaOrMethod: paymentEntity?.vpa || paymentEntity?.method,
         source: 'razorpay_webhook',
       });
+      await markWebhookProcessed();
 
       return {
         httpStatus: 200,
@@ -1760,8 +2088,12 @@ export async function handleRazorpayWebhook(params: {
           ok: true,
           event: eventName,
           processed: true,
+          idempotent: false,
+          duplicateEvent: false,
           activated: activation.activated,
           alreadyVerified: activation.alreadyVerified,
+          verifiedWorkerId: activation.verifiedWorkerId,
+          receiptNo: activation.receiptNo,
           referralCredited: activation.referralCredited,
         },
       };
@@ -1781,16 +2113,30 @@ export async function handleRazorpayWebhook(params: {
           await payRef.set(
             {
               workerUid,
+              amountInr: WORKER_REGISTRATION_FEE_INR,
+              paymentMethod: 'gateway',
               status: 'failed',
               gatewayOrderId,
               gatewayPaymentId,
+              gatewaySignatureVerified: false,
               adminNotes: String(paymentEntity?.error_description || 'Razorpay payment failed.').slice(0, 300),
               updatedAt: FieldValue.serverTimestamp(),
+              ...(snap.exists ? {} : { createdAt: FieldValue.serverTimestamp() }),
             },
             { merge: true }
           );
+          const pubRef = runtime.db.collection('publicWorkers').doc(workerUid);
+          const pubSnap = await pubRef.get();
+          if (pubSnap.exists && pubSnap.data()?.paidBenefitsActive !== true) {
+            await pubRef.update({
+              registrationPaymentStatus: 'failed',
+              paidBenefitsActive: false,
+              updatedAt: FieldValue.serverTimestamp(),
+            });
+          }
         }
       }
+      await markWebhookProcessed();
       return {
         httpStatus: 200,
         payload: { ok: true, event: eventName, processed: true, status: 'failed' },
@@ -1810,6 +2156,7 @@ export async function handleRazorpayWebhook(params: {
         refundRef: String(refundEntity?.id || gatewayPaymentId || `RFND-${Date.now()}`),
         reason: String(refundEntity?.notes?.reason || 'Razorpay refund processed via webhook.'),
       });
+      await markWebhookProcessed();
       return {
         httpStatus: 200,
         payload: {
@@ -1913,15 +2260,27 @@ export function registerPaymentAndFinanceRoutes(app: Express, rootDir: string): 
     res.status(out.httpStatus).json(out.payload);
   });
 
+  app.post('/api/payments/record-attempt', async (req: Request, res: Response) => {
+    res.setHeader('Cache-Control', 'no-store');
+    const out = await handleRecordGatewayAttempt({
+      authHeader: req.headers.authorization || '',
+      body: (req.body || {}) as Record<string, unknown>,
+      rootDir,
+    });
+    res.status(out.httpStatus).json(out.payload);
+  });
+
   app.post('/api/payments/webhook', async (req: Request, res: Response) => {
     res.setHeader('Cache-Control', 'no-store');
     const rawBody =
       (req as Request & { rawBody?: string }).rawBody ||
       (typeof req.body === 'string' ? req.body : JSON.stringify(req.body || {}));
     const sigHeader = String(req.headers['x-razorpay-signature'] || '');
+    const eventIdHeader = String(req.headers['x-razorpay-event-id'] || '');
     const out = await handleRazorpayWebhook({
       rawBody,
       signatureHeader: sigHeader,
+      eventIdHeader,
       rootDir,
     });
     res.status(out.httpStatus).json(out.payload);

@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import {
   AlertCircle,
@@ -10,8 +10,10 @@ import {
   Clock,
   Copy,
   CreditCard,
+  Download,
   ExternalLink,
   FileCheck2,
+  History,
   IndianRupee,
   Loader2,
   Lock,
@@ -34,6 +36,7 @@ import {
   fetchPaymentGatewayConfig,
   isWorkerPaidBenefitsActive,
   loadRazorpayCheckoutScript,
+  recordGatewayAttemptOnServer,
   submitWorkerRegistrationPaymentProof,
   verifyGatewaySignatureOnServer,
   type CreatedPaymentOrder,
@@ -58,15 +61,36 @@ interface RazorpayCheckoutResponse {
 
 interface RazorpayCheckoutInstance {
   open: () => void;
-  on: (event: string, handler: (resp: { error?: { description?: string; reason?: string } }) => void) => void;
+  on: (
+    event: string,
+    handler: (resp: {
+      error?: {
+        description?: string;
+        reason?: string;
+        metadata?: { order_id?: string; payment_id?: string };
+      };
+    }) => void
+  ) => void;
 }
 
 interface RazorpayWindow {
   Razorpay?: new (options: Record<string, unknown>) => RazorpayCheckoutInstance;
 }
 
+const EXACT_NO_GUARANTEE_DISCLOSURE =
+  'Registration fee payment does not guarantee employment or job allocation.';
+
 function tr(lang: Language, en: string, hi: string, mr: string): string {
   return lang === 'mr' ? mr : lang === 'hi' ? hi : en;
+}
+
+function escapeHtml(raw: string): string {
+  return raw
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function formatIsoDate(iso?: string): string {
@@ -74,6 +98,82 @@ function formatIsoDate(iso?: string): string {
   const parsed = new Date(iso);
   if (Number.isNaN(parsed.getTime())) return iso.slice(0, 10);
   return parsed.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' });
+}
+
+function formatPaymentMethodLabel(method?: string): string {
+  if (!method || method === 'gateway' || method === 'payment_gateway' || method === 'razorpay') return 'Razorpay';
+  if (method === 'upi_qr') return 'Official UPI QR';
+  return method.replace(/_/g, ' ').toUpperCase();
+}
+
+export function downloadOfficialPaymentReceipt(payment: WorkerRegistrationPayment): void {
+  if (typeof window === 'undefined' || payment.status !== 'verified') return;
+  const receiptNo = payment.receiptNo || payment.orderRef || 'RS-RECEIPT';
+  const safeFileTag = receiptNo.replace(/[^A-Za-z0-9_-]/g, '');
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Rojgar Setu Payment Receipt - ${escapeHtml(receiptNo)}</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f8fafc; color: #0f172a; margin: 0; padding: 24px; }
+    .card { max-width: 720px; margin: 0 auto; background: #ffffff; border: 2px solid #0B3B75; border-radius: 14px; overflow: hidden; }
+    .tri { display: flex; height: 6px; }
+    .tri div:nth-child(1) { flex: 1; background: #E06D1B; }
+    .tri div:nth-child(2) { flex: 1; background: #ffffff; }
+    .tri div:nth-child(3) { flex: 1; background: #15803D; }
+    .hdr { background: #0B3B75; color: #ffffff; padding: 20px 24px; display: flex; justify-content: space-between; align-items: center; }
+    .hdr h1 { margin: 0; font-size: 18px; letter-spacing: 0.4px; }
+    .hdr p { margin: 4px 0 0; font-size: 12px; color: #dbeafe; }
+    .badge { background: #dcfce7; color: #15803D; border: 1px solid #86efac; padding: 5px 10px; border-radius: 6px; font-size: 11px; font-weight: 800; text-transform: uppercase; }
+    .body { padding: 24px; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 10px; padding: 16px; }
+    .label { font-size: 11px; color: #64748b; text-transform: uppercase; font-weight: 700; }
+    .val { font-size: 14px; color: #0f172a; font-weight: 700; margin-top: 3px; word-break: break-word; }
+    .amt { color: #15803D; font-size: 18px; font-weight: 800; }
+    .note { margin-top: 18px; font-size: 12px; color: #475569; line-height: 1.5; border-top: 1px solid #e2e8f0; padding-top: 14px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="tri"><div></div><div></div><div></div></div>
+    <div class="hdr">
+      <div>
+        <h1>ROJGAR SETU · OFFICIAL PAYMENT RECEIPT</h1>
+        <p>Abujmad Foundation · “कामगार नाही, आपलीच माणसं!”</p>
+      </div>
+      <span class="badge">Successful · Verified</span>
+    </div>
+    <div class="body">
+      <div class="grid">
+        <div><div class="label">Receipt Number</div><div class="val">${escapeHtml(receiptNo)}</div></div>
+        <div><div class="label">Verified Worker ID</div><div class="val">${escapeHtml(payment.verifiedWorkerId || payment.provisionalAppId)}</div></div>
+        <div><div class="label">Worker Name</div><div class="val">${escapeHtml(payment.workerName)}</div></div>
+        <div><div class="label">Registration Fee Paid</div><div class="val amt">₹${escapeHtml(String(payment.amountInr))} (One-Time)</div></div>
+        <div><div class="label">Payment Method</div><div class="val">${escapeHtml(formatPaymentMethodLabel(payment.paymentMethod))}</div></div>
+        <div><div class="label">Verification Date</div><div class="val">${escapeHtml(formatIsoDate(payment.verifiedAtIso))}</div></div>
+        <div><div class="label">Razorpay / Portal Order ID</div><div class="val">${escapeHtml(payment.gatewayOrderId || payment.orderRef)}</div></div>
+        <div><div class="label">Razorpay Payment ID / Ref</div><div class="val">${escapeHtml(payment.gatewayPaymentId || payment.utrOrGatewayRef)}</div></div>
+        <div><div class="label">Certificate Number</div><div class="val">${escapeHtml(payment.certificateNo || 'Issued')}</div></div>
+        <div><div class="label">Primary Skill &amp; Location</div><div class="val">${escapeHtml(payment.workerSkill)} · ${escapeHtml(payment.workerLocation)}</div></div>
+      </div>
+      <div class="note">
+        <strong>Official Disclosure:</strong> ${escapeHtml(EXACT_NO_GUARANTEE_DISCLOSURE)} Paid registration benefits remain active only while payment status is Verified.
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
+
+  const blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `RojgarSetu-Receipt-${safeFileTag || 'Verified'}.html`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  window.setTimeout(() => URL.revokeObjectURL(url), 1500);
 }
 
 export const PaymentStatusBadge: React.FC<{ status: RegistrationPaymentStatus; lang?: Language }> = ({
@@ -84,7 +184,7 @@ export const PaymentStatusBadge: React.FC<{ status: RegistrationPaymentStatus; l
     return (
       <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-emerald-50 border border-emerald-200 text-[#15803D] text-xs font-extrabold uppercase">
         <CheckCircle2 className="w-3.5 h-3.5" />
-        {tr(lang, 'Verified', 'सत्यापित', 'सत्यापित')}
+        {tr(lang, 'Successful', 'सफल (सत्यापित)', 'यशस्वी (सत्यापित)')}
       </span>
     );
   }
@@ -107,7 +207,7 @@ export const PaymentStatusBadge: React.FC<{ status: RegistrationPaymentStatus; l
   return (
     <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-md bg-amber-50 border border-amber-200 text-[#C25E00] text-xs font-extrabold uppercase">
       <Clock className="w-3.5 h-3.5" />
-      {tr(lang, 'Pending Verification', 'सत्यापन लंबित', 'सत्यापन प्रलंबित')}
+      {tr(lang, 'Pending', 'लंबित', 'प्रलंबित')}
     </span>
   );
 };
@@ -156,6 +256,7 @@ export const WorkerPaymentCheckoutCard: React.FC<WorkerPaymentCheckoutCardProps>
   const [launchingRazorpay, setLaunchingRazorpay] = useState(false);
   const [submitError, setSubmitError] = useState('');
   const [submitSuccess, setSubmitSuccess] = useState('');
+  const verifyingRef = useRef(false);
 
   const loadOrderAndQr = async () => {
     setLoadingOrder(true);
@@ -263,14 +364,22 @@ export const WorkerPaymentCheckoutCard: React.FC<WorkerPaymentCheckoutCardProps>
             setSubmitError(
               tr(
                 lang,
-                'Payment window was closed before completion. Your registration remains pending — you can retry safely anytime.',
+                'Payment window was closed before completion. Your registration remains pending — no benefits were activated. You can retry safely anytime.',
                 'भुगतान पूरा होने से पहले विंडो बंद हो गई। आपका पंजीकरण लंबित है — आप कभी भी पुनः प्रयास कर सकते हैं।',
                 'पेमेंट पूर्ण होण्यापूर्वी विंडो बंद झाली. तुमची नोंदणी प्रलंबित आहे — तुम्ही पुन्हा प्रयत्न करू शकता.'
               )
             );
+            void recordGatewayAttemptOnServer({
+              outcome: 'cancelled',
+              gatewayOrderId: order.gatewayOrderId,
+              orderRef: order.orderRef,
+              reason: 'Worker dismissed Razorpay Checkout before completing payment.',
+            }).finally(() => onPaymentSubmitted?.());
           },
         },
         handler: async (response: RazorpayCheckoutResponse) => {
+          if (verifyingRef.current) return;
+          verifyingRef.current = true;
           try {
             const verification = await verifyGatewaySignatureOnServer({
               razorpayOrderId: response.razorpay_order_id,
@@ -301,6 +410,7 @@ export const WorkerPaymentCheckoutCard: React.FC<WorkerPaymentCheckoutCardProps>
                 : 'Backend payment verification failed. If money was debited, Razorpay webhook will reconcile automatically.'
             );
           } finally {
+            verifyingRef.current = false;
             setLaunchingRazorpay(false);
           }
         },
@@ -312,11 +422,18 @@ export const WorkerPaymentCheckoutCard: React.FC<WorkerPaymentCheckoutCardProps>
         setSubmitError(
           tr(
             lang,
-            `Payment failed: ${desc}. No paid benefits were activated. Please retry.`,
-            `भुगतान विफल: ${desc}। कृपया पुनः प्रयास करें।`,
-            `पेमेंट अयशस्वी: ${desc}. कृपया पुन्हा प्रयत्न करा.`
+            `Payment failed: ${desc}. Registration was NOT activated. Please retry.`,
+            `भुगतान विफल: ${desc}। पंजीकरण सक्रिय नहीं हुआ है। कृपया पुनः प्रयास करें।`,
+            `पेमेंट अयशस्वी: ${desc}. नोंदणी सुरू झालेली नाही. कृपया पुन्हा प्रयत्न करा.`
           )
         );
+        void recordGatewayAttemptOnServer({
+          outcome: 'failed',
+          gatewayOrderId: failResp?.error?.metadata?.order_id || order.gatewayOrderId,
+          gatewayPaymentId: failResp?.error?.metadata?.payment_id,
+          orderRef: order.orderRef,
+          reason: desc,
+        }).finally(() => onPaymentSubmitted?.());
       });
 
       rzp.open();
@@ -409,6 +526,39 @@ export const WorkerPaymentCheckoutCard: React.FC<WorkerPaymentCheckoutCardProps>
           )}
         </div>
 
+        {/* Clear 4-Field Payment Summary (Fee, Method, Status, Receipt) */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs bg-slate-50 border border-slate-200 rounded-xl p-3.5">
+          <div>
+            <div className="text-[11px] font-bold uppercase text-slate-500">Registration Fee</div>
+            <div className="font-mono-tabular text-base font-extrabold text-[#0B3B75] mt-0.5">
+              ₹{WORKER_REGISTRATION_FEE_INR}
+            </div>
+          </div>
+          <div>
+            <div className="text-[11px] font-bold uppercase text-slate-500">Payment Method</div>
+            <div className="font-extrabold text-[#0B3B75] mt-0.5">
+              {order?.razorpayMode === 'test' || config?.razorpayMode === 'test'
+                ? 'Razorpay (Test Mode)'
+                : 'Razorpay'}
+            </div>
+          </div>
+          <div>
+            <div className="text-[11px] font-bold uppercase text-slate-500">Payment Status</div>
+            <div className="mt-1">
+              <PaymentStatusBadge status={existingPayment?.status || 'pending'} lang={lang} />
+            </div>
+          </div>
+          <div>
+            <div className="text-[11px] font-bold uppercase text-slate-500">Payment Receipt</div>
+            <div className="mt-1">
+              <span className="inline-flex items-center gap-1 text-[11px] font-bold text-slate-500">
+                <Lock className="w-3 h-3" />
+                Download unlocks after verified payment
+              </span>
+            </div>
+          </div>
+        </div>
+
         {/* What ₹250 Covers */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5 text-xs">
           {[
@@ -459,10 +609,9 @@ export const WorkerPaymentCheckoutCard: React.FC<WorkerPaymentCheckoutCardProps>
             {config?.refundPolicySummary ||
               'One-time ₹250 registration fee is refundable only for verified duplicate/failed transactions or valid cancellation before benefit activation within 7 days. Refunded payments revoke paid benefits and reverse any ₹50 referral reward.'}
           </p>
-          <p className="leading-relaxed">
+          <p className="leading-relaxed font-semibold text-amber-950">
             <strong>{tr(lang, 'No Employment Guarantee:', 'रोजगार की गारंटी नहीं:', 'रोजगाराची हमी नाही:')}</strong>{' '}
-            {config?.noEmploymentGuaranteeNotice ||
-              'Rojgar Setu connects workers with nearby customers and job opportunities. Paying ₹250 does NOT guarantee employment or fixed income.'}
+            {config?.noEmploymentGuaranteeNotice || EXACT_NO_GUARANTEE_DISCLOSURE}
           </p>
           <p className="leading-relaxed text-[#0B3B75] font-semibold">
             <ShieldCheck className="w-3.5 h-3.5 inline mr-1 text-[#15803D]" />
@@ -563,16 +712,23 @@ export const WorkerPaymentCheckoutCard: React.FC<WorkerPaymentCheckoutCardProps>
               </div>
             ) : order ? (
               <div className="space-y-4">
-                {/* Primary Razorpay Standard Checkout when configured on server */}
+                {/* Primary Razorpay Standard Checkout (Test Mode Enforced) */}
                 {order.mode === 'gateway' && order.razorpayKeyId && order.gatewayOrderId ? (
                   <div className="rounded-xl border-2 border-[#15803D] bg-emerald-50/40 p-5 space-y-3">
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <div>
-                        <div className="text-xs font-extrabold uppercase text-[#15803D] flex items-center gap-1.5">
-                          <ShieldCheck className="w-4 h-4" />
-                          <span>Razorpay Verified Checkout · UPI / Card / NetBanking</span>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <div className="text-xs font-extrabold uppercase text-[#15803D] flex items-center gap-1.5">
+                            <ShieldCheck className="w-4 h-4" />
+                            <span>Razorpay Verified Checkout · UPI / Card / NetBanking</span>
+                          </div>
+                          {order.razorpayMode === 'test' && (
+                            <span className="px-2 py-0.5 rounded bg-amber-100 border border-amber-300 text-[#9A3412] text-[10px] font-extrabold uppercase tracking-wide">
+                              RAZORPAY TEST MODE
+                            </span>
+                          )}
                         </div>
-                        <div className="text-[11px] text-slate-600 font-mono-tabular mt-0.5">
+                        <div className="text-[11px] text-slate-600 font-mono-tabular mt-1">
                           Order Ref: <strong>{order.orderRef}</strong> · Razorpay Order: <strong>{order.gatewayOrderId}</strong>
                         </div>
                       </div>
@@ -593,25 +749,48 @@ export const WorkerPaymentCheckoutCard: React.FC<WorkerPaymentCheckoutCardProps>
                       <span>
                         {tr(
                           lang,
-                          `Pay ₹${order.amountInr} Securely via Razorpay (Instant Verification)`,
-                          `Razorpay से ₹${order.amountInr} सुरक्षित भुगतान करें (तुरंत सत्यापन)`,
-                          `Razorpay द्वारे ₹${order.amountInr} सुरक्षित भरा (तात्काळ सत्यापन)`
+                          `Pay ₹${order.amountInr} via Razorpay${order.razorpayMode === 'test' ? ' (Test Mode)' : ''}`,
+                          `Razorpay से ₹${order.amountInr} सुरक्षित भुगतान करें`,
+                          `Razorpay द्वारे ₹${order.amountInr} सुरक्षित भरा`
                         )}
                       </span>
                     </button>
                     <p className="text-[11px] text-slate-600 text-center">
-                      Server verifies HMAC-SHA256 signature + captured ₹250 status with Razorpay before issuing your Worker ID &amp; Certificate.
+                      Backend verifies HMAC-SHA256 signature and confirms <strong>captured</strong> ₹250 status directly with Razorpay before issuing your Verified Worker ID &amp; Official Receipt.
+                    </p>
+                  </div>
+                ) : order.razorpayMode === 'live_blocked' || config?.razorpayMode === 'live_blocked' ? (
+                  <div className="rounded-xl border-2 border-red-300 bg-red-50 p-4 text-xs text-red-900 space-y-1">
+                    <div className="font-extrabold flex items-center gap-1.5 text-red-800">
+                      <AlertCircle className="w-4 h-4 shrink-0" />
+                      <span>Razorpay Live Mode Blocked — Test Mode Only Enforced</span>
+                    </div>
+                    <p>
+                      {order.configError ||
+                        config?.configError ||
+                        'RAZORPAY_KEY_ID is set to a Live Mode key (rzp_live_*). Replace it with your Razorpay Test Mode key (rzp_test_*) in Vercel Environment Variables until production live mode is explicitly approved.'}
                     </p>
                   </div>
                 ) : (
-                  <div className="rounded-xl border border-blue-200 bg-blue-50/70 p-3.5 text-xs text-slate-800 space-y-1">
+                  <div className="rounded-xl border border-blue-200 bg-blue-50/70 p-3.5 text-xs text-slate-800 space-y-1.5">
                     <div className="font-extrabold text-[#0B3B75]">
-                      Online Razorpay Checkout Pending Server Keys · Approved Official UPI QR Active
+                      Razorpay Test Mode Configuration Required · Approved Official UPI QR Active
                     </div>
                     <p>
-                      Instant Razorpay Checkout activates automatically once <code className="font-mono-tabular font-bold">RAZORPAY_KEY_ID</code>,{' '}
-                      <code className="font-mono-tabular font-bold">RAZORPAY_KEY_SECRET</code>, and{' '}
-                      <code className="font-mono-tabular font-bold">RAZORPAY_WEBHOOK_SECRET</code> are configured on Vercel. Until then, you may pay via the Approved Official UPI QR below (activated strictly after Admin bank verification — never from screenshots).
+                      {order.configError ||
+                        config?.configError ||
+                        'Online Razorpay Test Mode Checkout activates automatically once server-side Razorpay Test Mode credentials are configured in Vercel Environment Variables.'}
+                      {(order.missingGatewayEnvVars || config?.missingGatewayEnvVars || []).length > 0 && (
+                        <>
+                          {' '}
+                          Missing server variables:{' '}
+                          <code className="font-mono-tabular font-bold">
+                            {(order.missingGatewayEnvVars || config?.missingGatewayEnvVars || []).join(', ')}
+                          </code>
+                          .
+                        </>
+                      )}{' '}
+                      Gateway secrets stay strictly server-side and are never exposed to the browser.
                     </p>
                   </div>
                 )}
@@ -753,6 +932,7 @@ export const WorkerPaymentReceiptCard: React.FC<{
   payment: WorkerRegistrationPayment;
 }> = ({ payment }) => {
   const { lang } = useLanguage();
+  const isVerified = payment.status === 'verified';
   return (
     <section className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
       <div className="bg-[#0B3B75] text-white px-5 py-3.5 flex flex-wrap items-center justify-between gap-2">
@@ -767,14 +947,25 @@ export const WorkerPaymentReceiptCard: React.FC<{
             </div>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={() => window.print()}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/15 hover:bg-white/25 text-white text-xs font-bold cursor-pointer"
-        >
-          <Printer className="w-3.5 h-3.5" />
-          <span>{tr(lang, 'Print Receipt', 'रसीद प्रिंट करें', 'पावती प्रिंट करा')}</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            disabled={!isVerified}
+            onClick={() => downloadOfficialPaymentReceipt(payment)}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#15803D] hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white text-xs font-bold cursor-pointer"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>{tr(lang, 'Download Receipt', 'रसीद डाउनलोड करें', 'पावती डाउनलोड करा')}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => window.print()}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white/15 hover:bg-white/25 text-white text-xs font-bold cursor-pointer"
+          >
+            <Printer className="w-3.5 h-3.5" />
+            <span>{tr(lang, 'Print', 'प्रिंट', 'प्रिंट')}</span>
+          </button>
+        </div>
       </div>
 
       <div className="p-5 space-y-4 text-xs">
@@ -782,7 +973,7 @@ export const WorkerPaymentReceiptCard: React.FC<{
           <div>
             <div className="text-slate-500">Receipt No.</div>
             <div className="font-mono-tabular text-sm font-extrabold text-[#0B3B75]">
-              {payment.receiptNo || 'PROVISIONAL (Awaiting Verification)'}
+              {payment.receiptNo || 'PROVISIONAL (Awaiting Server Verification)'}
             </div>
           </div>
           <PaymentStatusBadge status={payment.status} lang={lang} />
@@ -794,29 +985,33 @@ export const WorkerPaymentReceiptCard: React.FC<{
             <div className="font-bold text-[#0B3B75] mt-0.5">{payment.workerName}</div>
           </div>
           <div>
-            <div className="text-slate-500">Worker / App ID</div>
+            <div className="text-slate-500">Verified Worker / App ID</div>
             <div className="font-mono-tabular font-bold text-[#C25E00] mt-0.5">
               {payment.verifiedWorkerId || payment.provisionalAppId}
             </div>
           </div>
           <div>
-            <div className="text-slate-500">Registration Fee Paid</div>
+            <div className="text-slate-500">Registration Fee</div>
             <div className="font-mono-tabular text-base font-extrabold text-[#15803D] mt-0.5">
               ₹{payment.amountInr} (One-Time)
             </div>
           </div>
           <div>
-            <div className="text-slate-500">Order Reference</div>
-            <div className="font-mono-tabular font-semibold text-slate-800 mt-0.5">{payment.orderRef}</div>
+            <div className="text-slate-500">Razorpay / Portal Order ID</div>
+            <div className="font-mono-tabular font-semibold text-slate-800 mt-0.5 break-all">
+              {payment.gatewayOrderId || payment.orderRef}
+            </div>
           </div>
           <div>
-            <div className="text-slate-500">UTR / Gateway Ref</div>
-            <div className="font-mono-tabular font-semibold text-slate-800 mt-0.5">{payment.utrOrGatewayRef}</div>
+            <div className="text-slate-500">Razorpay Payment ID / UTR</div>
+            <div className="font-mono-tabular font-semibold text-slate-800 mt-0.5 break-all">
+              {payment.gatewayPaymentId || payment.utrOrGatewayRef}
+            </div>
           </div>
           <div>
             <div className="text-slate-500">Payment Method &amp; Date</div>
-            <div className="font-semibold text-slate-800 mt-0.5 uppercase">
-              {payment.paymentMethod.replace(/_/g, ' ')} · {formatIsoDate(payment.verifiedAtIso)}
+            <div className="font-semibold text-slate-800 mt-0.5">
+              {formatPaymentMethodLabel(payment.paymentMethod)} · {formatIsoDate(payment.verifiedAtIso)}
             </div>
           </div>
         </div>
@@ -825,12 +1020,139 @@ export const WorkerPaymentReceiptCard: React.FC<{
           <div className="rounded-lg bg-slate-100 border border-slate-300 px-3.5 py-2.5 text-slate-700">
             <strong>Refund Details:</strong> Ref{' '}
             <span className="font-mono-tabular font-bold">{payment.refundReference || 'N/A'}</span> ·{' '}
-            {payment.refundReason || 'Refund processed by Admin.'}
+            {payment.refundReason || 'Refund processed.'}
           </div>
         )}
 
         <p className="text-[11px] text-slate-500 leading-relaxed border-t border-slate-100 pt-3">
-          <strong>Disclosure:</strong> This receipt acknowledges the one-time ₹250 worker registration payment on Rojgar Setu. Paid benefits (Verified Worker ID, Official Certificate &amp; Referral Rewards) remain active only while payment status is VERIFIED. Registration does not guarantee employment or fixed income.
+          <strong>Disclosure:</strong> {EXACT_NO_GUARANTEE_DISCLOSURE} Paid benefits (Verified Worker ID, Official Certificate &amp; ₹50 Single-Level Referral Code) remain active only while payment status is Successful / Verified.
+        </p>
+      </div>
+    </section>
+  );
+};
+
+export const WorkerPaymentHistoryCard: React.FC<{
+  workerProfile?: PublicWorkerProfile | null;
+  payment?: WorkerRegistrationPayment | null;
+}> = ({ workerProfile, payment }) => {
+  const { lang } = useLanguage();
+  const isVerified =
+    payment?.status === 'verified' || isWorkerPaidBenefitsActive(workerProfile);
+  const effectiveStatus: RegistrationPaymentStatus =
+    payment?.status ||
+    workerProfile?.registrationPaymentStatus ||
+    (isVerified ? 'verified' : 'pending');
+
+  return (
+    <section className="bg-white border border-slate-200 rounded-2xl overflow-hidden shadow-xs">
+      <div className="px-5 py-3.5 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2 bg-slate-50/70">
+        <div className="flex items-center gap-2">
+          <History className="w-4 h-4 text-[#0B3B75]" />
+          <h3 className="font-display text-sm font-extrabold text-[#0B3B75]">
+            {tr(lang, 'Registration Payment Status & History', 'पंजीकरण भुगतान स्थिति और इतिहास', 'नोंदणी पेमेंट स्थिती व इतिहास')}
+          </h3>
+        </div>
+        <PaymentStatusBadge status={effectiveStatus} lang={lang} />
+      </div>
+
+      <div className="p-5 space-y-4 text-xs">
+        {/* Required 4-Item Summary */}
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 bg-slate-50 border border-slate-200 rounded-xl p-3.5">
+          <div>
+            <div className="text-[11px] font-bold uppercase text-slate-500">Registration Fee</div>
+            <div className="font-mono-tabular text-base font-extrabold text-[#0B3B75] mt-0.5">
+              ₹{payment?.amountInr || WORKER_REGISTRATION_FEE_INR}
+            </div>
+          </div>
+          <div>
+            <div className="text-[11px] font-bold uppercase text-slate-500">Payment Method</div>
+            <div className="font-extrabold text-[#0B3B75] mt-0.5">
+              {formatPaymentMethodLabel(payment?.paymentMethod || 'payment_gateway')}
+            </div>
+          </div>
+          <div>
+            <div className="text-[11px] font-bold uppercase text-slate-500">Payment Status</div>
+            <div className="mt-1">
+              <PaymentStatusBadge status={effectiveStatus} lang={lang} />
+            </div>
+          </div>
+          <div>
+            <div className="text-[11px] font-bold uppercase text-slate-500">Payment Receipt</div>
+            <div className="mt-1">
+              {payment && payment.status === 'verified' ? (
+                <button
+                  type="button"
+                  onClick={() => downloadOfficialPaymentReceipt(payment)}
+                  className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#15803D] hover:bg-emerald-700 text-white text-[11px] font-extrabold cursor-pointer"
+                >
+                  <Download className="w-3 h-3" />
+                  <span>Download</span>
+                </button>
+              ) : (
+                <span className="text-[11px] font-semibold text-slate-500">
+                  {effectiveStatus === 'failed'
+                    ? 'Payment failed — retry above'
+                    : effectiveStatus === 'refunded'
+                    ? 'Refunded'
+                    : 'Available after verified capture'}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Transaction Record */}
+        {payment ? (
+          <div className="overflow-x-auto border border-slate-200 rounded-xl">
+            <table className="w-full text-left border-collapse">
+              <thead className="bg-slate-50 text-[11px] uppercase text-slate-500 border-b border-slate-200">
+                <tr>
+                  <th className="px-3.5 py-2.5 font-bold">Order ID</th>
+                  <th className="px-3.5 py-2.5 font-bold">Payment ID / Ref</th>
+                  <th className="px-3.5 py-2.5 font-bold">Amount</th>
+                  <th className="px-3.5 py-2.5 font-bold">Method</th>
+                  <th className="px-3.5 py-2.5 font-bold">Status</th>
+                  <th className="px-3.5 py-2.5 font-bold">Date</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                <tr>
+                  <td className="px-3.5 py-2.5 font-mono-tabular font-semibold text-[#0B3B75]">
+                    {payment.gatewayOrderId || payment.orderRef}
+                  </td>
+                  <td className="px-3.5 py-2.5 font-mono-tabular text-slate-700">
+                    {payment.gatewayPaymentId || payment.utrOrGatewayRef || '—'}
+                  </td>
+                  <td className="px-3.5 py-2.5 font-mono-tabular font-extrabold text-[#15803D]">
+                    ₹{payment.amountInr}
+                  </td>
+                  <td className="px-3.5 py-2.5 font-semibold text-slate-700">
+                    {formatPaymentMethodLabel(payment.paymentMethod)}
+                  </td>
+                  <td className="px-3.5 py-2.5">
+                    <PaymentStatusBadge status={payment.status} lang={lang} />
+                  </td>
+                  <td className="px-3.5 py-2.5 text-slate-600">
+                    {formatIsoDate(payment.verifiedAtIso || payment.refundedAtIso)}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="rounded-xl bg-slate-50 border border-dashed border-slate-300 p-3.5 text-slate-600">
+            {tr(
+              lang,
+              'No completed ₹250 registration transaction recorded yet. Complete Razorpay checkout above to activate your Verified Worker ID and Receipt.',
+              'अभी तक कोई पूर्ण ₹250 पंजीकरण भुगतान दर्ज नहीं है। सत्यापित कामगार ID और रसीद के लिए ऊपर भुगतान पूरा करें।',
+              'अद्याप कोणतेही पूर्ण ₹250 नोंदणी पेमेंट नोंदवलेले नाही. सत्यापित कामगार ID व पावतीसाठी वर पेमेंट पूर्ण करा.'
+            )}
+          </div>
+        )}
+
+        <p className="text-[11px] text-slate-500 leading-relaxed">
+          <strong>Disclosure:</strong> {EXACT_NO_GUARANTEE_DISCLOSURE}
         </p>
       </div>
     </section>
