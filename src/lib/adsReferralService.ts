@@ -268,11 +268,12 @@ export interface AdMatchContext {
   state?: string;
   district?: string;
   city?: string;
+  pincode?: string;
   customCategories?: AdvertisementCategory[];
 }
 
 /**
- * Strictly matches ONLY active, non-expired, within-limit advertisements relevant to the selected category and location.
+ * Strictly matches ONLY active, non-expired, within-limit advertisements relevant to the selected category and location/pincode.
  * Never returns unrelated category ads when a specific category is selected.
  */
 export function getMatchingActiveAds(
@@ -297,6 +298,7 @@ export function getMatchingActiveAds(
   const reqState = (ctx.state || '').trim().toLowerCase();
   const reqDistrict = (ctx.district || '').trim().toLowerCase();
   const reqCity = (ctx.city || '').trim().toLowerCase();
+  const reqPincode = (ctx.pincode || '').replace(/\D/g, '').slice(0, 6);
 
   const scored: Array<{ ad: AdvertisementRecord; score: number }> = [];
 
@@ -313,7 +315,7 @@ export function getMatchingActiveAds(
       if (!matchesCat) continue;
     }
 
-    // 2. Location Targeting Check (never exposes private customer location to advertisers)
+    // 2. Location & Pincode Targeting Check (never exposes private customer location to advertisers)
     let locScore = 0;
     if (ad.allLocations) {
       locScore = 1;
@@ -329,14 +331,21 @@ export function getMatchingActiveAds(
       if (!hasAnyLocationFilter) {
         locScore = 1;
       } else {
-        const cityHit = reqCity && (cities.some((c) => reqCity.includes(c) || c.includes(reqCity)) || areas.some((a) => reqCity.includes(a) || a.includes(reqCity)));
+        const pincodeHit =
+          reqPincode.length === 6 &&
+          (areas.some((a) => a.includes(reqPincode)) || cities.some((c) => c.includes(reqPincode)));
+        const cityHit =
+          reqCity &&
+          (cities.some((c) => reqCity.includes(c) || c.includes(reqCity)) ||
+            areas.some((a) => reqCity.includes(a) || a.includes(reqCity)));
         const districtHit = reqDistrict && districts.some((d) => reqDistrict.includes(d) || d.includes(reqDistrict));
         const stateHit = reqState && states.some((s) => reqState.includes(s) || s.includes(reqState));
 
-        if (cityHit) locScore = 4;
+        if (pincodeHit) locScore = 5;
+        else if (cityHit) locScore = 4;
         else if (districtHit) locScore = 3;
-        else if (stateHit && districts.length === 0 && cities.length === 0) locScore = 2;
-        else if (!reqState && !reqDistrict && !reqCity) locScore = 1;
+        else if (stateHit && districts.length === 0 && cities.length === 0 && areas.length === 0) locScore = 2;
+        else if (!reqState && !reqDistrict && !reqCity && !reqPincode) locScore = 1;
         else continue; // Ad targets a different location
       }
     }

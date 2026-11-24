@@ -144,6 +144,7 @@ import type {
   WorkerReferralRecord,
   WorkerRegistrationPayment,
 } from '../types/domain';
+import { ProfessionThumbnail } from './ProfessionThumbnail';
 
 function tr(lang: Language, en: string, hi: string, mr: string): string {
   return lang === 'hi' ? hi : lang === 'mr' ? mr : en;
@@ -4173,15 +4174,26 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
                 className="rounded-lg border border-slate-200 p-4 space-y-2.5 bg-slate-50/40"
               >
                 <div className="flex items-start justify-between gap-2">
-                  <div>
-                    <h3 className="font-bold text-sm text-[#0B3B75]">
-                      {cat.en}
-                    </h3>
-                    <p className="text-[11px] text-slate-500">
-                      {cat.mr} · {cat.hi}
-                    </p>
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <ProfessionThumbnail
+                      id={cat.id}
+                      label={cat.en}
+                      hint={`${cat.en} ${cat.canonicalCategory}`}
+                      size="sm"
+                      accentBg={cat.accentBg}
+                      accentBorder={cat.accentBorder}
+                      accentText={cat.accentText}
+                    />
+                    <div className="min-w-0">
+                      <h3 className="font-bold text-sm text-[#0B3B75] truncate">
+                        {cat.en}
+                      </h3>
+                      <p className="text-[11px] text-slate-500 truncate">
+                        {cat.mr} · {cat.hi}
+                      </p>
+                    </div>
                   </div>
-                  <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-white border border-slate-200 text-[#15803D]">
+                  <span className="text-[11px] font-bold px-2 py-0.5 rounded bg-white border border-slate-200 text-[#15803D] shrink-0">
                     Worker Quote
                   </span>
                 </div>

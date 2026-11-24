@@ -40,6 +40,7 @@ interface SponsoredAdSliderProps {
   state?: string;
   district?: string;
   city?: string;
+  pincode?: string;
   placement: AdvertisementPlacement;
   onNavigate?: (route: PageRoute) => void;
   /** Compact variant for inside category forms or secondary pages */
@@ -56,6 +57,7 @@ export const SponsoredAdSlider: React.FC<SponsoredAdSliderProps> = ({
   state = '',
   district = '',
   city = '',
+  pincode = '',
   placement,
   onNavigate,
   compact = false,
@@ -96,9 +98,10 @@ export const SponsoredAdSlider: React.FC<SponsoredAdSliderProps> = ({
         state,
         district,
         city,
+        pincode,
         customCategories,
       }),
-    [allActiveAds, category, state, district, city, customCategories]
+    [allActiveAds, category, state, district, city, pincode, customCategories]
   );
 
   // Keep index bounded if ad list shrinks
@@ -168,38 +171,83 @@ export const SponsoredAdSlider: React.FC<SponsoredAdSliderProps> = ({
 
   if (dismissed) return null;
 
-  // When no active approved ads exist yet for this category, display a subtle, non-intrusive
-  // local business invitation strip (never displays unrelated ads or blocks booking).
+  // When no active approved ads exist yet for this category/area, display a clear local business
+  // promotion strip ("येथे जाहिरात करा") so local shops & service providers can promote easily.
   if (loaded && matchedAds.length === 0) {
-    if (compact) return null;
-    return (
-      <aside
-        aria-label={tr(lang, 'Sponsored Advertisement Slot', 'प्रायोजित विज्ञापन स्थान', 'प्रायोजित जाहिरात स्थान')}
-        className="bg-white border border-slate-200/90 rounded-xl px-4 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs"
-      >
-        <div className="flex items-center gap-3 min-w-0">
-          <div className="w-9 h-9 rounded-lg bg-amber-50 border border-amber-200 flex items-center justify-center shrink-0">
-            <Megaphone className="w-4 h-4 text-[#E06D1B]" />
-          </div>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">
-                {tr(lang, 'Sponsored Advertisement', 'प्रायोजित विज्ञापन', 'प्रायोजित जाहिरात')}
-              </span>
-            </div>
-            <p className="text-xs sm:text-sm font-bold text-[#0B3B75] truncate">
+    const areaTag = [pincode || city || district].filter(Boolean).join(', ');
+    if (compact) {
+      if (!onNavigate) return null;
+      return (
+        <aside
+          aria-label={tr(lang, 'Local Business Promotion Slot', 'स्थानीय व्यवसाय विज्ञापन स्थान', 'स्थानिक व्यवसाय जाहिरात स्थान')}
+          className="bg-amber-50/70 border border-amber-200/90 rounded-xl px-3.5 py-2.5 flex flex-wrap items-center justify-between gap-2"
+        >
+          <div className="flex items-center gap-2 min-w-0 text-xs">
+            <Megaphone className="w-4 h-4 text-[#E06D1B] shrink-0" />
+            <span className="font-bold text-[#0B3B75] truncate">
               {categoryLabel
                 ? tr(
                     lang,
-                    `Own a shop or business related to ${categoryLabel}? Promote it to local customers here.`,
-                    `क्या आपका ${categoryLabel} से जुड़ा दुकान या व्यवसाय है? यहाँ ग्राहकों तक विज्ञापन पहुँचाएँ।`,
-                    `${categoryLabel} संबंधित दुकान किंवा व्यवसाय आहे का? स्थानिक ग्राहकांपर्यंत जाहिरात पोहोचवा.`
+                    `Promote your ${categoryLabel} shop${areaTag ? ` in ${areaTag}` : ''} to nearby customers.`,
+                    `${areaTag ? `${areaTag} में ` : ''}अपने ${categoryLabel} दुकान/व्यवसाय का प्रचार करें।`,
+                    `${areaTag ? `${areaTag} परिसरात ` : ''}तुमच्या ${categoryLabel} दुकान/व्यवसायाची जाहिरात करा.`
                   )
                 : tr(
                     lang,
-                    'Advertise your local hardware, building material, or service shop on ROJGAR SETU.',
-                    'रोजगार सेतु पर अपनी स्थानीय दुकान, मटेरियल सप्लाई या सेवा का विज्ञापन करें।',
-                    'रोजगार सेतूवर तुमच्या स्थानिक दुकान, साहित्य सप्लाय किंवा व्यवसायाची जाहिरात करा.'
+                    `Own a local shop or service${areaTag ? ` in ${areaTag}` : ''}? Promote by category & pincode.`,
+                    `स्थानीय दुकान या व्यवसाय है? श्रेणी व पिनकोड के अनुसार विज्ञापन दें।`,
+                    `स्थानिक दुकान किंवा व्यवसाय आहे का? कॅटेगिरी व पिनकोडनुसार येथे जाहिरात करा.`
+                  )}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => onNavigate('advertise')}
+            className="px-3 py-1.5 rounded-lg bg-[#E06D1B] hover:bg-[#c55b10] text-white text-[11px] font-extrabold whitespace-nowrap cursor-pointer"
+          >
+            {tr(lang, 'Advertise Here →', 'यहाँ विज्ञापन दें →', 'येथे जाहिरात करा →')}
+          </button>
+        </aside>
+      );
+    }
+    return (
+      <aside
+        aria-label={tr(lang, 'Sponsored Advertisement Slot', 'प्रायोजित विज्ञापन स्थान', 'प्रायोजित जाहिरात स्थान')}
+        className="bg-gradient-to-r from-white via-amber-50/40 to-blue-50/50 border border-amber-200/90 rounded-xl px-4 py-3.5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs"
+      >
+        <div className="flex items-start sm:items-center gap-3 min-w-0">
+          <div className="w-10 h-10 rounded-xl bg-[#E06D1B] text-white flex items-center justify-center shrink-0 shadow-xs">
+            <Megaphone className="w-5 h-5" />
+          </div>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className="text-[10px] font-extrabold uppercase tracking-wider text-[#C25E00]">
+                {tr(lang, 'Local Business Promotion', 'स्थानीय व्यवसाय विज्ञापन', 'स्थानिक व्यवसाय जाहिरात')}
+              </span>
+              {areaTag && (
+                <span className="px-1.5 py-0.5 rounded bg-blue-50 border border-blue-200 text-[10px] font-bold text-[#0B3B75]">
+                  {areaTag}
+                </span>
+              )}
+              {categoryLabel && (
+                <span className="px-1.5 py-0.5 rounded bg-amber-100/80 border border-amber-200 text-[10px] font-bold text-[#9A3412]">
+                  {categoryLabel}
+                </span>
+              )}
+            </div>
+            <p className="text-xs sm:text-sm font-extrabold text-[#0B3B75] mt-0.5">
+              {categoryLabel
+                ? tr(
+                    lang,
+                    `Own a ${categoryLabel} shop or supplier business? Reach local customers by category & pincode.`,
+                    `${categoryLabel} से जुड़ा दुकान या व्यवसाय है? श्रेणी व पिनकोड के अनुसार ग्राहकों तक पहुँचें।`,
+                    `${categoryLabel} संबंधित दुकान, साहित्य सप्लाय किंवा व्यवसाय आहे का? कॅटेगिरी व पिनकोडनुसार थेट ग्राहकांपर्यंत पोहोचा.`
+                  )
+                : tr(
+                    lang,
+                    'Promote your local shop, hardware store, studio, or service by Category & Pincode on ROJGAR SETU.',
+                    'रोजगार सेतु पर अपनी दुकान, हार्डवेयर, स्टूडियो या सेवा का श्रेणी व पिनकोड अनुसार विज्ञापन करें।',
+                    'रोजगार सेतूवर तुमच्या दुकान, हार्डवेअर, स्टुडिओ किंवा सेवेची कॅटेगिरी व पिनकोडनुसार जाहिरात करा.'
                   )}
             </p>
             <p className="text-[11px] font-bold text-[#E06D1B] mt-0.5">
@@ -212,9 +260,9 @@ export const SponsoredAdSlider: React.FC<SponsoredAdSliderProps> = ({
             <button
               type="button"
               onClick={() => onNavigate('advertise')}
-              className="px-3.5 py-2 rounded-lg bg-[#0B3B75] hover:bg-[#072A54] text-white text-xs font-bold whitespace-nowrap cursor-pointer"
+              className="px-4 py-2.5 rounded-lg bg-[#E06D1B] hover:bg-[#c55b10] text-white text-xs font-extrabold whitespace-nowrap shadow-xs cursor-pointer"
             >
-              {tr(lang, 'Advertise With Us', 'विज्ञापन दें', 'जाहिरात करा')}
+              {tr(lang, 'Advertise Here', 'यहाँ विज्ञापन दें', 'येथे जाहिरात करा')}
             </button>
           )}
           <button
@@ -344,9 +392,9 @@ export const SponsoredAdSlider: React.FC<SponsoredAdSliderProps> = ({
             <button
               type="button"
               onClick={() => onNavigate('advertise')}
-              className="text-[11px] font-semibold text-[#0B3B75] hover:underline cursor-pointer hidden sm:inline"
+              className="px-2 py-0.5 rounded bg-amber-50 border border-amber-200 text-[10px] sm:text-[11px] font-bold text-[#C25E00] hover:bg-amber-100 cursor-pointer whitespace-nowrap"
             >
-              {tr(lang, 'Advertise here', 'यहाँ विज्ञापन दें', 'येथे जाहिरात करा')}
+              {tr(lang, 'Advertise Here', 'यहाँ विज्ञापन दें', 'येथे जाहिरात करा')}
             </button>
           )}
           <button

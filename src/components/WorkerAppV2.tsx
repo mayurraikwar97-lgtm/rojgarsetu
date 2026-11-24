@@ -38,6 +38,7 @@ import {
 } from '../lib/firestoreService';
 import { getSafeCustomerLabelForJobOrApp } from '../lib/customerPrivacy';
 import {
+  SERVICE_RADIUS_STAGES,
   calculateValidDistanceKm,
   getLocalizedCategoryLabel,
   getPublicJobLocationText,
@@ -53,6 +54,7 @@ import type {
   JobPosting,
   Language,
   PageRoute,
+  ServiceRadiusKm,
   WorkerRegistrationPayment,
 } from '../types/domain';
 import { BrandSloganBanner } from './BrandSloganBanner';
@@ -110,6 +112,7 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
   const [applications, setApplications] = useState<JobApplication[]>([]);
   const [togglingAvailability, setTogglingAvailability] = useState(false);
   const [updatingRadius, setUpdatingRadius] = useState(false);
+  const [areaPincodeFilter, setAreaPincodeFilter] = useState('');
 
   // Direct cold-start fallback if notification deep-linked to a jobId not yet in live list
   const [fetchedSpotlightJob, setFetchedSpotlightJob] = useState<JobPosting | null>(null);
@@ -289,6 +292,27 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
       setActionError(err instanceof Error ? err.message : 'Unable to update availability.');
     } finally {
       setTogglingAvailability(false);
+    }
+  };
+
+  const handleQuickRadiusChange = async (nextRadius: ServiceRadiusKm) => {
+    if (!user || !workerProfile) return;
+    setUpdatingRadius(true);
+    setActionError('');
+    try {
+      await updateWorkerPreferredRadius(user.uid, nextRadius);
+      setActionFeedback(
+        tr(
+          lang,
+          `Nearby job alert radius updated to ${nextRadius} km.`,
+          `नज़दीकी काम अलर्ट का दायरा ${nextRadius} किमी सेट किया गया।`,
+          `जवळच्या कामाचा अलर्ट परिसर ${nextRadius} किमी सेट केला.`
+        )
+      );
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'Unable to update alert radius.');
+    } finally {
+      setUpdatingRadius(false);
     }
   };
 
@@ -531,6 +555,52 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
             </button>
           </div>
 
+          {/* Prominent Worker Alert Zone (Area / Pincode + Quick Radius Selector) */}
+          <div className="rounded-xl border border-blue-200/80 bg-blue-50/50 px-3.5 py-2.5 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+            <div className="flex items-start sm:items-center gap-2 min-w-0 text-xs">
+              <MapPin className="w-4 h-4 text-[#E06D1B] shrink-0 mt-0.5 sm:mt-0" />
+              <div className="min-w-0">
+                <span className="font-bold text-[#0B3B75]">
+                  {tr(lang, 'Nearby Alert Zone:', 'नज़दीकी अलर्ट क्षेत्र:', 'जवळचा अलर्ट परिसर:')}{' '}
+                </span>
+                <span className="font-semibold text-slate-700">
+                  {[workerProfile.cityOrVillage, workerProfile.district, workerProfile.state]
+                    .filter(Boolean)
+                    .join(', ')}
+                </span>
+                {workerPrivate?.preferredWorkLocation && (
+                  <span className="ml-1.5 inline-block px-1.5 py-0.5 rounded bg-white border border-blue-200 text-[11px] font-semibold text-[#0B3B75]">
+                    {workerPrivate.preferredWorkLocation}
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+              <span className="text-[11px] font-bold text-slate-600">
+                {tr(lang, 'Alert Radius:', 'अलर्ट दूरी:', 'अलर्ट अंतर:')}
+              </span>
+              {SERVICE_RADIUS_STAGES.map((km) => {
+                const active = (workerProfile.preferredRadiusKm || 5) === km;
+                return (
+                  <button
+                    key={km}
+                    type="button"
+                    disabled={updatingRadius}
+                    onClick={() => handleQuickRadiusChange(km)}
+                    className={`px-2.5 py-1 rounded-md text-xs font-extrabold transition-colors cursor-pointer ${
+                      active
+                        ? 'bg-[#0B3B75] text-white'
+                        : 'bg-white border border-slate-300 text-slate-700 hover:border-[#0B3B75]'
+                    }`}
+                  >
+                    {km} km
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           {!isAvailable && (
             <div className="rounded-lg bg-amber-50 border border-amber-200 px-3.5 py-2 text-xs font-semibold text-amber-900">
               {tr(
@@ -598,13 +668,52 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
         )}
 
         {/* ================= TAB 1: NEW REQUESTS ================= */}
-        {activeTab === 'new_requests' && (
+        {activeTab === 'new_requests' && (() => {
+          const locQ = areaPincodeFilter.trim().toLowerCase();
+          const filteredRequests = locQ
+            ? newRequestItems.filter(({ job }) => {
+                const locBlob = `${job.cityOrVillage || ''} ${job.district || ''} ${job.state || ''} ${job.approxLocationLabel || ''} ${job.workLocationLabel || ''} ${job.title || ''}`.toLowerCase();
+                return locBlob.includes(locQ);
+              })
+            : newRequestItems;
+          return (
           <div className="space-y-4">
-            {newRequestItems.length === 0 ? (
+            {newRequestItems.length > 0 && (
+              <div className="bg-white border border-slate-200 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                <div className="relative flex-1 max-w-sm">
+                  <MapPin className="w-4 h-4 text-[#E06D1B] absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    type="text"
+                    value={areaPincodeFilter}
+                    onChange={(e) => setAreaPincodeFilter(e.target.value)}
+                    placeholder={tr(
+                      lang,
+                      'Filter requests by area or 6-digit pincode...',
+                      'क्षेत्र या 6-अंकीय पिनकोड से फ़िल्टर करें...',
+                      'परिसर किंवा ६-अंकी पिनकोडने शोधा...'
+                    )}
+                    className="w-full h-9 pl-9 pr-3 rounded-lg border border-slate-300 bg-slate-50 focus:bg-white text-xs text-slate-900 focus:outline-none focus:border-[#0B3B75]"
+                  />
+                </div>
+                {areaPincodeFilter && (
+                  <button
+                    type="button"
+                    onClick={() => setAreaPincodeFilter('')}
+                    className="text-xs font-bold text-[#0B3B75] hover:underline cursor-pointer self-start sm:self-auto"
+                  >
+                    {tr(lang, 'Clear area filter', 'फ़िल्टर हटाएँ', 'फिल्टर काढा')}
+                  </button>
+                )}
+              </div>
+            )}
+
+            {filteredRequests.length === 0 ? (
               <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center space-y-2">
                 <BellRing className="w-8 h-8 text-slate-300 mx-auto" />
                 <h2 className="font-display text-lg font-extrabold text-[#0B3B75]">
-                  {tr(lang, 'No new job requests right now', 'अभी कोई नई रिक्वेस्ट नहीं है', 'सध्या कोणतीही नवीन कामाची रिक्वेस्ट नाही')}
+                  {areaPincodeFilter
+                    ? tr(lang, 'No matching requests in this area/pincode', 'इस क्षेत्र/पिनकोड में कोई रिक्वेस्ट नहीं मिली', 'या परिसर/पिनकोडमध्ये सध्या रिक्वेस्ट नाही')
+                    : tr(lang, 'No new job requests right now', 'अभी कोई नई रिक्वेस्ट नहीं है', 'सध्या कोणतीही नवीन कामाची रिक्वेस्ट नाही')}
                 </h2>
                 <p className="text-xs sm:text-sm text-slate-500 max-w-md mx-auto">
                   {tr(
@@ -616,7 +725,7 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
                 </p>
               </div>
             ) : (
-              newRequestItems.map(({ job, app, distanceKm, isSpotlight }) => {
+              filteredRequests.map(({ job, app, distanceKm, isSpotlight }) => {
                 const isAcceptOpen = acceptingJobId === job.id;
                 const busy = actionBusyId === job.id;
                 const photos = Array.isArray(job.workPhotoUrls) ? job.workPhotoUrls : [];
@@ -812,7 +921,8 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
               })
             )}
           </div>
-        )}
+          );
+        })()}
 
         {/* ================= TAB 2: MY ACTIVE JOB ================= */}
         {activeTab === 'active_job' && (

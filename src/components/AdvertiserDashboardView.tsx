@@ -81,6 +81,7 @@ export const AdvertiserDashboardView: React.FC<AdvertiserDashboardViewProps> = (
   const [allLocations, setAllLocations] = useState(false);
   const [targetDistrictsInput, setTargetDistrictsInput] = useState('');
   const [targetCitiesInput, setTargetCitiesInput] = useState('');
+  const [targetAreasInput, setTargetAreasInput] = useState('');
   const [contactAction, setContactAction] = useState<AdvertisementActionType>('call');
   const [adCallNumber, setAdCallNumber] = useState('');
   const [adWhatsappNumber, setAdWhatsappNumber] = useState('');
@@ -305,6 +306,12 @@ export const AdvertiserDashboardView: React.FC<AdvertiserDashboardViewProps> = (
               .split(',')
               .map((s) => s.trim())
               .filter(Boolean),
+        targetAreas: allLocations
+          ? []
+          : targetAreasInput
+              .split(',')
+              .map((s) => s.trim())
+              .filter(Boolean),
         allLocations,
         contactAction,
         callNumber: adCallNumber || profile.mobile,
@@ -379,6 +386,49 @@ export const AdvertiserDashboardView: React.FC<AdvertiserDashboardViewProps> = (
                 'Zero customer PII is ever shared. Advertisers receive strictly aggregate impressions, call, WhatsApp, and website click analytics.',
                 'ग्राहकों का निजी डेटा कभी साझा नहीं होता। विज्ञापनदाताओं को केवल कुल व्यू और क्लिक आंकड़े मिलते हैं।',
                 'ग्राहकांची वैयक्तिक माहिती कधीही शेअर केली जात नाही. फक्त एकूण व्ह्यूज व क्लिक्सचे आकडे मिळतात.'
+              )}
+            </p>
+          </div>
+        </div>
+
+        {/* Local Business Promotion Highlights (Shops, Material Dealers, Studios & Contractors) */}
+        <div className="border-t border-slate-200 bg-slate-50/80 px-6 sm:px-8 py-4 grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+          <div className="bg-white border border-slate-200/90 rounded-lg p-3 space-y-1">
+            <div className="font-extrabold text-[#0B3B75]">
+              {tr(lang, '1. Category + Pincode Targeting', '1. श्रेणी व पिनकोड टारगेटिंग', '१. कॅटेगिरी व पिनकोडनुसार जाहिरात')}
+            </div>
+            <p className="text-slate-600 leading-relaxed">
+              {tr(
+                lang,
+                'Show your hardware, plywood, electrical, photo studio, or shop banner to customers booking matching services in your exact city or 6-digit pincode.',
+                'अपनी हार्डवेयर, प्लाईवुड, इलेक्ट्रिकल, फोटो स्टूडियो या दुकान का बैनर केवल अपने शहर व 6-अंकीय पिनकोड के ग्राहकों को दिखाएँ।',
+                'तुमचे हार्डवेअर, प्लायवूड, इलेक्ट्रिकल, फोटो स्टुडिओ किंवा दुकानाची जाहिरात थेट तुमच्या शहर व ६-अंकी पिनकोडमधील ग्राहकांना दाखवा.'
+              )}
+            </p>
+          </div>
+          <div className="bg-white border border-slate-200/90 rounded-lg p-3 space-y-1">
+            <div className="font-extrabold text-[#15803D]">
+              {tr(lang, '2. Direct Call & WhatsApp Leads', '2. सीधे कॉल व व्हाट्सएप पूछताछ', '२. थेट कॉल व व्हॉट्सॲप चौकशी')}
+            </div>
+            <p className="text-slate-600 leading-relaxed">
+              {tr(
+                lang,
+                'Every sponsored banner includes 1-tap Call, WhatsApp, or Website buttons with live aggregate impression & click tracking.',
+                'हर विज्ञापन पर 1-टैप कॉल, व्हाट्सएप या वेबसाइट बटन और कुल व्यू व क्लिक की स्पष्ट रिपोर्ट मिलती है।',
+                'प्रत्येक जाहिरातीवर थेट कॉल, व्हॉट्सॲप किंवा वेबसाईट बटण आणि एकूण व्ह्यूज व क्लिक्सचा हिशोब मिळतो.'
+              )}
+            </p>
+          </div>
+          <div className="bg-white border border-slate-200/90 rounded-lg p-3 space-y-1">
+            <div className="font-extrabold text-[#C25E00]">
+              {tr(lang, '3. Quick Local Approval', '3. त्वरित एडमिन समीक्षा', '३. जलद स्थानिक पडताळणी')}
+            </div>
+            <p className="text-slate-600 leading-relaxed">
+              {tr(
+                lang,
+                'Register your shop once below, choose categories & pincodes, and submit for fast ROJGAR SETU Admin activation.',
+                'नीचे एक बार अपनी दुकान पंजीकृत करें, श्रेणी व पिनकोड चुनें और त्वरित सक्रियण हेतु सबमिट करें।',
+                'खाली एकदा दुकानाची नोंदणी करा, कॅटेगिरी व पिनकोड निवडा आणि मंजुरीसाठी पाठवा.'
               )}
             </p>
           </div>
@@ -752,29 +802,48 @@ export const AdvertiserDashboardView: React.FC<AdvertiserDashboardViewProps> = (
                     <span>Show across All Locations (Pan-India / All Districts)</span>
                   </label>
                   {!allLocations && (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                      <div>
-                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                          Target Districts (comma separated)
-                        </label>
-                        <input
-                          type="text"
-                          value={targetDistrictsInput}
-                          onChange={(e) => setTargetDistrictsInput(e.target.value)}
-                          placeholder="e.g., Pune, Satara, Nagpur"
-                          className="w-full px-2.5 py-1.5 border border-slate-300 rounded bg-white text-xs"
-                        />
+                    <div className="space-y-2.5">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                            {tr(lang, 'Target Districts (comma separated)', 'लक्षित ज़िले (कॉमा से अलग)', 'लक्ष्य जिल्हे (स्वल्पविरामाने)')}
+                          </label>
+                          <input
+                            type="text"
+                            value={targetDistrictsInput}
+                            onChange={(e) => setTargetDistrictsInput(e.target.value)}
+                            placeholder="e.g., Chandrapur, Pune, Nagpur"
+                            className="w-full px-2.5 py-1.5 border border-slate-300 rounded bg-white text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                            {tr(lang, 'Target Cities / Towns (comma separated)', 'लक्षित शहर / कस्बे', 'लक्ष्य शहरे / तालुके')}
+                          </label>
+                          <input
+                            type="text"
+                            value={targetCitiesInput}
+                            onChange={(e) => setTargetCitiesInput(e.target.value)}
+                            placeholder="e.g., Ballarpur, Wakad, Kothrud"
+                            className="w-full px-2.5 py-1.5 border border-slate-300 rounded bg-white text-xs"
+                          />
+                        </div>
                       </div>
                       <div>
-                        <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                          Target Cities / Service Areas (comma separated)
+                        <label className="block text-[11px] font-semibold text-[#0B3B75] mb-1">
+                          {tr(
+                            lang,
+                            'Target 6-Digit Pincodes & Local Areas (comma separated)',
+                            'लक्षित 6-अंकीय पिनकोड व स्थानीय क्षेत्र (कॉमा से अलग)',
+                            'लक्ष्य ६-अंकी पिनकोड व स्थानिक परिसर (स्वल्पविरामाने)'
+                          )}
                         </label>
                         <input
                           type="text"
-                          value={targetCitiesInput}
-                          onChange={(e) => setTargetCitiesInput(e.target.value)}
-                          placeholder="e.g., Wakad, Kothrud, Pimpri"
-                          className="w-full px-2.5 py-1.5 border border-slate-300 rounded bg-white text-xs"
+                          value={targetAreasInput}
+                          onChange={(e) => setTargetAreasInput(e.target.value)}
+                          placeholder="e.g., 442401, 442402, Civil Lines, Main Market"
+                          className="w-full px-2.5 py-1.5 border border-blue-200 rounded bg-white text-xs focus:border-[#0B3B75] focus:outline-none"
                         />
                       </div>
                     </div>

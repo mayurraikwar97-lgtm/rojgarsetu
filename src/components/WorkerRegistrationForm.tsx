@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AlertCircle, AlertTriangle, CheckCircle2, Compass, CreditCard, Gift, IndianRupee, Loader2, MapPin, Plus, ShieldAlert, ShieldCheck, X } from 'lucide-react';
 import { EMPLOYMENT_CATEGORIES } from '../data/categories';
+import { SERVICE_CATALOG_V2, getServiceCategoryLabel } from '../data/serviceCatalogV2';
 import { getDistrictCoordinates, INDIA_STATES_DISTRICTS } from '../data/indiaLocations';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../i18n/LanguageContext';
@@ -52,9 +53,11 @@ import type {
   WorkType,
   WorkerRegistrationPayment,
 } from '../types/domain';
+import { AddProfessionModal } from './AddProfessionModal';
 import { LocationPinModal } from './LocationPinModal';
 import { NotificationOptInButton } from './NotificationOptInButton';
 import { OtpVerificationBox } from './OtpVerificationBox';
+import { ProfessionThumbnail } from './ProfessionThumbnail';
 import { ProfilePhotoUploader, type SelectedProfilePhoto } from './ProfilePhotoUploader';
 import { PWAInstallButton } from './PWAControls';
 import { SecureAvatar } from './SecureAvatar';
@@ -83,6 +86,7 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
   const workerOtpRequired = isWorkerRegistrationOtpEnabled();
   const fraudWarning = getOtpFraudWarningLocalized(lang);
   const authBannerRef = useRef<HTMLDivElement | null>(null);
+  const [showAddProfessionModal, setShowAddProfessionModal] = useState(false);
   const errorBoxRef = useRef<HTMLDivElement | null>(null);
 
   const [fullName, setFullName] = useState('');
@@ -1399,70 +1403,196 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
 
         {/* Multi-skill & Custom Profession section */}
         <div className="space-y-4 pt-2 border-t border-slate-200">
+          {/* Compact Visual Quick-Pick Profession Tiles with Photo Thumbnails */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs font-bold text-[#0B3B75]">
+                {lang === 'mr'
+                  ? 'तुमचा मुख्य व्यवसाय निवडा (फोटोवरून झटपट निवड करा):'
+                  : lang === 'hi'
+                  ? 'अपना मुख्य काम चुनें (फ़ोटो देखकर तुरंत चुनें):'
+                  : 'Quick-pick your primary profession:'}
+              </span>
+              <span className="text-[11px] text-slate-500">
+                {lang === 'mr' ? 'किंवा खालील यादीतून निवडा' : lang === 'hi' ? 'या नीचे सूची से चुनें' : 'or select from full list below'}
+              </span>
+            </div>
+            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2">
+              {SERVICE_CATALOG_V2.map((svc) => {
+                const isSelected = primarySkill === svc.canonicalCategory;
+                const label = getServiceCategoryLabel(svc, lang);
+                return (
+                  <button
+                    key={svc.id}
+                    type="button"
+                    onClick={() => {
+                      setPrimarySkill(svc.canonicalCategory);
+                      if (!skills.includes(svc.canonicalCategory)) {
+                        setSkills((prev) =>
+                          [svc.canonicalCategory, ...prev.filter((s) => s !== OTHER_PROFESSION_OPTION_VALUE)].slice(0, 15)
+                        );
+                      }
+                    }}
+                    className={`flex items-center gap-2 p-1.5 rounded-lg border text-left transition-all cursor-pointer ${
+                      isSelected
+                        ? 'bg-blue-50 border-[#0B3B75] ring-1 ring-[#0B3B75]/30'
+                        : 'bg-white border-slate-200 hover:border-[#0B3B75]/60 hover:bg-slate-50'
+                    }`}
+                  >
+                    <ProfessionThumbnail
+                      id={svc.id}
+                      label={label}
+                      hint={`${svc.en} ${svc.canonicalCategory}`}
+                      size="sm"
+                      accentBg={svc.accentBg}
+                      accentBorder={svc.accentBorder}
+                      accentText={svc.accentText}
+                    />
+                    <span className="text-[11px] font-bold text-[#0B3B75] leading-tight line-clamp-2 min-w-0">
+                      {label}
+                    </span>
+                  </button>
+                );
+              })}
+              {approvedProfessions.slice(0, 6).map((prof) => {
+                const isSelected = primarySkill === prof.nameEn;
+                const label = getCustomProfessionLabel(prof, lang);
+                return (
+                  <button
+                    key={prof.slug}
+                    type="button"
+                    onClick={() => {
+                      setPrimarySkill(prof.nameEn);
+                      if (!skills.includes(prof.nameEn)) {
+                        setSkills((prev) =>
+                          [prof.nameEn, ...prev.filter((s) => s !== OTHER_PROFESSION_OPTION_VALUE)].slice(0, 15)
+                        );
+                      }
+                    }}
+                    className={`flex items-center gap-2 p-1.5 rounded-lg border text-left transition-all cursor-pointer ${
+                      isSelected
+                        ? 'bg-blue-50 border-[#0B3B75] ring-1 ring-[#0B3B75]/30'
+                        : 'bg-white border-indigo-200/90 hover:border-[#0B3B75]/60 hover:bg-slate-50'
+                    }`}
+                  >
+                    <ProfessionThumbnail
+                      id={prof.slug}
+                      label={label}
+                      hint={prof.nameEn}
+                      size="sm"
+                      accentBg="bg-indigo-50"
+                      accentBorder="border-indigo-200"
+                      accentText="text-[#0B3B75]"
+                    />
+                    <span className="text-[11px] font-bold text-[#0B3B75] leading-tight line-clamp-2 min-w-0">
+                      {label}
+                    </span>
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                onClick={() => setShowAddProfessionModal(true)}
+                className="flex items-center gap-2 p-1.5 rounded-lg border-2 border-dashed border-[#E06D1B]/60 bg-amber-50/60 hover:bg-amber-50 hover:border-[#E06D1B] text-left transition-all cursor-pointer"
+              >
+                <div className="w-9 h-9 rounded-lg bg-[#E06D1B] text-white flex items-center justify-center shrink-0">
+                  <Plus className="w-4 h-4" />
+                </div>
+                <span className="text-[11px] font-extrabold text-[#C25E00] leading-tight line-clamp-2 min-w-0">
+                  {lang === 'mr' ? '+ व्यवसाय जोडा' : lang === 'hi' ? '+ काम जोड़ें' : '+ Add Skill'}
+                </span>
+              </button>
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
             <div>
               <label className="block text-xs font-semibold text-slate-700 mb-1">
                 {t.workerForm.primarySkill} *
               </label>
-              <select
-                value={primarySkill}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setPrimarySkill(val);
-                  if (val !== OTHER_PROFESSION_OPTION_VALUE && !skills.includes(val)) {
-                    setSkills((prev) =>
-                      [val, ...prev.filter((s) => s !== OTHER_PROFESSION_OPTION_VALUE)].slice(0, 15)
-                    );
-                  }
-                }}
-                className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
-              >
-                <optgroup
-                  label={
-                    lang === 'mr'
-                      ? 'प्रमुख रोजगार श्रेणी'
-                      : lang === 'hi'
-                      ? 'प्रमुख रोजगार श्रेणियाँ'
-                      : 'Standard Professions'
-                  }
+              <div className="flex items-center gap-2">
+                {primarySkill !== OTHER_PROFESSION_OPTION_VALUE && (
+                  <ProfessionThumbnail
+                    label={primarySkill}
+                    hint={primarySkill}
+                    size="sm"
+                  />
+                )}
+                <select
+                  value={primarySkill}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setPrimarySkill(val);
+                    if (val !== OTHER_PROFESSION_OPTION_VALUE && !skills.includes(val)) {
+                      setSkills((prev) =>
+                        [val, ...prev.filter((s) => s !== OTHER_PROFESSION_OPTION_VALUE)].slice(0, 15)
+                      );
+                    }
+                  }}
+                  className="flex-1 min-w-0 h-10 px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
                 >
-                  {EMPLOYMENT_CATEGORIES.map((c) => (
-                    <option key={c.id} value={c.en}>
-                      {lang === 'hi' ? c.hi : lang === 'mr' ? c.mr : c.en}
-                    </option>
-                  ))}
-                </optgroup>
-                {approvedProfessions.length > 0 && (
                   <optgroup
                     label={
                       lang === 'mr'
-                        ? 'मंजूर विशेष व्यवसाय (नवीन श्रेणी)'
+                        ? 'प्रमुख रोजगार श्रेणी'
                         : lang === 'hi'
-                        ? 'स्वीकृत विशेष व्यवसाय (नई श्रेणियाँ)'
-                        : 'Approved Specialized Professions'
+                        ? 'प्रमुख रोजगार श्रेणियाँ'
+                        : 'Standard Professions'
                     }
                   >
-                    {approvedProfessions.map((p) => (
-                      <option key={p.slug} value={p.nameEn}>
-                        {getCustomProfessionLabel(p, lang)}
+                    {EMPLOYMENT_CATEGORIES.map((c) => (
+                      <option key={c.id} value={c.en}>
+                        {lang === 'hi' ? c.hi : lang === 'mr' ? c.mr : c.en}
                       </option>
                     ))}
                   </optgroup>
-                )}
-                <option value={OTHER_PROFESSION_OPTION_VALUE}>
-                  {lang === 'mr'
-                    ? '➕ इतर व्यवसाय / तुमचा व्यवसाय जोडा (Other Profession / Add Your Profession)'
-                    : lang === 'hi'
-                    ? '➕ अन्य व्यवसाय / अपना व्यवसाय जोड़ें (Other Profession / Add Your Profession)'
-                    : '➕ Other Profession / Add Your Profession'}
-                </option>
-              </select>
+                  {approvedProfessions.length > 0 && (
+                    <optgroup
+                      label={
+                        lang === 'mr'
+                          ? 'मंजूर विशेष व्यवसाय (नवीन श्रेणी)'
+                          : lang === 'hi'
+                          ? 'स्वीकृत विशेष व्यवसाय (नई श्रेणियाँ)'
+                          : 'Approved Specialized Professions'
+                      }
+                    >
+                      {approvedProfessions.map((p) => (
+                        <option key={p.slug} value={p.nameEn}>
+                          {getCustomProfessionLabel(p, lang)}
+                        </option>
+                      ))}
+                    </optgroup>
+                  )}
+                  <option value={OTHER_PROFESSION_OPTION_VALUE}>
+                    {lang === 'mr'
+                      ? '➕ इतर व्यवसाय / तुमचा व्यवसाय जोडा (Other Profession / Add Your Profession)'
+                      : lang === 'hi'
+                      ? '➕ अन्य व्यवसाय / अपना व्यवसाय जोड़ें (Other Profession / Add Your Profession)'
+                      : '➕ Other Profession / Add Your Profession'}
+                  </option>
+                </select>
+                <button
+                  type="button"
+                  onClick={() => setShowAddProfessionModal(true)}
+                  title={
+                    lang === 'mr'
+                      ? 'नवीन व्यवसाय / कौशल्य जोडा'
+                      : lang === 'hi'
+                      ? 'नया व्यवसाय / कौशल जोड़ें'
+                      : 'Add New Profession / Skill'
+                  }
+                  className="h-10 inline-flex items-center gap-1 px-3 py-2 rounded-md bg-[#E06D1B] hover:bg-[#C65B12] text-white text-xs font-extrabold shrink-0 shadow-xs cursor-pointer"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>{lang === 'mr' ? 'जोडा' : lang === 'hi' ? 'जोड़ें' : 'Add'}</span>
+                </button>
+              </div>
               <p className="mt-1 text-[11px] text-slate-500">
                 {lang === 'mr'
-                  ? 'तुमचा व्यवसाय यादीत नसल्यास शेवटचा पर्याय "इतर व्यवसाय / तुमचा व्यवसाय जोडा" निवडा.'
+                  ? 'तुमचा व्यवसाय यादीत नसल्यास "+" (जोडा) वर क्लिक करा — नवीन श्रेणी लगेच ग्राहकांसाठी व कामगारांसाठी उपलब्ध होईल.'
                   : lang === 'hi'
-                  ? 'यदि आपका काम सूची में नहीं है, तो अंतिम विकल्प "अन्य व्यवसाय / अपना व्यवसाय जोड़ें" चुनें।'
-                  : 'Don’t see your profession? Select "Other Profession / Add Your Profession" at the end of the list.'}
+                  ? 'यदि आपका काम सूची में नहीं है, तो "+" (जोड़ें) दबाएँ — नई श्रेणी तुरंत ग्राहकों व कामगारों के लिए उपलब्ध हो जाएगी।'
+                  : 'Don’t see your skill (e.g. Cameraman, Photographer)? Click "+ Add" to add it live immediately.'}
               </p>
             </div>
 
@@ -2049,12 +2179,24 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-white border border-slate-200 rounded-lg p-3.5 text-xs">
               <div>
-                <div className="text-slate-500 font-semibold">Amount</div>
-                <div className="font-mono-tabular font-extrabold text-[#0B3B75] mt-0.5">₹250 (One-Time)</div>
+                <div className="text-slate-500 font-semibold">
+                  {lang === 'mr' ? 'एकवेळ शुल्क' : lang === 'hi' ? 'एकमुश्त शुल्क' : 'Amount'}
+                </div>
+                <div className="font-mono-tabular font-extrabold text-[#0B3B75] mt-0.5">
+                  ₹250 ({lang === 'mr' ? 'एकदाच · कोणतेही लपविलेले शुल्क नाही' : lang === 'hi' ? 'एकमुश्त · कोई छिपा शुल्क नहीं' : 'One-Time · Zero Hidden Charges'})
+                </div>
               </div>
               <div>
-                <div className="text-slate-500 font-semibold">Purpose</div>
-                <div className="font-bold text-[#0B3B75] mt-0.5">Worker ID Card &amp; Registration Certificate</div>
+                <div className="text-slate-500 font-semibold">
+                  {lang === 'mr' ? 'समाविष्ट लाभ' : lang === 'hi' ? 'शामिल लाभ' : 'Included Value'}
+                </div>
+                <div className="font-bold text-[#0B3B75] mt-0.5">
+                  {lang === 'mr'
+                    ? 'डिजिटल कामगार ओळखपत्र व नोंदणी प्रमाणपत्र'
+                    : lang === 'hi'
+                    ? 'डिजिटल कामगार आईडी कार्ड व पंजीकरण प्रमाण-पत्र'
+                    : 'Digital Worker ID Card & Registration Certificate'}
+                </div>
               </div>
               <div>
                 <div className="text-slate-500 font-semibold">Payment Status</div>
@@ -2064,6 +2206,49 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
                     lang={lang}
                   />
                 </div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 bg-emerald-50/70 border border-emerald-200/80 rounded-lg p-3 text-[11px] font-semibold text-emerald-950">
+              <div className="flex items-center gap-1.5">
+                <CheckCircle2 className="w-3.5 h-3.5 text-[#15803D] shrink-0" />
+                <span>
+                  {lang === 'mr'
+                    ? 'QR सत्यापित डिजिटल ओळखपत्र'
+                    : lang === 'hi'
+                    ? 'QR सत्यापित डिजिटल ID कार्ड'
+                    : 'QR-Verified Digital Worker ID'}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <CheckCircle2 className="w-3.5 h-3.5 text-[#15803D] shrink-0" />
+                <span>
+                  {lang === 'mr'
+                    ? 'अधिकृत नोंदणी प्रमाणपत्र व पावती'
+                    : lang === 'hi'
+                    ? 'आधिकारिक प्रमाण-पत्र व रसीद'
+                    : 'Official Certificate & Receipt'}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <CheckCircle2 className="w-3.5 h-3.5 text-[#15803D] shrink-0" />
+                <span>
+                  {lang === 'mr'
+                    ? '२–१० किमी जवळचे थेट काम अलर्ट'
+                    : lang === 'hi'
+                    ? '2–10 किमी नजदीकी काम अलर्ट'
+                    : 'Direct Nearby Job Alerts (2–10 km)'}
+                </span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <CheckCircle2 className="w-3.5 h-3.5 text-[#15803D] shrink-0" />
+                <span>
+                  {lang === 'mr'
+                    ? '0% कमिशन · कोणतेही मासिक शुल्क नाही'
+                    : lang === 'hi'
+                    ? '0% कमीशन · कोई मासिक शुल्क नहीं'
+                    : '0% Commission · No Hidden Fees'}
+                </span>
               </div>
             </div>
 
@@ -2178,6 +2363,24 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
         </section>
       </form>
       )}
+      <AddProfessionModal
+        open={showAddProfessionModal}
+        onClose={() => setShowAddProfessionModal(false)}
+        lang={lang}
+        user={user}
+        existingProfessions={approvedProfessions}
+        onAdded={(res) => {
+          setPrimarySkill(res.canonicalName);
+          setSkills((prev) =>
+            Array.from(
+              new Set([
+                res.canonicalName,
+                ...prev.filter((s) => s !== OTHER_PROFESSION_OPTION_VALUE),
+              ])
+            ).slice(0, 15)
+          );
+        }}
+      />
     </div>
   );
 };

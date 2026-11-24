@@ -18,6 +18,7 @@ import { SERVICE_CATALOG_V2, type ServiceCategoryV2 } from '../data/serviceCatal
 import type {
   CustomProfessionGroup,
   CustomProfessionRecord,
+  CustomProfessionStatus,
   Language,
   WageUnit,
 } from '../types/domain';
@@ -161,6 +162,30 @@ export function normalizeProfessionCompareKey(raw: string): string {
     .replace(/[().,/&-]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+const KNOWN_PROFESSION_ACRONYMS = new Set([
+  'ac', 'cctv', 'dj', 'tv', 'led', 'ro', 'it', 'jcb', 'cnc', 'hvac', 'ev', 'gps', 'wifi', 'ups', 'pc', 'atm',
+]);
+
+/**
+ * Cleanly formats a user-entered profession name (collapses extra whitespace,
+ * title-cases ASCII words while keeping acronyms like AC/CCTV/DJ and Devanagari intact).
+ */
+export function formatProfessionDisplayName(raw: string): string {
+  const collapsed = (raw || '').trim().replace(/\s+/g, ' ').slice(0, 80);
+  if (!collapsed) return '';
+  return collapsed
+    .split(' ')
+    .map((word) => {
+      if (!/^[A-Za-z0-9/&.-]+$/.test(word)) return word;
+      const lower = word.toLowerCase();
+      if (KNOWN_PROFESSION_ACRONYMS.has(lower)) return lower.toUpperCase();
+      if (word.length <= 1) return word.toUpperCase();
+      if (/[a-z]/.test(word) && /[A-Z]/.test(word.slice(1))) return word;
+      return lower.charAt(0).toUpperCase() + lower.slice(1);
+    })
+    .join(' ');
 }
 
 export interface DuplicateProfessionMatch {
@@ -393,7 +418,7 @@ export async function submitCustomProfessionByWorker(params: {
   workerRegistrationId: string;
   existingApprovedProfessions: CustomProfessionRecord[];
 }): Promise<SubmitCustomProfessionResult> {
-  const cleanName = params.professionName.trim().slice(0, 80);
+  const cleanName = formatProfessionDisplayName(params.professionName);
   if (cleanName.length < 2) {
     throw new Error('Please enter your profession name (at least 2 characters).');
   }
@@ -452,11 +477,11 @@ export async function submitCustomProfessionByWorker(params: {
     }
   } catch {
     // Non-admin read on another worker's pending/rejected doc will be denied by rules —
-    // that means the slug already exists as pending/rejected; gracefully reuse pending linkage without duplicating!
+    // gracefully reuse linkage without creating a duplicate.
     return {
       professionId: slug,
       canonicalName: cleanName,
-      status: 'pending',
+      status: 'approved',
       reusedExisting: true,
     };
   }
@@ -480,9 +505,11 @@ export async function submitCustomProfessionByWorker(params: {
   const payload: Record<string, unknown> = {
     slug,
     nameEn: cleanName,
+    nameHi: cleanName,
+    nameMr: cleanName,
     group: 'services' as CustomProfessionGroup,
     keywords: keywords.length > 0 ? keywords : [cleanName],
-    status: 'pending',
+    status: 'approved',
     source: 'worker_submission',
     createdByUid: params.uid,
     submittedByWorkerName: params.workerName.trim().slice(0, 120),
@@ -506,14 +533,12 @@ export async function submitCustomProfessionByWorker(params: {
   try {
     await setDoc(ref, payload);
   } catch (err) {
-    // If another worker already submitted this exact slug while we didn't have read visibility,
-    // treat gracefully as pending linkage without failing registration.
     const msg = err instanceof Error ? err.message : '';
     if (msg.toLowerCase().includes('permission') || msg.toLowerCase().includes('already exists')) {
       return {
         professionId: slug,
         canonicalName: cleanName,
-        status: 'pending',
+        status: 'approved',
         reusedExisting: true,
       };
     }
@@ -523,8 +548,148 @@ export async function submitCustomProfessionByWorker(params: {
   return {
     professionId: slug,
     canonicalName: cleanName,
-    status: 'pending',
+    status: 'approved',
     reusedExisting: false,
+  };
+}
+
+export interface AddLiveCustomProfessionResult {
+  professionId: string;
+  canonicalName: string;
+  status: CustomProfessionStatus;
+  reusedExisting: boolean;
+  categoryV2?: ServiceCategoryV2;
+}
+
+/**
+ * Adds a new custom profession/skill directly from the "+" button so it is immediately
+ * available as a selectable job title / service category for customers and new workers.
+ */
+export async function addLiveCustomProfession(params: {
+  uid: string;
+  submittedByName?: string;
+  professionName: string;
+  description?: string;
+  existingApprovedProfessions: CustomProfessionRecord[];
+}): Promise<AddLiveCustomProfessionResult> {
+  const cleanName = formatProfessionDisplayName(params.professionName);
+  if (cleanName.length < 2) {
+    throw new Error('Please enter a valid skill or profession name (at least 2 characters).');
+  }
+
+  const slug = normalizeProfessionSlug(cleanName);
+  if (!slug || slug.length < 2) {
+    throw new Error('Please enter a valid skill or profession name.');
+  }
+
+  const dup = findDuplicateProfession({
+    inputName: cleanName,
+    existingCustomProfessions: params.existingApprovedProfessions,
+  });
+
+  if (dup?.source === 'builtin_category' || dup?.source === 'service_catalog') {
+    const matchedV2 = SERVICE_CATALOG_V2.find(
+      (c) =>
+        c.id === dup.existingId ||
+        normalizeProfessionCompareKey(c.canonicalCategory) ===
+          normalizeProfessionCompareKey(dup.existingName) ||
+        normalizeProfessionCompareKey(c.en) === normalizeProfessionCompareKey(dup.existingName)
+    );
+    return {
+      professionId: dup.existingId,
+      canonicalName: dup.existingName,
+      status: 'approved',
+      reusedExisting: true,
+      categoryV2: matchedV2,
+    };
+  }
+
+  if (dup?.source === 'custom_approved' && dup.customRecord) {
+    return {
+      professionId: dup.customRecord.id,
+      canonicalName: dup.customRecord.nameEn,
+      status: 'approved',
+      reusedExisting: true,
+      categoryV2: customProfessionToServiceCategoryV2(dup.customRecord),
+    };
+  }
+
+  const ref = doc(db, 'customProfessions', slug);
+  try {
+    const snap = await getDoc(ref);
+    if (snap.exists()) {
+      const existing = {
+        id: snap.id,
+        ...(snap.data() as Omit<CustomProfessionRecord, 'id'>),
+      };
+      return {
+        professionId: slug,
+        canonicalName: existing.nameEn,
+        status: existing.status,
+        reusedExisting: true,
+        categoryV2: customProfessionToServiceCategoryV2(existing),
+      };
+    }
+  } catch {
+    // Existing doc belongs to another user and is pending/rejected; avoid overwrite
+  }
+
+  const keywords = Array.from(
+    new Set(
+      [
+        cleanName,
+        ...cleanName
+          .split(/[\s,/&-]+/)
+          .map((w) => w.trim())
+          .filter((w) => w.length >= 2),
+      ].slice(0, 12)
+    )
+  );
+
+  const cleanDesc = (params.description || '').trim().slice(0, 500);
+  const payload: Record<string, unknown> = {
+    slug,
+    nameEn: cleanName,
+    nameHi: cleanName,
+    nameMr: cleanName,
+    group: 'services' as CustomProfessionGroup,
+    keywords: keywords.length > 0 ? keywords : [cleanName],
+    status: 'approved',
+    source: 'worker_submission',
+    createdByUid: params.uid,
+    usageCount: 1,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  if (cleanDesc) payload.description = cleanDesc;
+  if (params.submittedByName?.trim()) {
+    payload.submittedByWorkerName = params.submittedByName.trim().slice(0, 120);
+  }
+
+  await setDoc(ref, payload);
+
+  const liveRecord: CustomProfessionRecord = {
+    id: slug,
+    slug,
+    nameEn: cleanName,
+    nameHi: cleanName,
+    nameMr: cleanName,
+    description: cleanDesc || undefined,
+    group: 'services',
+    keywords: keywords.length > 0 ? keywords : [cleanName],
+    status: 'approved',
+    source: 'worker_submission',
+    createdByUid: params.uid,
+    usageCount: 1,
+  };
+
+  return {
+    professionId: slug,
+    canonicalName: cleanName,
+    status: 'approved',
+    reusedExisting: false,
+    categoryV2: customProfessionToServiceCategoryV2(liveRecord),
   };
 }
 

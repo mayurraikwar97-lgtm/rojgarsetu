@@ -68,6 +68,7 @@ import type {
   WageUnit,
 } from '../types/domain';
 import { LocationPinModal } from './LocationPinModal';
+import { ProfessionThumbnail } from './ProfessionThumbnail';
 import { SecureAvatar } from './SecureAvatar';
 
 interface InstantHireViewProps {
@@ -1188,7 +1189,6 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
             </button>
 
             {featuredCategories.map((cat) => {
-              const Icon = getTradeIcon(cat.id);
               const isSelected = selectedCategory === cat.en;
               const shortLabel =
                 lang === 'hi'
@@ -1201,14 +1201,20 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
                   key={cat.id}
                   type="button"
                   onClick={() => setSelectedCategory(isSelected ? '' : cat.en)}
-                  className={`shrink-0 flex flex-col items-center justify-center gap-1.5 px-3.5 py-2.5 rounded-md border text-xs font-bold transition-colors min-w-[106px] cursor-pointer ${
+                  className={`shrink-0 flex flex-col items-center justify-center gap-1.5 px-3 py-2 rounded-lg border text-xs font-bold transition-colors min-w-[100px] cursor-pointer ${
                     isSelected
                       ? 'bg-[#E06D1B] border-[#E06D1B] text-white'
                       : 'bg-white border-slate-200 text-slate-700 hover:border-[#0B3B75] hover:bg-blue-50/40'
                   }`}
                 >
-                  <Icon className="w-4 h-4" />
-                  <span className="whitespace-nowrap max-w-[120px] truncate">{shortLabel}</span>
+                  <ProfessionThumbnail
+                    id={cat.id}
+                    label={shortLabel}
+                    hint={cat.en}
+                    size="sm"
+                    className={isSelected ? 'border-white/70' : ''}
+                  />
+                  <span className="whitespace-nowrap max-w-[110px] truncate">{shortLabel}</span>
                 </button>
               );
             })}

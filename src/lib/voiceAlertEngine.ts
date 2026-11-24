@@ -1,332 +1,476 @@
 import type { Language, NotificationToneType } from '../types/domain';
 
-export interface VoicePlaybackResult {
-  audioChimePlayed: boolean;
-  speechStatus: 'spoken' | 'blocked_or_silent' | 'unsupported' | 'disabled';
-  reason?: string;
-}
-
 let sharedAudioCtx: AudioContext | null = null;
 let audioUnlocked = false;
+let speechWarmedUp = false;
+let activeUtterance: SpeechSynthesisUtterance | null = null;
+let pendingSpeakTimer: number | null = null;
 
-interface ToneNote {
-  freq: number;
-  offset: number;
-  duration: number;
-  peak: number;
-  type: OscillatorType;
-  harmonicFreq?: number;
-}
-
-const TONE_PROFILES: Record<NotificationToneType, ToneNote[]> = {
-  // Loud, urgent attention alert for new category job broadcasts
-  new_job: [
-    { freq: 880, offset: 0, duration: 0.14, peak: 0.28, type: 'triangle', harmonicFreq: 1760 },
-    { freq: 1174.66, offset: 0.15, duration: 0.14, peak: 0.28, type: 'triangle', harmonicFreq: 2349.32 },
-    { freq: 1396.91, offset: 0.3, duration: 0.16, peak: 0.3, type: 'triangle', harmonicFreq: 2793.83 },
-    { freq: 1760, offset: 0.48, duration: 0.28, peak: 0.3, type: 'triangle', harmonicFreq: 880 },
-  ],
-  // Crisp bright double-bell for worker offer arriving to customer
-  new_offer: [
-    { freq: 659.25, offset: 0, duration: 0.15, peak: 0.26, type: 'sine', harmonicFreq: 1318.51 },
-    { freq: 987.77, offset: 0.16, duration: 0.17, peak: 0.27, type: 'sine', harmonicFreq: 1975.53 },
-    { freq: 1318.51, offset: 0.35, duration: 0.26, peak: 0.28, type: 'sine' },
-  ],
-  // Warm triumphant rising fanfare when deal/work is confirmed
-  deal_accepted: [
-    { freq: 523.25, offset: 0, duration: 0.13, peak: 0.27, type: 'triangle', harmonicFreq: 1046.5 },
-    { freq: 659.25, offset: 0.13, duration: 0.13, peak: 0.27, type: 'triangle', harmonicFreq: 1318.51 },
-    { freq: 783.99, offset: 0.26, duration: 0.15, peak: 0.28, type: 'triangle', harmonicFreq: 1567.98 },
-    { freq: 1046.5, offset: 0.42, duration: 0.34, peak: 0.3, type: 'sine', harmonicFreq: 523.25 },
-  ],
-  // Clean positive completion bell
-  deal_completed: [
-    { freq: 783.99, offset: 0, duration: 0.16, peak: 0.25, type: 'sine', harmonicFreq: 1567.98 },
-    { freq: 1046.5, offset: 0.18, duration: 0.32, peak: 0.27, type: 'sine', harmonicFreq: 2093 },
-  ],
-  // Distinct descending two-note notice when cancelled/declined
-  deal_cancelled: [
-    { freq: 587.33, offset: 0, duration: 0.18, peak: 0.24, type: 'triangle' },
-    { freq: 392.0, offset: 0.2, duration: 0.3, peak: 0.24, type: 'triangle' },
-  ],
-  // Standard chime fallback
-  general: [
-    { freq: 880, offset: 0, duration: 0.16, peak: 0.22, type: 'triangle' },
-    { freq: 1174.66, offset: 0.17, duration: 0.24, peak: 0.24, type: 'sine' },
-  ],
-};
-
-function getSpeechLangTag(lang: Language): string {
-  if (lang === 'mr') return 'mr-IN';
-  if (lang === 'hi') return 'hi-IN';
-  return 'en-IN';
-}
-
-function getOrCreateAudioContext(): AudioContext | null {
+function getAudioContext(): AudioContext | null {
   if (typeof window === 'undefined') return null;
-  const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-  if (!Ctx) return null;
+  const AudioCtx =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AudioCtx) return null;
   if (!sharedAudioCtx) {
-    sharedAudioCtx = new Ctx();
+    try {
+      sharedAudioCtx = new AudioCtx();
+    } catch {
+      return null;
+    }
   }
   return sharedAudioCtx;
 }
 
-export function unlockAudioOnUserGesture(): void {
-  if (typeof window === 'undefined') return;
-  try {
-    const ctx = getOrCreateAudioContext();
-    if (ctx && ctx.state === 'suspended') {
-      void ctx.resume().catch(() => undefined);
+/**
+ * Call from user gesture (pointerdown / click / keydown) to unlock Web Audio & warm up Web Speech voices
+ * so subsequent notification tones and spoken alerts play cleanly across Chrome, Safari, and Android.
+ */
+export function unlockAudioOnUserGesture(): boolean {
+  if (typeof window === 'undefined') return false;
+
+  const ctx = getAudioContext();
+  if (ctx) {
+    try {
+      if (ctx.state === 'suspended') {
+        void ctx.resume().then(() => {
+          audioUnlocked = true;
+        }).catch(() => undefined);
+      } else if (ctx.state === 'running') {
+        audioUnlocked = true;
+      }
+    } catch {
+      // Ignore AudioContext resume errors
     }
-    audioUnlocked = true;
+  }
+
+  if ('speechSynthesis' in window && !speechWarmedUp) {
+    try {
+      const synth = window.speechSynthesis;
+      synth.getVoices();
+      if (synth.paused) {
+        synth.resume();
+      }
+      speechWarmedUp = true;
+    } catch {
+      // Ignore speechSynthesis warmup errors
+    }
+  }
+
+  return audioUnlocked || speechWarmedUp;
+}
+
+export function isAudioUnlocked(): boolean {
+  return audioUnlocked;
+}
+
+export function isSpeechCurrentlyPlaying(): boolean {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return false;
+  try {
+    return Boolean(window.speechSynthesis.speaking || window.speechSynthesis.pending);
   } catch {
-    // Ignore audio context errors on restricted browsers
+    return false;
   }
 }
 
+/**
+ * Cleanly sanitizes notification title/body into concise spoken alert text
+ * when a dedicated voiceScript is not provided.
+ */
+export function buildSpokenNotificationText(params: {
+  voiceScript?: string;
+  title?: string;
+  body?: string;
+  lang?: Language;
+}): string {
+  const clean = (raw: string): string =>
+    raw
+      .replace(/https?:\/\/\S+/gi, '')
+      // Strip decorative symbols & emoji ranges that read awkwardly aloud
+      .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, ' ')
+      .replace(/[•|]+/g, ', ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  if (params.voiceScript && params.voiceScript.trim().length > 0) {
+    return clean(params.voiceScript).slice(0, 280);
+  }
+
+  const title = clean(params.title || '');
+  const body = clean(params.body || '');
+  if (!title && !body) return '';
+  if (!body || body.toLowerCase() === title.toLowerCase()) {
+    return title.slice(0, 240);
+  }
+  if (!title) {
+    return body.slice(0, 240);
+  }
+  const combined = title.endsWith('.') || title.endsWith('।') || title.endsWith('!')
+    ? `${title} ${body}`
+    : `${title}. ${body}`;
+  return combined.slice(0, 260);
+}
+
+interface ToneNote {
+  freq: number;
+  start: number;
+  duration: number;
+  gain: number;
+  type?: OscillatorType;
+}
+
+const TONE_PATTERNS: Record<NotificationToneType, { notes: ToneNote[]; totalMs: number }> = {
+  new_job: {
+    notes: [
+      { freq: 659.25, start: 0, duration: 0.13, gain: 0.14, type: 'triangle' },
+      { freq: 880, start: 0.13, duration: 0.14, gain: 0.16, type: 'triangle' },
+      { freq: 1174.66, start: 0.28, duration: 0.22, gain: 0.15, type: 'sine' },
+    ],
+    totalMs: 520,
+  },
+  new_offer: {
+    notes: [
+      { freq: 587.33, start: 0, duration: 0.14, gain: 0.13, type: 'sine' },
+      { freq: 783.99, start: 0.16, duration: 0.19, gain: 0.15, type: 'sine' },
+    ],
+    totalMs: 380,
+  },
+  deal_accepted: {
+    notes: [
+      { freq: 523.25, start: 0, duration: 0.11, gain: 0.13, type: 'sine' },
+      { freq: 659.25, start: 0.11, duration: 0.11, gain: 0.14, type: 'sine' },
+      { freq: 783.99, start: 0.22, duration: 0.12, gain: 0.15, type: 'sine' },
+      { freq: 1046.5, start: 0.34, duration: 0.24, gain: 0.16, type: 'triangle' },
+    ],
+    totalMs: 600,
+  },
+  deal_cancelled: {
+    notes: [
+      { freq: 493.88, start: 0, duration: 0.16, gain: 0.13, type: 'sine' },
+      { freq: 392.0, start: 0.18, duration: 0.24, gain: 0.13, type: 'sine' },
+    ],
+    totalMs: 440,
+  },
+  deal_completed: {
+    notes: [
+      { freq: 523.25, start: 0, duration: 0.1, gain: 0.12, type: 'sine' },
+      { freq: 783.99, start: 0.12, duration: 0.12, gain: 0.14, type: 'sine' },
+      { freq: 1046.5, start: 0.26, duration: 0.22, gain: 0.15, type: 'sine' },
+    ],
+    totalMs: 500,
+  },
+  general: {
+    notes: [
+      { freq: 740, start: 0, duration: 0.12, gain: 0.11, type: 'sine' },
+      { freq: 987.77, start: 0.13, duration: 0.16, gain: 0.12, type: 'sine' },
+    ],
+    totalMs: 320,
+  },
+};
+
 export async function playNotificationTone(
-  toneType: NotificationToneType = 'general',
-  gainScale = 1
+  toneType: NotificationToneType = 'new_job'
 ): Promise<boolean> {
-  if (typeof window === 'undefined') return false;
+  const ctx = getAudioContext();
+  if (!ctx) return false;
   try {
-    const ctx = getOrCreateAudioContext();
-    if (!ctx) return false;
     if (ctx.state === 'suspended') {
-      await ctx.resume().catch(() => undefined);
+      await ctx.resume();
     }
-    if (ctx.state !== 'running') {
-      return false;
-    }
+    if (ctx.state !== 'running') return false;
+    audioUnlocked = true;
 
-    const clampedScale = Math.max(0.2, Math.min(1.25, gainScale));
-    const now = ctx.currentTime + 0.01;
-    const profile = TONE_PROFILES[toneType] || TONE_PROFILES.general;
+    const pattern = TONE_PATTERNS[toneType] || TONE_PATTERNS.general;
+    const now = ctx.currentTime;
 
-    for (const note of profile) {
-      const start = now + note.offset;
+    for (const note of pattern.notes) {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
-      osc.type = note.type;
-      osc.frequency.setValueAtTime(note.freq, start);
-
-      const targetPeak = Math.min(0.36, note.peak * clampedScale);
-      gain.gain.setValueAtTime(0.0001, start);
-      gain.gain.exponentialRampToValueAtTime(targetPeak, start + 0.018);
-      gain.gain.exponentialRampToValueAtTime(0.0001, start + note.duration);
-
+      osc.type = note.type || 'sine';
+      osc.frequency.setValueAtTime(note.freq, now + note.start);
+      gain.gain.setValueAtTime(0.0001, now + note.start);
+      gain.gain.exponentialRampToValueAtTime(note.gain, now + note.start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + note.start + note.duration);
       osc.connect(gain);
       gain.connect(ctx.destination);
-      osc.start(start);
-      osc.stop(start + note.duration + 0.025);
-
-      if (note.harmonicFreq) {
-        const subOsc = ctx.createOscillator();
-        const subGain = ctx.createGain();
-        subOsc.type = 'sine';
-        subOsc.frequency.setValueAtTime(note.harmonicFreq, start);
-        subGain.gain.setValueAtTime(0.0001, start);
-        subGain.gain.exponentialRampToValueAtTime(targetPeak * 0.35, start + 0.018);
-        subGain.gain.exponentialRampToValueAtTime(0.0001, start + note.duration);
-        subOsc.connect(subGain);
-        subGain.connect(ctx.destination);
-        subOsc.start(start);
-        subOsc.stop(start + note.duration + 0.025);
-      }
+      osc.start(now + note.start);
+      osc.stop(now + note.start + note.duration + 0.02);
     }
 
-    audioUnlocked = true;
+    await new Promise((r) => setTimeout(r, pattern.totalMs));
     return true;
   } catch {
     return false;
   }
 }
 
-export async function playNotificationChime(): Promise<boolean> {
+export async function playJobAlertTone(): Promise<boolean> {
   return playNotificationTone('new_job');
 }
 
-function selectPreferredVoice(voices: SpeechSynthesisVoice[], lang: Language): SpeechSynthesisVoice | null {
-  if (voices.length === 0) return null;
+export function getBcp47ForLanguage(lang: Language): string {
+  if (lang === 'mr') return 'mr-IN';
+  if (lang === 'hi') return 'hi-IN';
+  return 'en-IN';
+}
+
+export function pickBestVoiceForLanguage(
+  voices: SpeechSynthesisVoice[],
+  lang: Language
+): SpeechSynthesisVoice | null {
+  if (!voices.length) return null;
   const preferredTags =
     lang === 'mr'
-      ? ['mr-IN', 'mr', 'hi-IN', 'hi']
+      ? ['mr-in', 'mr', 'hi-in', 'hi', 'en-in', 'en']
       : lang === 'hi'
-      ? ['hi-IN', 'hi']
-      : ['en-IN', 'en-GB', 'en-US', 'en'];
+      ? ['hi-in', 'hi', 'mr-in', 'en-in', 'en']
+      : ['en-in', 'en-gb', 'en-us', 'en'];
 
   for (const tag of preferredTags) {
-    const lowerTag = tag.toLowerCase();
-    const match = voices.find((v) => v.lang.toLowerCase() === lowerTag || v.lang.toLowerCase().startsWith(lowerTag));
-    if (match) return match;
+    const googleMatch = voices.find(
+      (v) =>
+        v.lang.toLowerCase().startsWith(tag) &&
+        (v.name.toLowerCase().includes('google') || v.name.toLowerCase().includes('natural'))
+    );
+    if (googleMatch) return googleMatch;
+
+    const exact = voices.find((v) => v.lang.toLowerCase() === tag);
+    if (exact) return exact;
+    const prefix = voices.find((v) => v.lang.toLowerCase().startsWith(tag));
+    if (prefix) return prefix;
   }
-  return null;
+  return voices.find((v) => v.default) || voices[0] || null;
 }
 
-export function stopVoiceAlert(): void {
-  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-  try {
-    window.speechSynthesis.cancel();
-  } catch {
-    // Ignore speech cancel failures
-  }
+async function waitForVoices(timeoutMs = 700): Promise<SpeechSynthesisVoice[]> {
+  if (typeof window === 'undefined' || !('speechSynthesis' in window)) return [];
+  const synth = window.speechSynthesis;
+  const immediate = synth.getVoices();
+  if (immediate.length > 0) return immediate;
+
+  return new Promise((resolve) => {
+    let settled = false;
+    const done = () => {
+      if (settled) return;
+      settled = true;
+      synth.removeEventListener?.('voiceschanged', onVoices);
+      resolve(synth.getVoices());
+    };
+    const onVoices = () => {
+      if (synth.getVoices().length > 0) done();
+    };
+    synth.addEventListener?.('voiceschanged', onVoices);
+    window.setTimeout(done, timeoutMs);
+  });
 }
 
-export async function speakJobAlert(params: {
+export interface SpeakAlertOptions {
   text: string;
   lang: Language;
   soundEnabled?: boolean;
   voiceEnabled?: boolean;
   rate?: number;
   toneType?: NotificationToneType;
-}): Promise<VoicePlaybackResult> {
-  const { text, lang, soundEnabled = true, voiceEnabled = true, rate = 0.96, toneType = 'new_job' } = params;
+  onStart?: () => void;
+  onEnd?: () => void;
+}
 
-  let chimePlayed = false;
+export interface SpeakAlertResult {
+  tonePlayed: boolean;
+  speechStatus: 'spoken' | 'disabled' | 'unsupported' | 'blocked_or_silent';
+  selectedVoiceName?: string;
+  reason?: string;
+}
+
+export function stopVoiceAlert(): void {
+  if (pendingSpeakTimer !== null && typeof window !== 'undefined') {
+    window.clearTimeout(pendingSpeakTimer);
+    pendingSpeakTimer = null;
+  }
+  activeUtterance = null;
+  if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+    try {
+      window.speechSynthesis.cancel();
+    } catch {
+      // ignore
+    }
+  }
+}
+
+export async function speakJobAlert(options: SpeakAlertOptions): Promise<SpeakAlertResult> {
+  const {
+    text,
+    lang,
+    soundEnabled = true,
+    voiceEnabled = true,
+    rate = 0.96,
+    toneType = 'new_job',
+    onStart,
+    onEnd,
+  } = options;
+
+  let tonePlayed = false;
   if (soundEnabled) {
-    chimePlayed = await playNotificationTone(toneType);
+    tonePlayed = await playNotificationTone(toneType);
   }
 
   if (!voiceEnabled) {
-    return { audioChimePlayed: chimePlayed, speechStatus: 'disabled' };
+    return { tonePlayed, speechStatus: 'disabled' };
   }
 
-  if (typeof window === 'undefined' || !('speechSynthesis' in window) || typeof SpeechSynthesisUtterance === 'undefined') {
-    return {
-      audioChimePlayed: chimePlayed,
-      speechStatus: 'unsupported',
-      reason: 'Browser Web Speech API (speechSynthesis) is not supported in this browser.',
-    };
+  const trimmedText = text.trim();
+  if (!trimmedText) {
+    return { tonePlayed, speechStatus: 'disabled' };
   }
 
-  const cleanText = text.trim();
-  if (!cleanText) {
-    return { audioChimePlayed: chimePlayed, speechStatus: 'disabled' };
-  }
-
-  // Wait briefly after chime if chime actually played so words do not overlap the chime
-  if (chimePlayed) {
-    await new Promise((resolve) => setTimeout(resolve, 360));
+  if (
+    typeof window === 'undefined' ||
+    !('speechSynthesis' in window) ||
+    typeof SpeechSynthesisUtterance === 'undefined'
+  ) {
+    return { tonePlayed, speechStatus: 'unsupported' };
   }
 
   try {
     const synth = window.speechSynthesis;
-    synth.cancel();
+    const voices = await waitForVoices(700);
+    const chosenVoice = pickBestVoiceForLanguage(voices, lang);
 
-    let voices = synth.getVoices();
-    if (voices.length === 0) {
-      await new Promise<void>((resolve) => {
-        let settled = false;
-        const finish = () => {
-          if (settled) return;
-          settled = true;
-          resolve();
-        };
-        const timer = setTimeout(finish, 300);
-        const handler = () => {
-          clearTimeout(timer);
-          synth.removeEventListener?.('voiceschanged', handler);
-          finish();
-        };
-        synth.addEventListener?.('voiceschanged', handler);
-      });
-      voices = synth.getVoices();
+    // Clear any scheduled utterance timer first
+    if (pendingSpeakTimer !== null) {
+      window.clearTimeout(pendingSpeakTimer);
+      pendingSpeakTimer = null;
     }
 
-    const utterance = new SpeechSynthesisUtterance(cleanText);
-    utterance.lang = getSpeechLangTag(lang);
-    utterance.rate = rate;
-    utterance.pitch = 1;
-    utterance.volume = 1;
+    // Only call cancel() if currently speaking/pending, then wait 65ms to avoid Chrome/Safari silent-drop bug
+    const needsCancelDelay = Boolean(synth.speaking || synth.pending);
+    if (needsCancelDelay) {
+      try {
+        synth.cancel();
+      } catch {
+        // ignore
+      }
+      await new Promise((r) => setTimeout(r, 65));
+    }
 
-    const chosenVoice = selectPreferredVoice(voices, lang);
+    try {
+      if (synth.paused) {
+        synth.resume();
+      }
+    } catch {
+      // ignore
+    }
+
+    const utterance = new SpeechSynthesisUtterance(trimmedText);
+    utterance.lang = chosenVoice?.lang || getBcp47ForLanguage(lang);
     if (chosenVoice) {
       utterance.voice = chosenVoice;
-      utterance.lang = chosenVoice.lang;
     }
+    utterance.rate = rate;
+    utterance.pitch = 1.0;
+    utterance.volume = 1.0;
 
-    const spokenOutcome = await new Promise<VoicePlaybackResult>((resolve) => {
+    // Hold a module-level strong ref so Chrome does not GC the utterance mid-speech
+    activeUtterance = utterance;
+
+    const speechStatus = await new Promise<'spoken' | 'blocked_or_silent'>((resolve) => {
+      let started = false;
       let resolved = false;
-      const done = (status: VoicePlaybackResult['speechStatus'], reason?: string) => {
+
+      const finish = (status: 'spoken' | 'blocked_or_silent') => {
         if (resolved) return;
         resolved = true;
-        resolve({
-          audioChimePlayed: chimePlayed,
-          speechStatus: status,
-          ...(reason ? { reason } : {}),
-        });
+        window.clearTimeout(startGuard);
+        resolve(status);
       };
-
-      const guardTimer = setTimeout(() => {
-        if (synth.speaking || audioUnlocked) {
-          done('spoken');
-        } else {
-          done(
-            'blocked_or_silent',
-            'Browser autoplay policy requires a user tap before playing voice audio.'
-          );
-        }
-      }, 900);
 
       utterance.onstart = () => {
-        clearTimeout(guardTimer);
-        audioUnlocked = true;
-        done('spoken');
+        started = true;
+        onStart?.();
+        finish('spoken');
       };
 
-      utterance.onerror = (ev) => {
-        clearTimeout(guardTimer);
-        const errCode = (ev as SpeechSynthesisErrorEvent)?.error || 'speech_error';
-        if (errCode === 'not-allowed') {
-          done(
-            'blocked_or_silent',
-            'Autoplay blocked by browser. Tap "Play Voice Alert" to listen.'
-          );
-        } else {
-          done('blocked_or_silent', `Speech synthesis notice: ${errCode}`);
+      utterance.onend = () => {
+        if (activeUtterance === utterance) {
+          activeUtterance = null;
         }
+        onEnd?.();
+        finish('spoken');
       };
 
-      synth.speak(utterance);
+      utterance.onerror = (evt) => {
+        if (activeUtterance === utterance) {
+          activeUtterance = null;
+        }
+        onEnd?.();
+        const errCode = (evt as SpeechSynthesisErrorEvent | undefined)?.error;
+        if (errCode === 'interrupted' || errCode === 'canceled') {
+          finish(started ? 'spoken' : 'blocked_or_silent');
+          return;
+        }
+        finish(started ? 'spoken' : 'blocked_or_silent');
+      };
+
+      // Guard if browser blocks autoplay speech without firing onstart/onerror
+      const startGuard = window.setTimeout(() => {
+        if (started || synth.speaking) {
+          finish('spoken');
+        } else {
+          if (activeUtterance === utterance) {
+            activeUtterance = null;
+          }
+          finish('blocked_or_silent');
+        }
+      }, 1800);
+
+      try {
+        synth.speak(utterance);
+        // Kick resume right after speak for Android Chrome / Safari edge cases
+        if (synth.paused) {
+          synth.resume();
+        }
+      } catch {
+        if (activeUtterance === utterance) {
+          activeUtterance = null;
+        }
+        finish('blocked_or_silent');
+      }
     });
 
-    return spokenOutcome;
-  } catch (err) {
     return {
-      audioChimePlayed: chimePlayed,
-      speechStatus: 'blocked_or_silent',
-      reason: err instanceof Error ? err.message : 'Unable to trigger voice synthesis.',
+      tonePlayed,
+      speechStatus,
+      selectedVoiceName: chosenVoice?.name,
     };
+  } catch {
+    return { tonePlayed, speechStatus: 'blocked_or_silent' };
   }
 }
 
-export function getVoiceCapabilities(): {
-  speechSupported: boolean;
+export function getSpeechSupportInfo(): {
   audioSupported: boolean;
-  availableVoiceCount: number;
-  hasMarathiVoice: boolean;
-  hasHindiVoice: boolean;
+  speechSupported: boolean;
+  voiceCount: number;
+  hasIndianVoice: boolean;
 } {
   if (typeof window === 'undefined') {
-    return {
-      speechSupported: false,
-      audioSupported: false,
-      availableVoiceCount: 0,
-      hasMarathiVoice: false,
-      hasHindiVoice: false,
-    };
+    return { audioSupported: false, speechSupported: false, voiceCount: 0, hasIndianVoice: false };
   }
-  const speechSupported = 'speechSynthesis' in window && typeof SpeechSynthesisUtterance !== 'undefined';
-  const voices = speechSupported ? window.speechSynthesis.getVoices() : [];
   const audioSupported = Boolean(
-    window.AudioContext || (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+    window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
   );
+  const speechSupported =
+    'speechSynthesis' in window && typeof SpeechSynthesisUtterance !== 'undefined';
+  const voices = speechSupported ? window.speechSynthesis.getVoices() : [];
+  const hasIndianVoice = voices.some((v) => {
+    const l = v.lang.toLowerCase();
+    return l.startsWith('mr') || l.startsWith('hi') || l.startsWith('en-in');
+  });
   return {
-    speechSupported,
     audioSupported,
-    availableVoiceCount: voices.length,
-    hasMarathiVoice: voices.some((v) => v.lang.toLowerCase().startsWith('mr')),
-    hasHindiVoice: voices.some((v) => v.lang.toLowerCase().startsWith('hi')),
+    speechSupported,
+    voiceCount: voices.length,
+    hasIndianVoice,
   };
 }

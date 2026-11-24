@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { BellRing, Briefcase, CheckCircle2, LocateFixed, MapPin, PlusCircle, Search, Users, Volume2, VolumeX } from 'lucide-react';
+import { BellRing, Briefcase, CheckCircle2, LocateFixed, MapPin, Plus, PlusCircle, Search, Users, Volume2, VolumeX } from 'lucide-react';
 import { EMPLOYMENT_CATEGORIES } from '../data/categories';
+import { SERVICE_CATALOG_V2, getServiceCategoryLabel } from '../data/serviceCatalogV2';
 import { getDistrictCoordinates, INDIA_STATES_DISTRICTS } from '../data/indiaLocations';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../i18n/LanguageContext';
@@ -42,6 +43,8 @@ import type {
   ServiceRadiusKm,
   WageUnit,
 } from '../types/domain';
+import { AddProfessionModal } from './AddProfessionModal';
+import { ProfessionThumbnail } from './ProfessionThumbnail';
 import { SecureAvatar } from './SecureAvatar';
 import { SponsoredAdSlider } from './SponsoredAdSlider';
 
@@ -65,6 +68,8 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
 
   const [search, setSearch] = useState(initialCategory);
   const [stateFilter, setStateFilter] = useState('');
+  const [districtFilter, setDistrictFilter] = useState('');
+  const [areaPincodeFilter, setAreaPincodeFilter] = useState('');
   const [workTypeFilter, setWorkTypeFilter] = useState('');
   const [womenOnly, setWomenOnly] = useState(false);
   const [pwdOnly, setPwdOnly] = useState(false);
@@ -78,11 +83,23 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
   const [speakingJobId, setSpeakingJobId] = useState<string | null>(null);
   const [errorMsg, setErrorMsg] = useState('');
 
+  const findWorkDistricts = useMemo(() => {
+    const st = INDIA_STATES_DISTRICTS.find((s) => s.name === stateFilter);
+    return st ? st.districts.map((d) => d.name) : [];
+  }, [stateFilter]);
+
   const filteredJobs = useMemo(() => {
     const q = search.trim().toLowerCase();
+    const locQ = areaPincodeFilter.trim().toLowerCase();
     const list = jobs
       .filter((j) => j.status === 'open')
       .filter((j) => !stateFilter || j.state === stateFilter)
+      .filter((j) => !districtFilter || j.district === districtFilter)
+      .filter((j) => {
+        if (!locQ) return true;
+        const locBlob = `${j.cityOrVillage || ''} ${j.district || ''} ${j.state || ''} ${j.approxLocationLabel || ''} ${j.workLocationLabel || ''}`.toLowerCase();
+        return locBlob.includes(locQ);
+      })
       .filter((j) => !workTypeFilter || j.workType === workTypeFilter)
       .filter((j) => !womenOnly || j.isWomenFriendly)
       .filter((j) => !pwdOnly || j.isAccessible)
@@ -92,6 +109,8 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
           j.title.toLowerCase().includes(q) ||
           j.category.toLowerCase().includes(q) ||
           j.district.toLowerCase().includes(q) ||
+          (j.cityOrVillage || '').toLowerCase().includes(q) ||
+          (j.approxLocationLabel || '').toLowerCase().includes(q) ||
           j.employerName.toLowerCase().includes(q) ||
           j.requiredSkills.some((s) => s.toLowerCase().includes(q))
       );
@@ -100,7 +119,7 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
       list.sort((a, b) => (a.id === highlightedJobId ? -1 : b.id === highlightedJobId ? 1 : 0));
     }
     return list;
-  }, [jobs, search, stateFilter, workTypeFilter, womenOnly, pwdOnly, highlightedJobId]);
+  }, [jobs, search, stateFilter, districtFilter, areaPincodeFilter, workTypeFilter, womenOnly, pwdOnly, highlightedJobId]);
 
   useEffect(() => {
     if (!highlightedJobId) return;
@@ -165,9 +184,9 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
         )}
       </div>
 
-      {/* Filters */}
-      <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-8 space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {/* Filters: Skill, State, District, Area / Pincode & Work Type */}
+      <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-8 space-y-3.5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
           <div className="relative">
             <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
             <input
@@ -180,7 +199,10 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
           </div>
           <select
             value={stateFilter}
-            onChange={(e) => setStateFilter(e.target.value)}
+            onChange={(e) => {
+              setStateFilter(e.target.value);
+              setDistrictFilter('');
+            }}
             className="px-3 py-2 bg-white border border-slate-300 rounded-md text-sm"
           >
             <option value="">{t.mapSection.allStates}</option>
@@ -190,6 +212,37 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
               </option>
             ))}
           </select>
+          <select
+            value={districtFilter}
+            onChange={(e) => setDistrictFilter(e.target.value)}
+            disabled={!stateFilter}
+            className="px-3 py-2 bg-white border border-slate-300 rounded-md text-sm disabled:bg-slate-100 disabled:text-slate-400"
+          >
+            <option value="">
+              {lang === 'mr' ? 'सर्व जिल्हे' : lang === 'hi' ? 'सभी ज़िले' : 'All Districts'}
+            </option>
+            {findWorkDistricts.map((d) => (
+              <option key={d} value={d}>
+                {d}
+              </option>
+            ))}
+          </select>
+          <div className="relative">
+            <MapPin className="w-4 h-4 text-[#E06D1B] absolute left-3 top-3" />
+            <input
+              type="text"
+              value={areaPincodeFilter}
+              onChange={(e) => setAreaPincodeFilter(e.target.value)}
+              placeholder={
+                lang === 'mr'
+                  ? 'परिसर / ६-अंकी पिनकोड...'
+                  : lang === 'hi'
+                  ? 'क्षेत्र / 6-अंकीय पिनकोड...'
+                  : 'Area / 6-digit Pincode...'
+              }
+              className="w-full pl-9 pr-3 py-2 bg-white border border-slate-300 rounded-md text-sm"
+            />
+          </div>
           <select
             value={workTypeFilter}
             onChange={(e) => setWorkTypeFilter(e.target.value)}
@@ -206,25 +259,64 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
           </select>
         </div>
 
-        <div className="flex flex-wrap gap-6 text-xs font-medium text-slate-700">
-          <label className="inline-flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={womenOnly}
-              onChange={(e) => setWomenOnly(e.target.checked)}
-              className="rounded border-slate-300"
-            />
-            <span>{t.jobs.womenFriendly}</span>
-          </label>
-          <label className="inline-flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={pwdOnly}
-              onChange={(e) => setPwdOnly(e.target.checked)}
-              className="rounded border-slate-300"
-            />
-            <span>{t.jobs.accessibleWork}</span>
-          </label>
+        <div className="flex flex-wrap items-center justify-between gap-3 text-xs font-medium text-slate-700">
+          <div className="flex flex-wrap items-center gap-5">
+            <label className="inline-flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={womenOnly}
+                onChange={(e) => setWomenOnly(e.target.checked)}
+                className="rounded border-slate-300"
+              />
+              <span>{t.jobs.womenFriendly}</span>
+            </label>
+            <label className="inline-flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={pwdOnly}
+                onChange={(e) => setPwdOnly(e.target.checked)}
+                className="rounded border-slate-300"
+              />
+              <span>{t.jobs.accessibleWork}</span>
+            </label>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {workerProfile && (
+              <button
+                type="button"
+                onClick={() => {
+                  setStateFilter(workerProfile.state || '');
+                  setDistrictFilter(workerProfile.district || '');
+                  setAreaPincodeFilter(workerProfile.cityOrVillage || '');
+                }}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-blue-50 border border-blue-200 text-[#0B3B75] font-bold hover:bg-blue-100 cursor-pointer"
+              >
+                <MapPin className="w-3.5 h-3.5 text-[#E06D1B]" />
+                <span>
+                  {lang === 'mr'
+                    ? `माझा परिसर (${workerProfile.district})`
+                    : lang === 'hi'
+                    ? `मेरा क्षेत्र (${workerProfile.district})`
+                    : `My Area (${workerProfile.district})`}
+                </span>
+              </button>
+            )}
+            {(stateFilter || districtFilter || areaPincodeFilter || search || workTypeFilter) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearch('');
+                  setStateFilter('');
+                  setDistrictFilter('');
+                  setAreaPincodeFilter('');
+                  setWorkTypeFilter('');
+                }}
+                className="px-2.5 py-1 rounded-md border border-slate-300 bg-white text-slate-600 font-bold hover:bg-slate-100 cursor-pointer"
+              >
+                {lang === 'mr' ? 'फिल्टर काढा' : lang === 'hi' ? 'फ़िल्टर हटाएँ' : 'Clear Filters'}
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
@@ -531,12 +623,19 @@ export const FindWorkersView: React.FC<FindWorkersViewProps> = ({ workers, onNav
   const { lang, t } = useLanguage();
   const [search, setSearch] = useState('');
   const [stateFilter, setStateFilter] = useState('');
+  const [districtFilter, setDistrictFilter] = useState('');
+  const [areaPincodeFilter, setAreaPincodeFilter] = useState('');
   const [availFilter, setAvailFilter] = useState('');
   const [approvedProfessions, setApprovedProfessions] = useState<CustomProfessionRecord[]>([]);
 
   useEffect(() => {
     return subscribeApprovedProfessions(setApprovedProfessions);
   }, []);
+
+  const workerDistrictOptions = useMemo(() => {
+    const st = INDIA_STATES_DISTRICTS.find((s) => s.name === stateFilter);
+    return st ? st.districts.map((d) => d.name) : [];
+  }, [stateFilter]);
 
   const approvedProfessionSlugs = useMemo(
     () => new Set(approvedProfessions.filter((p) => p.status === 'approved').map((p) => p.slug)),
@@ -561,9 +660,16 @@ export const FindWorkersView: React.FC<FindWorkersViewProps> = ({ workers, onNav
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
+    const locQ = areaPincodeFilter.trim().toLowerCase();
     return workers
       .filter((w) => w.verificationStatus !== 'suspended')
       .filter((w) => !stateFilter || w.state === stateFilter)
+      .filter((w) => !districtFilter || w.district === districtFilter)
+      .filter((w) => {
+        if (!locQ) return true;
+        const locBlob = `${w.cityOrVillage || ''} ${w.district || ''} ${w.state || ''}`.toLowerCase();
+        return locBlob.includes(locQ);
+      })
       .filter((w) => !availFilter || w.availabilityStatus === availFilter)
       .filter((w) => {
         if (!q) return true;
@@ -588,7 +694,9 @@ export const FindWorkersView: React.FC<FindWorkersViewProps> = ({ workers, onNav
           (!isUnverifiedCustom && w.skills.some((s) => s.toLowerCase().includes(q)))
         );
       });
-  }, [workers, search, stateFilter, availFilter, approvedProfessions, approvedProfessionSlugs, lang]);
+  }, [workers, search, stateFilter, districtFilter, areaPincodeFilter, availFilter, approvedProfessions, approvedProfessionSlugs, lang]);
+
+  const extractedPincode = (areaPincodeFilter.match(/\b\d{6}\b/) || [])[0] || '';
 
   return (
     <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
@@ -609,44 +717,102 @@ export const FindWorkersView: React.FC<FindWorkersViewProps> = ({ workers, onNav
         </button>
       </div>
 
-      <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-5 grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="relative">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
-          <input
-            type="search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder={
-              lang === 'mr'
-                ? 'व्यवसाय, कौशल्य, जिल्हा किंवा कामगाराचे नाव शोधा...'
-                : lang === 'hi'
-                ? 'व्यवसाय, कौशल, ज़िला या कामगार का नाम खोजें...'
-                : 'Search by profession, skill, district, or worker name...'
-            }
-            className="w-full pl-9 pr-3 py-2 bg-white border border-slate-300 rounded-md text-sm"
-          />
-        </div>
-        <select
-          value={stateFilter}
-          onChange={(e) => setStateFilter(e.target.value)}
-          className="px-3 py-2 bg-white border border-slate-300 rounded-md text-sm"
-        >
-          <option value="">{t.mapSection.allStates}</option>
-          {INDIA_STATES_DISTRICTS.map((st) => (
-            <option key={st.name} value={st.name}>
-              {st.name}
+      <div className="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-5 space-y-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+          <div className="relative">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3 top-3" />
+            <input
+              type="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder={
+                lang === 'mr'
+                  ? 'व्यवसाय, कौशल्य किंवा नाव...'
+                  : lang === 'hi'
+                  ? 'व्यवसाय, कौशल या नाम...'
+                  : 'Profession, skill, or name...'
+              }
+              className="w-full pl-9 pr-3 py-2 bg-white border border-slate-300 rounded-md text-sm"
+            />
+          </div>
+          <select
+            value={stateFilter}
+            onChange={(e) => {
+              setStateFilter(e.target.value);
+              setDistrictFilter('');
+            }}
+            className="px-3 py-2 bg-white border border-slate-300 rounded-md text-sm"
+          >
+            <option value="">{t.mapSection.allStates}</option>
+            {INDIA_STATES_DISTRICTS.map((st) => (
+              <option key={st.name} value={st.name}>
+                {st.name}
+              </option>
+            ))}
+          </select>
+          <select
+            value={districtFilter}
+            onChange={(e) => setDistrictFilter(e.target.value)}
+            disabled={!stateFilter}
+            className="px-3 py-2 bg-white border border-slate-300 rounded-md text-sm disabled:bg-slate-100 disabled:text-slate-400"
+          >
+            <option value="">
+              {lang === 'mr' ? 'सर्व जिल्हे' : lang === 'hi' ? 'सभी ज़िले' : 'All Districts'}
             </option>
-          ))}
-        </select>
-        <select
-          value={availFilter}
-          onChange={(e) => setAvailFilter(e.target.value)}
-          className="px-3 py-2 bg-white border border-slate-300 rounded-md text-sm"
-        >
-          <option value="">All Availability</option>
-          <option value="available">Available Immediately</option>
-          <option value="busy">Currently Engaged</option>
-        </select>
+            {workerDistrictOptions.map((d) => (
+              <option key={d} value={d}>
+                {d}
+              </option>
+            ))}
+          </select>
+          <div className="relative">
+            <MapPin className="w-4 h-4 text-[#E06D1B] absolute left-3 top-3" />
+            <input
+              type="text"
+              value={areaPincodeFilter}
+              onChange={(e) => setAreaPincodeFilter(e.target.value)}
+              placeholder={
+                lang === 'mr'
+                  ? 'परिसर / ६-अंकी पिनकोड...'
+                  : lang === 'hi'
+                  ? 'क्षेत्र / 6-अंकीय पिनकोड...'
+                  : 'Area / 6-digit Pincode...'
+              }
+              className="w-full pl-9 pr-3 py-2 bg-white border border-slate-300 rounded-md text-sm"
+            />
+          </div>
+          <select
+            value={availFilter}
+            onChange={(e) => setAvailFilter(e.target.value)}
+            className="px-3 py-2 bg-white border border-slate-300 rounded-md text-sm"
+          >
+            <option value="">All Availability</option>
+            <option value="available">Available Immediately</option>
+            <option value="busy">Currently Engaged</option>
+          </select>
+        </div>
+
+        {(stateFilter || districtFilter || areaPincodeFilter || search || availFilter) && (
+          <div className="flex items-center justify-between text-xs text-slate-600">
+            <span className="font-semibold">
+              {filtered.length}{' '}
+              {lang === 'mr' ? 'कामगार जुळले' : lang === 'hi' ? 'कामगार मिले' : 'matching worker(s)'}
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                setSearch('');
+                setStateFilter('');
+                setDistrictFilter('');
+                setAreaPincodeFilter('');
+                setAvailFilter('');
+              }}
+              className="font-bold text-[#0B3B75] hover:underline cursor-pointer"
+            >
+              {lang === 'mr' ? 'फिल्टर काढा' : lang === 'hi' ? 'फ़िल्टर हटाएँ' : 'Clear Filters'}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Approved Specialized Profession Filter Chips */}
@@ -683,7 +849,11 @@ export const FindWorkersView: React.FC<FindWorkersViewProps> = ({ workers, onNav
         <SponsoredAdSlider
           compact
           category={search.trim() || 'all'}
+          categoryLabel={search.trim() || undefined}
           state={stateFilter}
+          district={districtFilter}
+          city={extractedPincode ? '' : areaPincodeFilter.trim()}
+          pincode={extractedPincode}
           placement="service_info"
           onNavigate={(r) => onNavigate(r)}
         />
@@ -806,6 +976,8 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
   const [createdJobId, setCreatedJobId] = useState('');
   const [pushDispatchNotice, setPushDispatchNotice] = useState('');
   const [approvedProfessions, setApprovedProfessions] = useState<CustomProfessionRecord[]>([]);
+  const [showAddProfessionModal, setShowAddProfessionModal] = useState(false);
+  const [pincode, setPincode] = useState('');
 
   useEffect(() => {
     return subscribeApprovedProfessions(setApprovedProfessions);
@@ -848,11 +1020,20 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
 
     setSaving(true);
     try {
-      const approxLocationLabel = buildApproxLocationLabel({
+      const cleanPin = pincode.replace(/\D/g, '').slice(0, 6);
+      const baseApprox = buildApproxLocationLabel({
         cityOrVillage: cityOrVillage.trim(),
         district: districtName,
         state: stateName,
       });
+      const approxLocationLabel =
+        cleanPin.length === 6 && !baseApprox.includes(cleanPin)
+          ? `${baseApprox} (${cleanPin})`
+          : baseApprox;
+      const finalWorkLocationLabel =
+        cleanPin.length === 6 && !workLocationLabel.includes(cleanPin)
+          ? `${workLocationLabel.trim()} · PIN ${cleanPin}`.slice(0, 160)
+          : workLocationLabel.trim();
       const approxCoords = getApproximateCoordinates(coords.lat, coords.lng);
       const genderProtected = isFemaleCustomerProtected({
         gender: employerProfile.gender || employerPrivate?.gender,
@@ -868,7 +1049,7 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
         viewerRole: 'worker',
       });
       const trimmedExactAddress = (
-        workLocationLabel.trim() ||
+        finalWorkLocationLabel ||
         employerPrivate?.businessAddress?.trim() ||
         ''
       ).slice(0, 320);
@@ -922,6 +1103,7 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
       }
       setCreatedJobId(id);
       setWorkPhotoUrls([]);
+      setPincode('');
 
       let inAppNotified = 0;
       if (workers.length > 0) {
@@ -1041,45 +1223,125 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
                   {t.jobs.category} *
                 </label>
-                <select
-                  value={category}
-                  onChange={(e) => setCategory(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
-                >
-                  <optgroup
-                    label={
-                      lang === 'mr'
-                        ? 'प्रमुख रोजगार श्रेणी'
-                        : lang === 'hi'
-                        ? 'प्रमुख रोजगार श्रेणियाँ'
-                        : 'Standard Categories'
-                    }
+                <div className="flex items-center gap-2">
+                  <ProfessionThumbnail
+                    label={category}
+                    hint={category}
+                    size="sm"
+                  />
+                  <select
+                    value={category}
+                    onChange={(e) => setCategory(e.target.value)}
+                    className="flex-1 min-w-0 h-10 px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
                   >
-                    {NORMAL_WORK_CATEGORIES.map((c) => (
-                      <option key={c.id} value={c.en}>
-                        {lang === 'hi' ? c.hi : lang === 'mr' ? c.mr : c.en}
-                      </option>
-                    ))}
-                  </optgroup>
-                  {approvedProfessions.length > 0 && (
                     <optgroup
                       label={
                         lang === 'mr'
-                          ? 'मंजूर विशेष व्यवसाय'
+                          ? 'प्रमुख रोजगार श्रेणी'
                           : lang === 'hi'
-                          ? 'स्वीकृत विशेष व्यवसाय'
-                          : 'Approved Specialized Professions'
+                          ? 'प्रमुख रोजगार श्रेणियाँ'
+                          : 'Standard Categories'
                       }
                     >
-                      {approvedProfessions.map((p) => (
-                        <option key={p.slug} value={p.nameEn}>
-                          {getCustomProfessionLabel(p, lang)}
+                      {NORMAL_WORK_CATEGORIES.map((c) => (
+                        <option key={c.id} value={c.en}>
+                          {lang === 'hi' ? c.hi : lang === 'mr' ? c.mr : c.en}
                         </option>
                       ))}
                     </optgroup>
-                  )}
-                </select>
+                    {approvedProfessions.length > 0 && (
+                      <optgroup
+                        label={
+                          lang === 'mr'
+                            ? 'मंजूर विशेष व्यवसाय'
+                            : lang === 'hi'
+                            ? 'स्वीकृत विशेष व्यवसाय'
+                            : 'Approved Specialized Professions'
+                        }
+                      >
+                        {approvedProfessions.map((p) => (
+                          <option key={p.slug} value={p.nameEn}>
+                            {getCustomProfessionLabel(p, lang)}
+                          </option>
+                        ))}
+                      </optgroup>
+                    )}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => setShowAddProfessionModal(true)}
+                    title={
+                      lang === 'mr'
+                        ? 'नवीन काम / व्यवसाय जोडा'
+                        : lang === 'hi'
+                        ? 'नया काम / श्रेणी जोड़ें'
+                        : 'Add New Skill / Category'
+                    }
+                    className="h-10 inline-flex items-center gap-1 px-3 py-2 rounded-md bg-[#E06D1B] hover:bg-[#C65B12] text-white text-xs font-extrabold shrink-0 shadow-xs cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>{lang === 'mr' ? 'जोडा' : lang === 'hi' ? 'जोड़ें' : 'Add'}</span>
+                  </button>
+                </div>
               </div>
+            </div>
+
+            {/* Compact Photo-Thumbnail Quick Category Strip */}
+            <div className="flex items-center gap-2 overflow-x-auto pb-1">
+              {SERVICE_CATALOG_V2.filter((s) => !s.isTransport).map((svc) => {
+                const isSelected = category === svc.canonicalCategory;
+                const label = getServiceCategoryLabel(svc, lang);
+                return (
+                  <button
+                    key={svc.id}
+                    type="button"
+                    onClick={() => setCategory(svc.canonicalCategory)}
+                    className={`shrink-0 inline-flex items-center gap-1.5 pl-1 pr-2.5 py-1 rounded-lg border text-xs font-bold transition-colors cursor-pointer ${
+                      isSelected
+                        ? 'bg-blue-50 border-[#0B3B75] text-[#0B3B75]'
+                        : 'bg-white border-slate-200 text-slate-700 hover:border-[#0B3B75]/60'
+                    }`}
+                  >
+                    <ProfessionThumbnail
+                      id={svc.id}
+                      label={label}
+                      hint={`${svc.en} ${svc.canonicalCategory}`}
+                      size="xs"
+                      accentBg={svc.accentBg}
+                      accentBorder={svc.accentBorder}
+                      accentText={svc.accentText}
+                    />
+                    <span className="whitespace-nowrap">{label}</span>
+                  </button>
+                );
+              })}
+              {approvedProfessions.slice(0, 6).map((prof) => {
+                const isSelected = category === prof.nameEn;
+                const label = getCustomProfessionLabel(prof, lang);
+                return (
+                  <button
+                    key={prof.slug}
+                    type="button"
+                    onClick={() => setCategory(prof.nameEn)}
+                    className={`shrink-0 inline-flex items-center gap-1.5 pl-1 pr-2.5 py-1 rounded-lg border text-xs font-bold transition-colors cursor-pointer ${
+                      isSelected
+                        ? 'bg-blue-50 border-[#0B3B75] text-[#0B3B75]'
+                        : 'bg-white border-indigo-200/90 text-slate-700 hover:border-[#0B3B75]/60'
+                    }`}
+                  >
+                    <ProfessionThumbnail
+                      id={prof.slug}
+                      label={label}
+                      hint={prof.nameEn}
+                      size="xs"
+                      accentBg="bg-indigo-50"
+                      accentBorder="border-indigo-200"
+                      accentText="text-[#0B3B75]"
+                    />
+                    <span className="whitespace-nowrap">{label}</span>
+                  </button>
+                );
+              })}
             </div>
 
             <div>
@@ -1124,7 +1386,7 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
                   {t.workerForm.state} *
@@ -1176,6 +1438,20 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
               </div>
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  {lang === 'mr' ? 'पिनकोड (६ अंकी)' : lang === 'hi' ? 'पिनकोड (6 अंक)' : 'Pincode (6-digit)'}
+                </label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={6}
+                  value={pincode}
+                  onChange={(e) => setPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                  placeholder="e.g. 442401"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm font-mono-tabular"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
                   {t.jobs.workLocationLabel} *
                 </label>
                 <input
@@ -1183,6 +1459,7 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
                   required
                   value={workLocationLabel}
                   onChange={(e) => setWorkLocationLabel(e.target.value)}
+                  placeholder={lang === 'mr' ? 'परिसर / कॉलनी' : lang === 'hi' ? 'इलाका / कॉलोनी' : 'Area / Colony'}
                   className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
                 />
               </div>
@@ -1391,6 +1668,23 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
           </form>
         </>
       )}
+      <AddProfessionModal
+        open={showAddProfessionModal}
+        onClose={() => setShowAddProfessionModal(false)}
+        lang={lang}
+        user={user}
+        existingProfessions={approvedProfessions}
+        onAdded={(res) => {
+          setCategory(res.canonicalName);
+          setSkillsInput((prev) =>
+            prev.trim()
+              ? prev.toLowerCase().includes(res.canonicalName.toLowerCase())
+                ? prev
+                : `${res.canonicalName}, ${prev}`
+              : res.canonicalName
+          );
+        }}
+      />
     </div>
   );
 };

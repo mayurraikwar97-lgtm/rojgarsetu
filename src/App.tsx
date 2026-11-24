@@ -28,6 +28,7 @@ import {
 import { buildSmartJobVoiceScript } from './lib/smartVoiceJobAlert';
 import { getToneTypeForEvent } from './lib/dealWorkflow';
 import {
+  buildSpokenNotificationText,
   playNotificationTone,
   speakJobAlert,
   stopVoiceAlert,
@@ -279,6 +280,8 @@ const AppShell: React.FC = () => {
   const triggerSmartVoicePlayback = useCallback(
     async (opts: {
       voiceScript?: string;
+      title?: string;
+      body?: string;
       lang?: Language;
       playSound?: boolean;
       speakVoice?: boolean;
@@ -292,15 +295,22 @@ const AppShell: React.FC = () => {
         toneType: opts.toneType,
         eventType: opts.eventType,
       });
+      const resolvedLang = opts.lang || notifPrefs?.preferredLanguage || lang;
       const allowSound =
         opts.playSound !== false && isToneEnabledForUser(resolvedTone, notifPrefs);
       const allowVoice =
         opts.speakVoice !== false && (!notifPrefs || notifPrefs.voiceAlertsEnabled !== false);
+      const spokenText = buildSpokenNotificationText({
+        voiceScript: opts.voiceScript,
+        title: opts.title,
+        body: opts.body,
+        lang: resolvedLang,
+      });
 
-      if (allowVoice && opts.voiceScript) {
+      if (allowVoice && spokenText) {
         const res = await speakJobAlert({
-          text: opts.voiceScript,
-          lang: opts.lang || notifPrefs?.preferredLanguage || lang,
+          text: spokenText,
+          lang: resolvedLang,
           soundEnabled: allowSound,
           voiceEnabled: true,
           toneType: resolvedTone,
@@ -317,13 +327,17 @@ const AppShell: React.FC = () => {
     [voiceMuted, notifPrefs, lang]
   );
 
-  // Unlock Web Audio & Web Speech on first user gesture
+  // Unlock Web Audio & warm up Web Speech voices on user interaction
   useEffect(() => {
-    const onPointerDown = () => {
+    const onGesture = () => {
       unlockAudioOnUserGesture();
     };
-    window.addEventListener('pointerdown', onPointerDown, { once: true });
-    return () => window.removeEventListener('pointerdown', onPointerDown);
+    window.addEventListener('pointerdown', onGesture, { passive: true });
+    window.addEventListener('keydown', onGesture, { passive: true });
+    return () => {
+      window.removeEventListener('pointerdown', onGesture);
+      window.removeEventListener('keydown', onGesture);
+    };
   }, []);
 
   // Subscribe to notification & voice preferences
@@ -598,6 +612,8 @@ const AppShell: React.FC = () => {
       if (shown) {
         void triggerSmartVoicePlayback({
           voiceScript: payload.voiceScript,
+          title: payload.title,
+          body: payload.body,
           lang: spokenLang,
           playSound: payload.playSound,
           speakVoice: payload.speakVoice,
@@ -706,26 +722,16 @@ const AppShell: React.FC = () => {
 
         if (shown && !playedAudioForBatch) {
           playedAudioForBatch = true;
-          if (
-            newestUnread.category === 'matchingJobs' ||
-            newestUnread.eventType === 'hiring_request_created' ||
-            Boolean(newestUnread.voiceScript)
-          ) {
-            void triggerSmartVoicePlayback({
-              voiceScript: newestUnread.voiceScript,
-              lang: spokenLang,
-              playSound: newestUnread.playSound,
-              speakVoice: newestUnread.speakVoice,
-              toneType: resolvedTone,
-              eventType: newestUnread.eventType,
-            });
-          } else if (
-            !voiceMuted &&
-            newestUnread.playSound !== false &&
-            isToneEnabledForUser(resolvedTone, notifPrefs)
-          ) {
-            void playNotificationTone(resolvedTone);
-          }
+          void triggerSmartVoicePlayback({
+            voiceScript: newestUnread.voiceScript,
+            title: newestUnread.title,
+            body: newestUnread.body,
+            lang: spokenLang,
+            playSound: newestUnread.playSound,
+            speakVoice: newestUnread.speakVoice,
+            toneType: resolvedTone,
+            eventType: newestUnread.eventType,
+          });
         }
       }
     });
@@ -796,14 +802,24 @@ const AppShell: React.FC = () => {
           void playNotificationTone(activeTone);
         }}
         onReplayVoice={(item, activeTone) => {
-          if (!item.voiceScript) return;
           unlockAudioOnUserGesture();
+          const replayLang = item.lang || notifPrefs?.preferredLanguage || lang;
+          const spokenText = buildSpokenNotificationText({
+            voiceScript: item.voiceScript,
+            title: item.title,
+            body: item.body,
+            lang: replayLang,
+          });
           setAlertQueue((prev) =>
             prev.map((a) => (a.id === item.id ? { ...a, speechBlockedHint: false } : a))
           );
+          if (!spokenText) {
+            void playNotificationTone(activeTone);
+            return;
+          }
           void speakJobAlert({
-            text: item.voiceScript,
-            lang: item.lang || notifPrefs?.preferredLanguage || lang,
+            text: spokenText,
+            lang: replayLang,
             soundEnabled: false,
             voiceEnabled: true,
             toneType: activeTone,

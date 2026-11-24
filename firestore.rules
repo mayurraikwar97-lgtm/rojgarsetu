@@ -3152,8 +3152,8 @@ service cloud.firestore {
     }
 
     match /customProfessions/{professionId} {
-      // Unverified custom professions are NEVER published publicly; only approved categories,
-      // the submitting worker, and authorized Admins may read them.
+      // Approved categories are publicly readable for customers & workers;
+      // pending/rejected entries are visible only to the creator and authorized Admins.
       allow get: if isValidId(professionId)
         && (
           existing().status == 'approved' ||
@@ -3172,7 +3172,7 @@ service cloud.firestore {
           isAdmin() ||
           (
             incoming().createdByUid == request.auth.uid
-            && incoming().status == 'pending'
+            && incoming().status in ['pending', 'approved']
             && incoming().source == 'worker_submission'
             && !('approvedByUid' in incoming())
             && !('adminNotes' in incoming())

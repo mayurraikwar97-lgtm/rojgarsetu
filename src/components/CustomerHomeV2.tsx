@@ -6,6 +6,7 @@ import {
   Bike,
   Briefcase,
   CalendarClock,
+  Camera,
   Car,
   CheckCircle2,
   ChevronRight,
@@ -16,12 +17,18 @@ import {
   HardHat,
   Loader2,
   MapPin,
+  Music,
   Paintbrush,
+  Plus,
   Radar,
   RefreshCw,
+  Scissors,
   Search,
+  Shield,
   Sparkles,
+  Sun,
   Tv,
+  Video,
   Wrench,
   Zap,
 } from 'lucide-react';
@@ -53,7 +60,7 @@ import {
   saveCustomerDefaultLocation,
   saveOrderExactAddress,
 } from '../lib/firestoreService';
-import { detectBestGpsLocation } from '../lib/locationService';
+import { detectBestGpsLocation, searchLocations } from '../lib/locationService';
 import {
   buildApproxLocationLabel,
   getNextRadiusStage,
@@ -72,9 +79,11 @@ import type {
   ServiceRadiusKm,
 } from '../types/domain';
 import { BrandSloganBanner } from './BrandSloganBanner';
+import { AddProfessionModal } from './AddProfessionModal';
 import { LocationPinModal } from './LocationPinModal';
 import { WorkPhotoUploader } from './WorkPhotoUploader';
 import { HomeIdentityHero, HomePublicPortalSections } from './HomePublicPortalSections';
+import { ProfessionThumbnail } from './ProfessionThumbnail';
 import { SponsoredAdSlider } from './SponsoredAdSlider';
 
 interface CustomerHomeV2Props {
@@ -92,39 +101,16 @@ interface ActiveLocationState {
   state: string;
   district: string;
   cityOrVillage: string;
+  pincode?: string;
+}
+
+function extractSixDigitPincode(raw?: string): string {
+  const match = (raw || '').match(/\b\d{6}\b/);
+  return match ? match[0] : '';
 }
 
 function tr(lang: Language, en: string, hi: string, mr: string): string {
   return lang === 'mr' ? mr : lang === 'hi' ? hi : en;
-}
-
-function getCategoryIcon(id: string): React.ComponentType<{ className?: string }> {
-  switch (id) {
-    case 'electrician':
-      return Zap;
-    case 'plumber':
-      return Droplets;
-    case 'carpenter':
-      return Hammer;
-    case 'cleaner':
-      return Sparkles;
-    case 'painter':
-      return Paintbrush;
-    case 'mechanic':
-      return Wrench;
-    case 'ac_repair':
-      return AirVent;
-    case 'appliance_repair':
-      return Tv;
-    case 'driver':
-      return Car;
-    case 'daily_labour':
-      return HardHat;
-    case 'bike_transport':
-      return Bike;
-    default:
-      return Briefcase;
-  }
 }
 
 export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
@@ -166,6 +152,10 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
   });
   const [gpsLoading, setGpsLoading] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
+  const [pincodeQuery, setPincodeQuery] = useState('');
+  const [pincodeBusy, setPincodeBusy] = useState(false);
+  const [showAddProfessionModal, setShowAddProfessionModal] = useState(false);
+  const [addProfessionNotice, setAddProfessionNotice] = useState('');
 
   // Order Form State
   const [workDescription, setWorkDescription] = useState('');
@@ -603,6 +593,72 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
     [jobs]
   );
 
+  const activePincode = useMemo(
+    () => location.pincode || extractSixDigitPincode(location.label),
+    [location.pincode, location.label]
+  );
+
+  const handleApplyPincodeOrArea = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const raw = pincodeQuery.trim();
+    if (raw.length < 3) return;
+    setPincodeBusy(true);
+    const typedPin = extractSixDigitPincode(raw);
+    try {
+      const results = await searchLocations(raw, lang);
+      const top = results[0];
+      if (top) {
+        const resolvedPin = typedPin || extractSixDigitPincode(top.formattedAddress);
+        const cleanLabel =
+          resolvedPin && !top.formattedAddress.includes(resolvedPin)
+            ? `${top.cityOrVillage || top.district}, ${resolvedPin}`
+            : top.formattedAddress || `${top.cityOrVillage || raw}, ${top.district || location.district}`;
+        const nextLoc: ActiveLocationState = {
+          lat: top.lat,
+          lng: top.lng,
+          label: cleanLabel,
+          state: top.state || location.state,
+          district: top.district || location.district,
+          cityOrVillage: top.cityOrVillage || top.district || raw,
+          pincode: resolvedPin || undefined,
+        };
+        setLocation(nextLoc);
+        setPincodeQuery('');
+        if (user?.emailVerified) {
+          void saveCustomerDefaultLocation(user.uid, {
+            state: nextLoc.state,
+            district: nextLoc.district,
+            cityOrVillage: nextLoc.cityOrVillage,
+            lat: nextLoc.lat,
+            lng: nextLoc.lng,
+            savedAddressLabel: nextLoc.label,
+          }).catch(() => undefined);
+        }
+      } else {
+        // Graceful local fallback so typed area/pincode is still honored immediately
+        const nextLoc: ActiveLocationState = {
+          ...location,
+          label: typedPin ? `${location.cityOrVillage}, ${typedPin}` : `${raw}, ${location.district}`,
+          cityOrVillage: typedPin ? location.cityOrVillage : raw,
+          pincode: typedPin || location.pincode,
+        };
+        setLocation(nextLoc);
+        setPincodeQuery('');
+      }
+    } catch {
+      const nextLoc: ActiveLocationState = {
+        ...location,
+        label: typedPin ? `${location.cityOrVillage}, ${typedPin}` : `${raw}, ${location.district}`,
+        cityOrVillage: typedPin ? location.cityOrVillage : raw,
+        pincode: typedPin || location.pincode,
+      };
+      setLocation(nextLoc);
+      setPincodeQuery('');
+    } finally {
+      setPincodeBusy(false);
+    }
+  };
+
   return (
     <div className="min-h-[calc(100vh-3.5rem)] bg-[#F8FAFC] pb-24 md:pb-12">
       {/* Sections 1–4: Public-Service Identity Hero with Mahatma Gandhi Portrait & Primary Actions (only on Home screen) */}
@@ -612,6 +668,7 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
           openJobsCount={openJobsCount}
           onFindWork={() => onNavigate('find-work')}
           onFindWorkers={() => onNavigate('find-workers')}
+          onPostJob={() => onNavigate('post-job')}
           onJumpToServices={() => {
             const el = document.getElementById('popular-services');
             if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -619,52 +676,86 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
         />
       )}
 
-      {/* Top Location & Search Strip */}
+      {/* Top Location, Pincode & Search Strip */}
       <div id="popular-services" className="bg-white border-b border-slate-200/80 scroll-mt-14">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-          {/* Location Display + Change */}
-          <div className="flex items-center justify-between sm:justify-start gap-2 min-w-0">
-            <button
-              type="button"
-              onClick={() => setShowPinModal(true)}
-              className="flex items-center gap-2 min-w-0 text-left group cursor-pointer"
-            >
-              <div className="w-8 h-8 rounded-lg bg-amber-50 border border-amber-200/80 flex items-center justify-center shrink-0">
-                <MapPin className="w-4 h-4 text-[#E06D1B]" />
-              </div>
-              <div className="min-w-0">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                  {tr(lang, 'Service Location', 'सेवा स्थान', 'सेवेचे ठिकाण')}
-                </div>
-                <div className="text-xs sm:text-sm font-bold text-[#0B3B75] truncate max-w-[210px] sm:max-w-[280px] group-hover:text-[#E06D1B] transition-colors">
-                  {location.label}
-                </div>
-              </div>
-            </button>
-
-            <div className="flex items-center gap-1.5 shrink-0">
-              <button
-                type="button"
-                onClick={handleDetectGps}
-                disabled={gpsLoading}
-                className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-xs font-bold text-[#0B3B75] transition-colors cursor-pointer"
-              >
-                <Crosshair className={`w-3.5 h-3.5 text-[#E06D1B] ${gpsLoading ? 'animate-spin' : ''}`} />
-                <span>{tr(lang, 'GPS', 'GPS', 'GPS')}</span>
-              </button>
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
+          {/* Location Display + Quick Pincode/Area Input + GPS / Pin */}
+          <div className="flex flex-col sm:flex-row sm:items-center gap-2 min-w-0 flex-1">
+            <div className="flex items-center justify-between sm:justify-start gap-2 min-w-0">
               <button
                 type="button"
                 onClick={() => setShowPinModal(true)}
-                className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-bold text-slate-700 cursor-pointer"
+                className="flex items-center gap-2 min-w-0 text-left group cursor-pointer"
               >
-                {tr(lang, 'Change', 'बदलें', 'बदला')}
+                <div className="w-8 h-8 rounded-lg bg-amber-50 border border-amber-200/80 flex items-center justify-center shrink-0">
+                  <MapPin className="w-4 h-4 text-[#E06D1B]" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                    <span>{tr(lang, 'Service Area & Pincode', 'सेवा क्षेत्र व पिनकोड', 'सेवा परिसर व पिनकोड')}</span>
+                    {activePincode && (
+                      <span className="px-1.5 py-0.5 rounded bg-blue-50 border border-blue-200 text-[10px] font-mono-tabular font-bold text-[#0B3B75]">
+                        PIN {activePincode}
+                      </span>
+                    )}
+                  </div>
+                  <div className="text-xs sm:text-sm font-bold text-[#0B3B75] truncate max-w-[200px] sm:max-w-[250px] group-hover:text-[#E06D1B] transition-colors">
+                    {location.label}
+                  </div>
+                </div>
               </button>
+
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleDetectGps}
+                  disabled={gpsLoading}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-xs font-bold text-[#0B3B75] transition-colors cursor-pointer"
+                >
+                  <Crosshair className={`w-3.5 h-3.5 text-[#E06D1B] ${gpsLoading ? 'animate-spin' : ''}`} />
+                  <span>{tr(lang, 'GPS', 'GPS', 'GPS')}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowPinModal(true)}
+                  className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-bold text-slate-700 cursor-pointer"
+                >
+                  {tr(lang, 'Map', 'मैप', 'नकाशा')}
+                </button>
+              </div>
             </div>
+
+            {/* Inline Pincode / Area Quick Set */}
+            <form
+              onSubmit={handleApplyPincodeOrArea}
+              className="flex items-center gap-1.5 w-full sm:w-auto sm:max-w-[250px]"
+            >
+              <input
+                type="text"
+                value={pincodeQuery}
+                onChange={(e) => setPincodeQuery(e.target.value)}
+                maxLength={40}
+                placeholder={tr(
+                  lang,
+                  'Enter Pincode / Area (e.g. 442401)',
+                  'पिनकोड / क्षेत्र लिखें (उदा. 442401)',
+                  'पिनकोड / परिसर टाका (उदा. 442401)'
+                )}
+                className="flex-1 min-w-0 h-9 px-2.5 rounded-lg border border-slate-200 bg-slate-50 focus:bg-white text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B3B75]/20 focus:border-[#0B3B75]"
+              />
+              <button
+                type="submit"
+                disabled={pincodeBusy || pincodeQuery.trim().length < 3}
+                className="h-9 px-2.5 rounded-lg bg-[#0B3B75] hover:bg-[#072A54] text-white text-xs font-bold disabled:opacity-50 cursor-pointer shrink-0"
+              >
+                {pincodeBusy ? '...' : tr(lang, 'Set', 'सेट', 'सेट')}
+              </button>
+            </form>
           </div>
 
           {/* Service Search Box (visible on Home) */}
           {step === 'home' && (
-            <div className="relative w-full sm:w-80">
+            <div className="relative w-full lg:w-72 shrink-0">
               <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
               <input
                 type="text"
@@ -672,11 +763,11 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
                 onChange={(e) => setSearchQuery(e.target.value)}
                 placeholder={tr(
                   lang,
-                  'Search electrician, plumber, AC...',
-                  'इलेक्ट्रीशियन, प्लंबर, AC खोजें...',
-                  'इलेक्ट्रिशियन, प्लंबर, AC शोधा...'
+                  'Search electrician, plumber, cameraman...',
+                  'इलेक्ट्रीशियन, प्लंबर, कैमरामैन खोजें...',
+                  'इलेक्ट्रिशियन, प्लंबर, कॅमेरामन शोधा...'
                 )}
-                className="w-full h-10 pl-9 pr-3 rounded-lg border border-slate-200 bg-slate-50 focus:bg-white text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B3B75]/25 focus:border-[#0B3B75]"
+                className="w-full h-9 pl-9 pr-3 rounded-lg border border-slate-200 bg-slate-50 focus:bg-white text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B3B75]/25 focus:border-[#0B3B75]"
               />
             </div>
           )}
@@ -750,14 +841,25 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
                       key={`${cat.id}_${sub.id}`}
                       type="button"
                       onClick={() => handleSelectSubService(cat, sub)}
-                      className="flex items-center justify-between gap-2 px-3 py-2.5 rounded-lg border border-slate-200 hover:border-[#0B3B75] bg-slate-50/70 hover:bg-white text-left transition-colors cursor-pointer"
+                      className="flex items-center justify-between gap-2.5 px-3 py-2 rounded-lg border border-slate-200 hover:border-[#0B3B75] bg-slate-50/70 hover:bg-white text-left transition-colors cursor-pointer"
                     >
-                      <div className="min-w-0">
-                        <div className="text-sm font-bold text-[#0B3B75] truncate">
-                          {getSubServiceLabel(sub, lang)}
-                        </div>
-                        <div className="text-[11px] text-slate-500">
-                          {getServiceCategoryLabel(cat, lang)} · {sub.estimatedDuration}
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <ProfessionThumbnail
+                          id={cat.id}
+                          label={getServiceCategoryLabel(cat, lang)}
+                          hint={`${cat.en} ${cat.canonicalCategory}`}
+                          size="xs"
+                          accentBg={cat.accentBg}
+                          accentBorder={cat.accentBorder}
+                          accentText={cat.accentText}
+                        />
+                        <div className="min-w-0">
+                          <div className="text-sm font-bold text-[#0B3B75] truncate">
+                            {getSubServiceLabel(sub, lang)}
+                          </div>
+                          <div className="text-[11px] text-slate-500 truncate">
+                            {getServiceCategoryLabel(cat, lang)} · {sub.estimatedDuration}
+                          </div>
                         </div>
                       </div>
                       <ChevronRight className="w-4 h-4 text-slate-400 shrink-0" />
@@ -767,110 +869,127 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
               </div>
             )}
 
-            {/* 12 Large Visual Service Category Cards */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
-              {searchResults.categories.map((cat) => {
-                const Icon = getCategoryIcon(cat.id);
+            {addProfessionNotice && (
+              <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3.5 py-2.5 flex items-center justify-between gap-2 text-xs text-emerald-900">
+                <div className="flex items-center gap-2 font-semibold">
+                  <CheckCircle2 className="w-4 h-4 text-[#15803D] shrink-0" />
+                  <span>{addProfessionNotice}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAddProfessionNotice('')}
+                  className="text-[11px] font-bold text-emerald-700 hover:underline cursor-pointer shrink-0"
+                >
+                  {tr(lang, 'OK', 'ठीक है', 'ठीक आहे')}
+                </button>
+              </div>
+            )}
+
+            {/* Compact, Space-Efficient Service Category Grid (Small Photo Thumbnails + Live Custom + "+" Add Tile) */}
+            <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-5 lg:grid-cols-6 gap-2 sm:gap-2.5">
+              {[...searchResults.categories, ...searchResults.customCategories].map((cat) => {
+                const isCustom = approvedCustomCatalog.some((c) => c.id === cat.id);
+                const localizedLabel = getServiceCategoryLabel(cat, lang);
                 return (
                   <button
                     key={cat.id}
                     type="button"
                     onClick={() => handleSelectCategory(cat)}
-                    className={`group text-left bg-white rounded-xl border p-4 sm:p-5 transition-all hover:shadow-md active:scale-[0.99] cursor-pointer flex flex-col justify-between min-h-[146px] sm:min-h-[164px] ${
+                    className={`group text-left bg-white rounded-xl border p-2.5 sm:p-3 transition-all hover:shadow-sm active:scale-[0.98] cursor-pointer flex flex-col items-center sm:items-start text-center sm:text-left justify-between min-h-[90px] sm:min-h-[100px] ${
                       cat.isTransport
                         ? 'border-emerald-300 hover:border-[#15803D]'
+                        : isCustom
+                        ? 'border-indigo-200/90 hover:border-[#0B3B75]'
                         : 'border-slate-200/90 hover:border-[#0B3B75]'
                     }`}
                   >
-                    <div className="flex items-start justify-between gap-2">
-                      <div
-                        className={`w-12 h-12 rounded-xl border flex items-center justify-center shrink-0 transition-transform group-hover:scale-105 ${cat.accentBg} ${cat.accentBorder}`}
-                      >
-                        <Icon className={`w-6 h-6 ${cat.accentText}`} />
-                      </div>
+                    <div className="w-full flex items-center justify-center sm:justify-between gap-1.5">
+                      <ProfessionThumbnail
+                        id={cat.id}
+                        label={localizedLabel}
+                        hint={`${cat.en} ${cat.canonicalCategory}`}
+                        size="md"
+                        accentBg={cat.accentBg}
+                        accentBorder={cat.accentBorder}
+                        accentText={cat.accentText}
+                        className="transition-transform group-hover:scale-105"
+                      />
+                      {isCustom && (
+                        <span className="hidden sm:inline-block text-[10px] font-bold text-[#15803D] leading-none">
+                          {tr(lang, 'Live', 'लाइव', 'लाइव्ह')}
+                        </span>
+                      )}
                     </div>
 
-                    <div className="mt-3 space-y-1">
-                      <div className="font-display text-sm sm:text-base font-extrabold text-[#0B3B75] group-hover:text-[#E06D1B] transition-colors leading-snug">
-                        {getServiceCategoryLabel(cat, lang)}
+                    <div className="mt-2 w-full space-y-0.5">
+                      <div className="font-display text-xs sm:text-[13px] font-extrabold text-[#0B3B75] group-hover:text-[#E06D1B] transition-colors leading-tight line-clamp-2">
+                        {localizedLabel}
                       </div>
-                      <p className="text-[11px] sm:text-xs text-slate-500 line-clamp-2 leading-relaxed">
+                      <p className="hidden sm:block text-[10px] text-slate-500 truncate leading-tight">
                         {getServiceTagline(cat, lang)}
                       </p>
                     </div>
                   </button>
                 );
               })}
+
+              {/* "+" Add New Skill / Category Tile right at the end of the professions list */}
+              <button
+                type="button"
+                onClick={() => setShowAddProfessionModal(true)}
+                aria-label={tr(
+                  lang,
+                  'Add new skill or category',
+                  'नया काम या श्रेणी जोड़ें',
+                  'नवीन काम किंवा व्यवसाय जोडा'
+                )}
+                className="group text-left bg-amber-50/60 hover:bg-amber-50 rounded-xl border-2 border-dashed border-[#E06D1B]/60 hover:border-[#E06D1B] p-2.5 sm:p-3 transition-all hover:shadow-sm active:scale-[0.98] cursor-pointer flex flex-col items-center sm:items-start text-center sm:text-left justify-between min-h-[90px] sm:min-h-[100px]"
+              >
+                <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-lg bg-[#E06D1B] text-white flex items-center justify-center shrink-0 shadow-xs transition-transform group-hover:scale-105">
+                  <Plus className="w-5 h-5" />
+                </div>
+                <div className="mt-2 w-full space-y-0.5">
+                  <div className="font-display text-xs sm:text-[13px] font-extrabold text-[#C25E00] leading-tight line-clamp-2">
+                    {tr(lang, '+ Add Skill', '+ काम जोड़ें', '+ व्यवसाय जोडा')}
+                  </div>
+                  <p className="hidden sm:block text-[10px] text-amber-800/80 truncate leading-tight">
+                    {tr(lang, 'Cameraman, DJ, more', 'कैमरामैन, DJ, अन्य', 'कॅमेरामन, DJ, इतर')}
+                  </p>
+                </div>
+              </button>
             </div>
 
-            {/* Admin-Approved Dynamic Specialized Professions (A-to-Z Inclusivity) */}
-            {searchResults.customCategories.length > 0 && (
-              <div className="space-y-3 pt-2">
-                <div className="flex items-center justify-between gap-2">
-                  <div>
-                    <h3 className="font-display text-base sm:text-lg font-extrabold text-[#0B3B75]">
-                      {tr(
-                        lang,
-                        'More Approved Professions & Local Skills',
-                        'अन्य स्वीकृत व्यवसाय और स्थानीय कौशल',
-                        'अधिक मंजूर व्यवसाय आणि स्थानिक कौशल्ये'
-                      )}
-                    </h3>
-                    <p className="text-xs text-slate-600">
-                      {tr(
-                        lang,
-                        'Verified specialized professions available for instant location-based hiring.',
-                        'सत्यापित विशेष व्यवसाय — नज़दीकी कामगार तुरंत बुक करें।',
-                        'सत्यापित विशेष व्यवसाय — जवळच्या कुशल कामगारांना थेट कामाची विनंती पाठवा.'
-                      )}
-                    </p>
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
-                  {searchResults.customCategories.map((cat) => {
-                    const Icon = getCategoryIcon(cat.id);
-                    return (
-                      <button
-                        key={cat.id}
-                        type="button"
-                        onClick={() => handleSelectCategory(cat)}
-                        className="group text-left bg-white rounded-xl border border-indigo-200/80 hover:border-[#0B3B75] p-4 transition-all hover:shadow-md active:scale-[0.99] cursor-pointer flex flex-col justify-between min-h-[132px]"
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <div className={`w-10 h-10 rounded-xl border flex items-center justify-center shrink-0 ${cat.accentBg} ${cat.accentBorder}`}>
-                            <Icon className={`w-5 h-5 ${cat.accentText}`} />
-                          </div>
-                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-                            {tr(lang, 'Verified', 'सत्यापित', 'मंजूर')}
-                          </span>
-                        </div>
-                        <div className="mt-2.5 space-y-0.5">
-                          <div className="font-display text-sm font-extrabold text-[#0B3B75] group-hover:text-[#E06D1B] transition-colors leading-snug">
-                            {getServiceCategoryLabel(cat, lang)}
-                          </div>
-                          <p className="text-[11px] text-slate-500 line-clamp-2 leading-relaxed">
-                            {getServiceTagline(cat, lang)}
-                          </p>
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
             {searchResults.categories.length === 0 && searchResults.customCategories.length === 0 && (
-              <div className="bg-white border border-slate-200 rounded-xl p-8 text-center space-y-2">
+              <div className="bg-white border border-slate-200 rounded-xl p-6 text-center space-y-3">
                 <p className="text-sm font-bold text-[#0B3B75]">
                   {tr(lang, 'No matching service found.', 'कोई मेल खाती सेवा नहीं मिली।', 'जुळणारी सेवा सापडली नाही.')}
                 </p>
-                <button
-                  type="button"
-                  onClick={() => setSearchQuery('')}
-                  className="text-xs font-bold text-[#E06D1B] hover:underline cursor-pointer"
-                >
-                  {tr(lang, 'Show all services', 'सभी सेवाएँ देखें', 'सर्व सेवा पहा')}
-                </button>
+                <div className="flex flex-wrap items-center justify-center gap-2.5">
+                  {searchQuery.trim().length >= 2 && (
+                    <button
+                      type="button"
+                      onClick={() => setShowAddProfessionModal(true)}
+                      className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#E06D1B] hover:bg-[#C65B12] text-white text-xs font-extrabold cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                      <span>
+                        {tr(
+                          lang,
+                          `Add "${searchQuery.trim()}" as a new service`,
+                          `"${searchQuery.trim()}" नई सेवा जोड़ें`,
+                          `"${searchQuery.trim()}" नवीन सेवा जोडा`
+                        )}
+                      </span>
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setSearchQuery('')}
+                    className="px-3 py-2 rounded-lg border border-slate-200 text-xs font-bold text-[#0B3B75] hover:bg-slate-50 cursor-pointer"
+                  >
+                    {tr(lang, 'Show all services', 'सभी सेवाएँ देखें', 'सर्व सेवा पहा')}
+                  </button>
+                </div>
               </div>
             )}
 
@@ -880,6 +999,7 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
               state={location.state}
               district={location.district}
               city={location.cityOrVillage}
+              pincode={activePincode}
               placement="homepage"
               onNavigate={(r) => onNavigate(r)}
             />
@@ -930,21 +1050,32 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
               <span>{tr(lang, 'All Services', 'सभी सेवाएँ', 'सर्व सेवा')}</span>
             </button>
 
-            <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-1">
-              <div className="text-xs font-bold uppercase tracking-wider text-[#E06D1B]">
-                {tr(lang, 'Step 1 of 2 · Choose Work Type', 'चरण 1 / 2 · काम का प्रकार चुनें', 'पायरी १ / २ · कामाचा प्रकार निवडा')}
+            <div className="bg-white border border-slate-200 rounded-xl p-5 flex items-start gap-3.5">
+              <ProfessionThumbnail
+                id={selectedCategory.id}
+                label={getServiceCategoryLabel(selectedCategory, lang)}
+                hint={`${selectedCategory.en} ${selectedCategory.canonicalCategory}`}
+                size="lg"
+                accentBg={selectedCategory.accentBg}
+                accentBorder={selectedCategory.accentBorder}
+                accentText={selectedCategory.accentText}
+              />
+              <div className="space-y-1 min-w-0">
+                <div className="text-xs font-bold uppercase tracking-wider text-[#E06D1B]">
+                  {tr(lang, 'Step 1 of 2 · Choose Work Type', 'चरण 1 / 2 · काम का प्रकार चुनें', 'पायरी १ / २ · कामाचा प्रकार निवडा')}
+                </div>
+                <h1 className="font-display text-xl sm:text-2xl font-extrabold text-[#0B3B75]">
+                  {getServiceCategoryLabel(selectedCategory, lang)}
+                </h1>
+                <p className="text-sm text-slate-600">
+                  {tr(
+                    lang,
+                    'Select the specific work you need. Only matching workers in this category will be notified.',
+                    'अपना सटीक काम चुनें। केवल इसी श्रेणी के कामगारों को रिक्वेस्ट भेजी जाएगी।',
+                    'तुम्हाला हवे असलेले नेमके काम निवडा. फक्त याच प्रकारच्या कामगारांना रिक्वेस्ट पाठवली जाईल.'
+                  )}
+                </p>
               </div>
-              <h1 className="font-display text-xl sm:text-2xl font-extrabold text-[#0B3B75]">
-                {getServiceCategoryLabel(selectedCategory, lang)}
-              </h1>
-              <p className="text-sm text-slate-600">
-                {tr(
-                  lang,
-                  'Select the specific work you need. Only matching workers in this category will be notified.',
-                  'अपना सटीक काम चुनें। केवल इसी श्रेणी के कामगारों को रिक्वेस्ट भेजी जाएगी।',
-                  'तुम्हाला हवे असलेले नेमके काम निवडा. फक्त याच प्रकारच्या कामगारांना रिक्वेस्ट पाठवली जाईल.'
-                )}
-              </p>
             </div>
 
             {/* Category-Matched Sponsored Advertisement Slider (Strictly relevant to selectedCategory) */}
@@ -954,23 +1085,24 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
               state={location.state}
               district={location.district}
               city={location.cityOrVillage}
+              pincode={activePincode}
               placement="category_selection"
               onNavigate={(r) => onNavigate(r)}
             />
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               {selectedCategory.subServices.map((sub) => (
                 <button
                   key={sub.id}
                   type="button"
                   onClick={() => handleSelectSubService(selectedCategory, sub)}
-                  className="bg-white border border-slate-200 hover:border-[#0B3B75] rounded-xl p-4 text-left flex items-center justify-between gap-3 transition-all hover:shadow-sm cursor-pointer group"
+                  className="bg-white border border-slate-200 hover:border-[#0B3B75] rounded-xl p-3 text-left flex items-center justify-between gap-2.5 transition-all hover:shadow-sm cursor-pointer group"
                 >
-                  <div className="space-y-1 min-w-0">
-                    <div className="text-sm sm:text-base font-extrabold text-[#0B3B75] group-hover:text-[#E06D1B] transition-colors">
+                  <div className="space-y-0.5 min-w-0">
+                    <div className="text-sm font-extrabold text-[#0B3B75] group-hover:text-[#E06D1B] transition-colors">
                       {getSubServiceLabel(sub, lang)}
                     </div>
-                    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+                    <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
                       <span className="font-semibold text-[#15803D]">
                         {tr(
                           lang,
@@ -986,8 +1118,8 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
                       </span>
                     </div>
                   </div>
-                  <div className="w-9 h-9 rounded-lg bg-slate-100 group-hover:bg-[#E06D1B] group-hover:text-white text-slate-500 flex items-center justify-center shrink-0 transition-colors">
-                    <ChevronRight className="w-5 h-5" />
+                  <div className="w-8 h-8 rounded-lg bg-slate-100 group-hover:bg-[#E06D1B] group-hover:text-white text-slate-500 flex items-center justify-center shrink-0 transition-colors">
+                    <ChevronRight className="w-4 h-4" />
                   </div>
                 </button>
               ))}
@@ -1013,23 +1145,34 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
             >
               {/* Selected Service Summary */}
               <div className="flex items-start justify-between gap-3 pb-4 border-b border-slate-100">
-                <div>
-                  <div className="text-xs font-bold uppercase tracking-wider text-[#E06D1B]">
-                    {tr(lang, 'Step 2 of 2 · Send Request', 'चरण 2 / 2 · रिक्वेस्ट भेजें', 'पायरी २ / २ · रिक्वेस्ट पाठवा')}
-                  </div>
-                  <h1 className="font-display text-xl font-extrabold text-[#0B3B75] mt-0.5">
-                    {getSubServiceLabel(selectedSubService, lang)}
-                  </h1>
-                  <div className="text-xs text-slate-500 mt-0.5">
-                    {getServiceCategoryLabel(selectedCategory, lang)} ·{' '}
-                    <span className="font-semibold text-[#15803D]">
-                      {tr(
-                        lang,
-                        'Worker will quote rate after reading work & photos',
-                        'कामगार काम और फ़ोटो देखकर अपना दर बताएगा',
-                        'कामगार काम वाचून किंवा फोटो पाहून दर सांगेल'
-                      )}
-                    </span>
+                <div className="flex items-start gap-3 min-w-0">
+                  <ProfessionThumbnail
+                    id={selectedCategory.id}
+                    label={getServiceCategoryLabel(selectedCategory, lang)}
+                    hint={`${selectedCategory.en} ${selectedCategory.canonicalCategory}`}
+                    size="md"
+                    accentBg={selectedCategory.accentBg}
+                    accentBorder={selectedCategory.accentBorder}
+                    accentText={selectedCategory.accentText}
+                  />
+                  <div className="min-w-0">
+                    <div className="text-xs font-bold uppercase tracking-wider text-[#E06D1B]">
+                      {tr(lang, 'Step 2 of 2 · Send Request', 'चरण 2 / 2 · रिक्वेस्ट भेजें', 'पायरी २ / २ · रिक्वेस्ट पाठवा')}
+                    </div>
+                    <h1 className="font-display text-xl font-extrabold text-[#0B3B75] mt-0.5">
+                      {getSubServiceLabel(selectedSubService, lang)}
+                    </h1>
+                    <div className="text-xs text-slate-500 mt-0.5">
+                      {getServiceCategoryLabel(selectedCategory, lang)} ·{' '}
+                      <span className="font-semibold text-[#15803D]">
+                        {tr(
+                          lang,
+                          'Worker will quote rate after reading work & photos',
+                          'कामगार काम और फ़ोटो देखकर अपना दर बताएगा',
+                          'कामगार काम वाचून किंवा फोटो पाहून दर सांगेल'
+                        )}
+                      </span>
+                    </div>
                   </div>
                 </div>
                 <button
@@ -1399,6 +1542,36 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
             }
           }}
         />
+      {/* "+" Add New Skill / Category Modal */}
+      <AddProfessionModal
+        open={showAddProfessionModal}
+        onClose={() => setShowAddProfessionModal(false)}
+        lang={lang}
+        user={user}
+        existingProfessions={approvedProfessions}
+        initialValue={searchQuery.trim()}
+        onAdded={(res) => {
+          setSearchQuery('');
+          setAddProfessionNotice(
+            res.reusedExisting
+              ? tr(
+                  lang,
+                  `"${res.canonicalName}" is already available and ready to select!`,
+                  `"${res.canonicalName}" पहले से उपलब्ध है — आप इसे चुन सकते हैं!`,
+                  `"${res.canonicalName}" आधीपासून उपलब्ध आहे — तुम्ही निवडू शकता!`
+                )
+              : tr(
+                  lang,
+                  `"${res.canonicalName}" added live! Now selectable by customers and new workers.`,
+                  `"${res.canonicalName}" जोड़ दिया गया है! अब ग्राहक व नए कामगार इसे चुन सकते हैं।`,
+                  `"${res.canonicalName}" यशस्वीरित्या जोडले! आता ग्राहक व नवीन कामगार ते निवडू शकतात.`
+                )
+          );
+          if (res.categoryV2) {
+            handleSelectCategory(res.categoryV2);
+          }
+        }}
+      />
     </div>
   );
 };

@@ -309,32 +309,18 @@ export const TopNotificationBanner: React.FC<TopNotificationBannerProps> = ({
           {/* Compact Action Footer */}
           <div className="mt-2.5 pt-2 border-t border-slate-100 flex items-center justify-between gap-2">
             <div className="flex items-center gap-1.5">
-              {item.voiceScript ? (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onReplayVoice(item, activeTone);
-                  }}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 bg-slate-50 text-[11px] font-bold text-[#0B3B75] hover:bg-slate-100 cursor-pointer"
-                >
-                  <Volume2 className="w-3.5 h-3.5 text-[#E06D1B]" />
-                  <span>{tr(lang, 'Listen', 'सुनें', 'ऐका')}</span>
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    onReplayTone(activeTone);
-                  }}
-                  aria-label={tr(lang, 'Replay alert tone', 'टोन फिर से सुनें', 'टोन पुन्हा ऐका')}
-                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-slate-200 bg-slate-50 text-[11px] font-semibold text-slate-700 hover:bg-slate-100 cursor-pointer"
-                >
-                  <Volume2 className="w-3.5 h-3.5 text-[#E06D1B]" />
-                  <span className="hidden sm:inline">{tr(lang, 'Tone', 'टोन', 'टोन')}</span>
-                </button>
-              )}
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onReplayVoice(item, activeTone);
+                }}
+                aria-label={tr(lang, 'Listen to notification', 'सूचना आवाज में सुनें', 'सूचना आवाजात ऐका')}
+                className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-amber-200 bg-amber-50/80 text-[11px] font-bold text-[#0B3B75] hover:bg-amber-100 cursor-pointer"
+              >
+                <Volume2 className="w-3.5 h-3.5 text-[#E06D1B]" />
+                <span>{tr(lang, 'Listen', 'सुनें', 'ऐका')}</span>
+              </button>
 
               <button
                 type="button"

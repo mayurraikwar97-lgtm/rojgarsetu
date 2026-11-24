@@ -42,6 +42,7 @@ interface HomeIdentityHeroProps {
   openJobsCount: number;
   onFindWork: () => void;
   onFindWorkers: () => void;
+  onPostJob: () => void;
   onJumpToServices: () => void;
 }
 
@@ -50,9 +51,12 @@ export const HomeIdentityHero: React.FC<HomeIdentityHeroProps> = ({
   openJobsCount,
   onFindWork,
   onFindWorkers,
+  onPostJob,
   onJumpToServices,
 }) => {
   const { lang } = useLanguage();
+  const showLiveWorkerCount = workersCount >= 10;
+  const showLiveJobCount = openJobsCount >= 5;
 
   return (
     <section className="bg-white border-b border-slate-200">
@@ -100,44 +104,100 @@ export const HomeIdentityHero: React.FC<HomeIdentityHeroProps> = ({
               </div>
             </div>
 
-            {/* Section 4: Two Large Primary Action Buttons ("काम शोधा" & "कामगार शोधा") */}
-            <div className="space-y-3">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-2xl">
-                <button
-                  type="button"
-                  onClick={onFindWork}
-                  className="min-h-[54px] px-6 py-3.5 rounded-lg bg-[#0B3B75] hover:bg-[#072A54] text-white font-display text-base font-extrabold inline-flex items-center justify-center gap-2.5 shadow-sm transition-colors cursor-pointer"
-                >
-                  <Briefcase className="w-5 h-5 text-amber-300 shrink-0" />
-                  <span>{tr(lang, 'Find Work (काम शोधा)', 'काम खोजें (काम शोधा)', 'काम शोधा')}</span>
-                  <ArrowRight className="w-4 h-4 shrink-0" />
-                </button>
-
+            {/* Section 4: Clear Primary Actions ("कामगार शोधा", "कामाची जाहिरात टाका", "काम शोधा") */}
+            <div className="space-y-3.5">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 max-w-3xl">
                 <button
                   type="button"
                   onClick={onJumpToServices}
-                  className="min-h-[54px] px-6 py-3.5 rounded-lg bg-[#E06D1B] hover:bg-[#c55b10] text-white font-display text-base font-extrabold inline-flex items-center justify-center gap-2.5 shadow-sm transition-colors cursor-pointer"
+                  className="min-h-[50px] px-4 py-3 rounded-lg bg-[#E06D1B] hover:bg-[#c55b10] text-white font-display text-sm sm:text-base font-extrabold inline-flex items-center justify-center gap-2 shadow-sm transition-colors cursor-pointer"
                 >
-                  <Search className="w-5 h-5 text-white shrink-0" />
-                  <span>{tr(lang, 'Find Workers (कामगार शोधा)', 'कामगार खोजें (कामगार शोधा)', 'कामगार शोधा')}</span>
+                  <Search className="w-4 h-4 text-white shrink-0" />
+                  <span>{tr(lang, 'Find Workers', 'कामगार खोजें', 'कामगार शोधा')}</span>
                   <ArrowRight className="w-4 h-4 shrink-0" />
+                </button>
+
+                <button
+                  type="button"
+                  onClick={onPostJob}
+                  className="min-h-[50px] px-4 py-3 rounded-lg bg-[#15803D] hover:bg-[#116830] text-white font-display text-sm sm:text-base font-extrabold inline-flex items-center justify-center gap-2 shadow-sm transition-colors cursor-pointer"
+                >
+                  <UserPlus className="w-4 h-4 text-emerald-100 shrink-0" />
+                  <span>{tr(lang, 'Post a Job', 'काम पोस्ट करें', 'कामाची जाहिरात टाका')}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={onFindWork}
+                  className="min-h-[50px] px-4 py-3 rounded-lg bg-[#0B3B75] hover:bg-[#072A54] text-white font-display text-sm sm:text-base font-extrabold inline-flex items-center justify-center gap-2 shadow-sm transition-colors cursor-pointer"
+                >
+                  <Briefcase className="w-4 h-4 text-amber-300 shrink-0" />
+                  <span>{tr(lang, 'Find Work', 'काम खोजें', 'काम शोधा')}</span>
                 </button>
               </div>
 
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-slate-600 pt-1">
-                <span className="font-semibold text-[#15803D]">
-                  {tr(lang, 'Zero Middlemen', 'बिना बिचौलियों के', 'मध्यस्थांशिवाय थेट संपर्क')}
-                </span>
-                <span aria-hidden="true" className="text-slate-300">·</span>
-                <span className="font-mono-tabular">
-                  {workersCount.toLocaleString('en-IN')}{' '}
-                  {tr(lang, 'Registered Workers', 'पंजीकृत कामगार', 'नोंदणीकृत कामगार')}
-                </span>
-                <span aria-hidden="true" className="text-slate-300">·</span>
-                <span className="font-mono-tabular">
-                  {openJobsCount.toLocaleString('en-IN')}{' '}
-                  {tr(lang, 'Open Opportunities', 'खुले अवसर', 'सध्या उपलब्ध कामे')}
-                </span>
+              {/* Local Trust Strip (Confidence-first — avoids discouraging early-stage zero counters) */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-0.5 max-w-3xl">
+                <div className="flex items-center gap-2 rounded-lg bg-emerald-50/70 border border-emerald-200/80 px-3 py-2 text-xs font-bold text-[#15803D]">
+                  <Handshake className="w-4 h-4 shrink-0" />
+                  <span>
+                    {tr(
+                      lang,
+                      'Direct Contact · Zero Middlemen',
+                      'सीधा संपर्क · बिना बिचौलियों के',
+                      'मध्यस्थांशिवाय थेट संपर्क'
+                    )}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 rounded-lg bg-blue-50/70 border border-blue-200/80 px-3 py-2 text-xs font-bold text-[#0B3B75]">
+                  <MapPin className="w-4 h-4 text-[#E06D1B] shrink-0" />
+                  <span>
+                    {tr(
+                      lang,
+                      'Location & Pincode Matching (2–10 km)',
+                      'लोकेशन व पिनकोड आधारित मिलान',
+                      'लोकेशन व पिनकोडनुसार जवळची जुळणी'
+                    )}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 rounded-lg bg-amber-50/70 border border-amber-200/80 px-3 py-2 text-xs font-bold text-[#9A3412]">
+                  <ShieldCheck className="w-4 h-4 text-[#E06D1B] shrink-0" />
+                  <span>
+                    {tr(
+                      lang,
+                      'Verified Digital Worker ID',
+                      'डिजिटल कामगार पहचान पत्र',
+                      'सत्यापित डिजिटल कामगार आयडी'
+                    )}
+                  </span>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-slate-600 pt-0.5">
+                {showLiveWorkerCount ? (
+                  <span className="font-mono-tabular font-semibold text-[#0B3B75]">
+                    {workersCount.toLocaleString('en-IN')}+{' '}
+                    {tr(lang, 'Registered Workers', 'पंजीकृत कामगार', 'नोंदणीकृत कामगार')}
+                  </span>
+                ) : (
+                  <span className="font-semibold text-[#0B3B75]">
+                    {tr(
+                      lang,
+                      'Growing Local Worker Network Across Maharashtra & India',
+                      'महाराष्ट्र व भारत भर में बढ़ता स्थानीय कामगार नेटवर्क',
+                      'महाराष्ट्र व देशभरात वाढणारे स्थानिक कामगार नेटवर्क'
+                    )}
+                  </span>
+                )}
+                {showLiveJobCount && (
+                  <>
+                    <span aria-hidden="true" className="text-slate-300">·</span>
+                    <span className="font-mono-tabular font-semibold text-[#15803D]">
+                      {openJobsCount.toLocaleString('en-IN')}{' '}
+                      {tr(lang, 'Live Opportunities', 'सक्रिय अवसर', 'सध्या उपलब्ध कामे')}
+                    </span>
+                  </>
+                )}
                 <span aria-hidden="true" className="text-slate-300">·</span>
                 <button
                   type="button"
@@ -252,7 +312,14 @@ export const HomePublicPortalSections: React.FC<HomePublicPortalSectionsProps> =
               <div className="space-y-2.5">
                 <div className="flex items-center gap-2 text-xs font-bold text-[#15803D]">
                   <UserPlus className="w-4 h-4" />
-                  <span>{tr(lang, '100% Free Launch Registration', 'निःशुल्क कामगार पंजीकरण', 'मोफत कामगार नोंदणी')}</span>
+                  <span>
+                    {tr(
+                      lang,
+                      '₹250 One-Time · Digital Worker ID & Zero Hidden Charges',
+                      '₹250 एकमुश्त · डिजिटल आईडी कार्ड व कोई छिपा शुल्क नहीं',
+                      'फक्त ₹250 एकवेळ · डिजिटल ओळखपत्र व शून्य लपविलेले शुल्क'
+                    )}
+                  </span>
                 </div>
                 <h3 className="font-display text-xl font-bold text-[#0B3B75]">
                   {tr(lang, 'Register as a Worker', 'कामगार के रूप में पंजीकरण करें', 'कामगार म्हणून नोंदणी करा')}
@@ -260,11 +327,25 @@ export const HomePublicPortalSections: React.FC<HomePublicPortalSectionsProps> =
                 <p className="text-sm text-slate-600 leading-relaxed">
                   {tr(
                     lang,
-                    'Create your profile in 2 minutes, receive your digital Rojgar Setu Worker Identity Card, and get instant voice & mobile job alerts within 2–10 km.',
-                    '2 मिनट में प्रोफ़ाइल बनाएं, अपना डिजिटल रोजगार सेतु कामगार आईडी कार्ड पाएं और 2–10 किमी के भीतर सीधे काम के अलर्ट प्राप्त करें।',
-                    '२ मिनिटांत नोंदणी करा, डिजिटल रोजगार सेतु कामगार ओळखपत्र मिळवा आणि २–१० किमी परिसरातील कामाचे थेट अलर्ट मिळवा.'
+                    'Complete simple 2-minute registration to receive your Digital Rojgar Setu Worker ID Card, Registration Certificate, instant nearby job alerts (2–10 km), and keep 100% of your earnings with zero commission.',
+                    '2 मिनट में आसान पंजीकरण करें, डिजिटल रोजगार सेतु कामगार आईडी कार्ड व प्रमाण-पत्र पाएं, 2–10 किमी के भीतर काम के अलर्ट पाएं और बिना किसी कमीशन के पूरी कमाई अपने पास रखें।',
+                    '२ मिनिटांत सोपी नोंदणी करा — डिजिटल कामगार ओळखपत्र, नोंदणी प्रमाणपत्र, २–१० किमी परिसरातील कामाचे अलर्ट मिळवा आणि शून्य कमिशनमध्ये संपूर्ण कमाई स्वतःकडे ठेवा.'
                   )}
                 </p>
+                <div className="flex flex-wrap gap-x-4 gap-y-1 pt-1 text-[11px] font-semibold text-slate-700">
+                  <span className="inline-flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-[#15803D]" />
+                    {tr(lang, 'Digital Worker ID', 'डिजिटल आईडी कार्ड', 'डिजिटल ओळखपत्र')}
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-[#15803D]" />
+                    {tr(lang, 'Official Certificate', 'पंजीकरण प्रमाण-पत्र', 'नोंदणी प्रमाणपत्र')}
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-[#15803D]" />
+                    {tr(lang, '0% Commission · No Monthly Fee', '0% कमीशन · मासिक शुल्क नहीं', '0% कमिशन · मासिक शुल्क नाही')}
+                  </span>
+                </div>
               </div>
               <div className="flex flex-wrap gap-2.5">
                 <button

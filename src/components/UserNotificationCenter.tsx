@@ -33,6 +33,7 @@ import { sanitizeNotificationTextForPrivacy } from '../lib/customerPrivacy';
 import { SERVICE_RADIUS_STAGES, buildSmartJobVoiceScript } from '../lib/smartVoiceJobAlert';
 import { getToneChannelConfig, getToneTypeForEvent } from '../lib/dealWorkflow';
 import {
+  buildSpokenNotificationText,
   playNotificationTone,
   speakJobAlert,
   stopVoiceAlert,
@@ -965,14 +966,42 @@ export const UserNotificationCenter: React.FC<UserNotificationCenterProps> = ({
                     )}
                   </div>
 
-                  <button
-                    type="button"
-                    onClick={() => handleOpenNotification(n)}
-                    className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded bg-[#0B3B75] text-xs font-extrabold text-white hover:bg-slate-800 cursor-pointer shrink-0 self-start sm:self-center"
-                  >
-                    <ExternalLink className="w-3.5 h-3.5" />
-                    {tr(lang, 'OPEN', 'खोलें (OPEN)', 'उघडा (OPEN)')}
-                  </button>
+                  <div className="flex items-center gap-2 shrink-0 self-start sm:self-center">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        unlockAudioOnUserGesture();
+                        const spokenText = buildSpokenNotificationText({
+                          voiceScript: n.voiceScript,
+                          title: sanitizeNotificationTextForPrivacy(n.title),
+                          body: sanitizeNotificationTextForPrivacy(n.body),
+                          lang: n.language || lang,
+                        });
+                        if (spokenText) {
+                          void speakJobAlert({
+                            text: spokenText,
+                            lang: n.language || lang,
+                            soundEnabled: false,
+                            voiceEnabled: true,
+                            toneType: getToneTypeForEvent(n),
+                          });
+                        }
+                      }}
+                      aria-label={tr(lang, 'Listen to notification', 'सूचना आवाज में सुनें', 'सूचना आवाजात ऐका')}
+                      className="min-h-[40px] inline-flex items-center gap-1 px-3 py-1.5 rounded border border-amber-200 bg-amber-50 text-xs font-bold text-[#0B3B75] hover:bg-amber-100 cursor-pointer"
+                    >
+                      <Volume2 className="w-3.5 h-3.5 text-[#E06D1B]" />
+                      <span>{tr(lang, 'Listen', 'सुनें', 'ऐका')}</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleOpenNotification(n)}
+                      className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded bg-[#0B3B75] text-xs font-extrabold text-white hover:bg-slate-800 cursor-pointer"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      {tr(lang, 'OPEN', 'खोलें (OPEN)', 'उघडा (OPEN)')}
+                    </button>
+                  </div>
                 </div>
               );
             })}
