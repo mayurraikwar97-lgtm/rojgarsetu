@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { AlertCircle, Car, CheckCircle2, Crosshair, Lock, MapPin, ShieldCheck } from 'lucide-react';
+import { AlertCircle, Car, CheckCircle2, Crosshair, Lock, MapPin, ShieldAlert, ShieldCheck } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import {
   getDistrictCoordinates,
@@ -10,6 +10,10 @@ import { useLanguage } from '../i18n/LanguageContext';
 import { formatUiError } from '../lib/firebase';
 import { saveVehicleListing } from '../lib/firestoreService';
 import { detectBestGpsLocation } from '../lib/locationService';
+import {
+  getOtpFraudWarningLocalized,
+  isVehicleRegistrationOtpEnabled,
+} from '../lib/otpFeatureFlags';
 import type { Language, PageRoute, VehicleType, VerificationMethod } from '../types/domain';
 import { LocationPinModal } from './LocationPinModal';
 import { OtpVerificationBox } from './OtpVerificationBox';
@@ -27,6 +31,8 @@ const VEHICLE_TYPE_OPTIONS = VEHICLE_TYPE_CATALOG;
 export const VehicleRegistrationForm: React.FC<VehicleRegistrationFormProps> = ({ onNavigate }) => {
   const { lang, t } = useLanguage();
   const { user, authError, clearAuthError, signInWithGoogle } = useAuth();
+  const vehicleOtpRequired = isVehicleRegistrationOtpEnabled();
+  const fraudWarning = getOtpFraudWarningLocalized(lang);
 
   const [ownerDisplayName, setOwnerDisplayName] = useState(user?.displayName || '');
   const [vehicleType, setVehicleType] = useState<VehicleType>('auto_rickshaw');
@@ -155,10 +161,17 @@ export const VehicleRegistrationForm: React.FC<VehicleRegistrationFormProps> = (
       return;
     }
     if (!/^[6-9]\d{9}$/.test(mobile.trim())) {
-      setErrorMsg('Please enter a valid 10-digit Indian mobile number.');
+      setErrorMsg(
+        tr(
+          lang,
+          'Please enter a valid 10-digit Indian mobile number.',
+          'कृपया मान्य 10 अंकों का भारतीय मोबाइल नंबर दर्ज करें।',
+          'कृपया वैध १० अंकी भारतीय मोबाईल नंबर टाका.'
+        )
+      );
       return;
     }
-    if (!mobileVerified) {
+    if (vehicleOtpRequired && !mobileVerified) {
       setErrorMsg(
         tr(
           lang,
@@ -206,9 +219,9 @@ export const VehicleRegistrationForm: React.FC<VehicleRegistrationFormProps> = (
           ownerUid: user.uid,
           ownerName: ownerDisplayName.trim(),
           mobile: mobile.trim(),
-          mobileVerified,
-          ...(verificationMethod ? { verificationMethod } : {}),
-          ...(testPinHash ? { testPinHash } : {}),
+          mobileVerified: vehicleOtpRequired ? mobileVerified : false,
+          ...(vehicleOtpRequired && verificationMethod ? { verificationMethod } : {}),
+          ...(vehicleOtpRequired && testPinHash ? { testPinHash } : {}),
           ...(user.email ? { email: user.email } : {}),
           ...(rcOrLicenseNotes.trim() ? { rcOrLicenseNotes: rcOrLicenseNotes.trim() } : {}),
         }
@@ -628,29 +641,83 @@ export const VehicleRegistrationForm: React.FC<VehicleRegistrationFormProps> = (
             </div>
           </div>
 
-          <div className="space-y-1">
+          <div
+            role="note"
+            className="rounded-lg bg-amber-50 border border-amber-300 px-3.5 py-2.5 text-xs text-amber-950 flex items-start gap-2.5"
+          >
+            <ShieldAlert className="w-4 h-4 text-[#B45309] shrink-0 mt-0.5" />
+            <div className="space-y-0.5 leading-relaxed">
+              <p className="font-bold text-amber-950">{fraudWarning.primaryMr}</p>
+              {fraudWarning.secondaryLocalized && (
+                <p className="text-[11px] font-medium text-amber-900">
+                  {fraudWarning.secondaryLocalized}
+                </p>
+              )}
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
             <label className="block text-xs font-bold text-slate-700">
-              {tr(lang, 'Mobile Number & OTP Verification *', 'मोबाइल नंबर एवं OTP सत्यापन *', 'मोबाईल नंबर व OTP पडताळणी *')}
+              {vehicleOtpRequired
+                ? tr(
+                    lang,
+                    'Mobile Number & OTP Verification *',
+                    'मोबाइल नंबर एवं OTP सत्यापन *',
+                    'मोबाईल नंबर व OTP पडताळणी *'
+                  )
+                : tr(lang, 'Mobile Number *', 'मोबाइल नंबर *', 'मोबाईल नंबर *')}
             </label>
-            <OtpVerificationBox
-              mobile={mobile}
-              allowTestPinFallback={false}
-              onOpenDemoMode={() => onNavigate('demo-testing')}
-              onMobileChange={(val) => {
-                setMobile(val);
-                setMobileVerified(false);
-                setVerificationMethod(undefined);
-                setTestPinHash('');
-              }}
-              verified={mobileVerified}
-              verifiedMethod={verificationMethod}
-              onVerified={(m, meta) => {
-                setMobile(m);
-                setMobileVerified(true);
-                setVerificationMethod(meta?.method);
-                setTestPinHash(meta?.testPinHash || '');
-              }}
-            />
+            {vehicleOtpRequired ? (
+              <OtpVerificationBox
+                mobile={mobile}
+                allowTestPinFallback={false}
+                onOpenDemoMode={() => onNavigate('demo-testing')}
+                onMobileChange={(val) => {
+                  setMobile(val);
+                  setMobileVerified(false);
+                  setVerificationMethod(undefined);
+                  setTestPinHash('');
+                }}
+                verified={mobileVerified}
+                verifiedMethod={verificationMethod}
+                onVerified={(m, meta) => {
+                  setMobile(m);
+                  setMobileVerified(true);
+                  setVerificationMethod(meta?.method);
+                  setTestPinHash(meta?.testPinHash || '');
+                }}
+              />
+            ) : (
+              <div className="space-y-1.5">
+                <div className="relative">
+                  <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-mono-tabular font-semibold text-slate-500">
+                    +91
+                  </span>
+                  <input
+                    type="tel"
+                    inputMode="numeric"
+                    autoComplete="tel-national"
+                    maxLength={10}
+                    required
+                    value={mobile}
+                    onChange={(e) => {
+                      const digits = e.target.value.replace(/\D/g, '').slice(0, 10);
+                      setMobile(digits);
+                    }}
+                    placeholder="98XXXXXXXX"
+                    className="w-full pl-11 pr-3 py-2 border border-slate-300 rounded-md text-sm font-mono-tabular focus:outline-none focus:ring-2 focus:ring-[#0B3B75]"
+                  />
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  {tr(
+                    lang,
+                    'Enter your 10-digit Indian mobile number — no OTP verification is required right now. Your number is kept private and shared only on confirmed bookings.',
+                    '10 अंकों का मोबाइल नंबर दर्ज करें — अभी वाहन पंजीकरण के लिए OTP सत्यापन की आवश्यकता नहीं है। आपका नंबर सुरक्षित रहता है।',
+                    '१० अंकी मोबाईल क्रमांक टाका — सध्या वाहन नोंदणीसाठी कोणताही ओटीपी लागत नाही. तुमचा नंबर सुरक्षित ठेवला जातो.'
+                  )}
+                </p>
+              </div>
+            )}
           </div>
 
           <label className="flex items-start gap-2.5 text-xs text-slate-700 cursor-pointer pt-1">

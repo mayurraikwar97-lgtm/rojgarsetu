@@ -14,6 +14,11 @@ export function isWorkerRegistrationOtpEnabled(): boolean {
   return raw === 'true' || raw === '1' || raw === 'yes';
 }
 
+export function isVehicleRegistrationOtpEnabled(): boolean {
+  const raw = String(import.meta.env.VITE_VEHICLE_OTP_REQUIRED ?? '').trim().toLowerCase();
+  return raw === 'true' || raw === '1' || raw === 'yes';
+}
+
 export function isVoiceOtpEnabled(): boolean {
   const raw = String(import.meta.env.VITE_VOICE_OTP_ENABLED ?? '').trim().toLowerCase();
   return raw === 'true' || raw === '1' || raw === 'yes';

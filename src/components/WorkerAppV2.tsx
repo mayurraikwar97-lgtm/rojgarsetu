@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { doc, getDoc } from 'firebase/firestore';
 import {
+  AlertCircle,
   BellRing,
   Briefcase,
   CheckCircle2,
@@ -12,8 +13,10 @@ import {
   Loader2,
   MapPin,
   Navigation,
+  PhoneCall,
   Play,
   Power,
+  ShieldCheck,
   Star,
   Wrench,
   X,
@@ -42,6 +45,7 @@ import {
   calculateValidDistanceKm,
   getLocalizedCategoryLabel,
   getPublicJobLocationText,
+  isJobConfirmationClosed,
 } from '../lib/smartVoiceJobAlert';
 import {
   isWorkerPaidBenefitsActive,
@@ -194,6 +198,10 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
       if (app && (app.status === 'accepted' || app.status === 'work_completed' || app.status === 'declined')) {
         return;
       }
+      // If job already confirmed/closed by another worker, immediately remove from queue
+      if (isJobConfirmationClosed(job) && job.acceptedWorkerUid !== workerProfile.ownerUid) {
+        return;
+      }
       // If job already accepted by another worker, skip
       if (job.acceptedWorkerUid && job.acceptedWorkerUid !== workerProfile.ownerUid) {
         return;
@@ -227,10 +235,15 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
       }
     });
 
-    // Priority 3: Open jobs matching worker category
+    // Priority 3: Open jobs matching worker category (respecting active small-batch fair rotation)
     jobs.forEach((j) => {
-      if (j.status !== 'open') return;
-      const notified = Array.isArray(j.notifiedWorkerUids) && j.notifiedWorkerUids.includes(workerProfile.ownerUid);
+      if (j.status !== 'open' || isJobConfirmationClosed(j)) return;
+      const notifiedList = Array.isArray(j.notifiedWorkerUids) ? j.notifiedWorkerUids : [];
+      const notified = notifiedList.includes(workerProfile.ownerUid);
+      const isBatchDispatched = (Number(j.dispatchBatchIndex) || 0) >= 1 && notifiedList.length > 0;
+      if (isBatchDispatched && !notified) {
+        return;
+      }
       const matchCheck = doesWorkerMatchJob(j, { ...workerProfile, availabilityStatus: 'available' });
       if (notified || matchCheck.matches) {
         pushJob(j, j.id === highlightedJobId);
@@ -242,6 +255,59 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
       return getTimestampMs(b.job.createdAt) - getTimestampMs(a.job.createdAt);
     });
   }, [jobs, applications, appsByJobId, workerProfile, highlightedJobId, fetchedSpotlightJob, dismissedJobIds]);
+
+  // 1b. Jobs this worker was alerted/invited for (or opened via notification) that another worker already confirmed
+  const confirmedByOtherNotices = useMemo(() => {
+    if (!workerProfile) return [];
+    const seen = new Set<string>();
+    const results: Array<{ job: JobPosting; isSpotlight: boolean }> = [];
+    const twelveHoursAgo = Date.now() - 12 * 60 * 60 * 1000;
+
+    const consider = (job: JobPosting | null | undefined, isSpotlight: boolean) => {
+      if (!job || seen.has(job.id)) return;
+      if (dismissedJobIds.includes(job.id) && !isSpotlight) return;
+      if (job.employerUid === workerProfile.ownerUid) return;
+      const myApp = appsByJobId.get(job.id);
+      if (myApp?.status === 'accepted' || job.acceptedWorkerUid === workerProfile.ownerUid) return;
+      const filledByOther =
+        isJobConfirmationClosed(job) &&
+        job.status !== 'cancelled' &&
+        job.dealStatus !== 'CANCELLED' &&
+        (Boolean(job.acceptedWorkerUid && job.acceptedWorkerUid !== workerProfile.ownerUid) ||
+          Boolean(job.acceptedApplicationId) ||
+          job.dealStatus === 'DEAL_CONFIRMED' ||
+          job.dealStatus === 'WORKER_ON_THE_WAY' ||
+          job.dealStatus === 'WORK_IN_PROGRESS' ||
+          job.status === 'in_progress');
+      if (!filledByOther) return;
+      seen.add(job.id);
+      results.push({ job, isSpotlight });
+    };
+
+    if (highlightedJobId) {
+      const target =
+        jobs.find((j) => j.id === highlightedJobId) ||
+        (fetchedSpotlightJob?.id === highlightedJobId ? fetchedSpotlightJob : null);
+      consider(target, true);
+    }
+
+    jobs.forEach((j) => {
+      const wasNotified =
+        Array.isArray(j.notifiedWorkerUids) && j.notifiedWorkerUids.includes(workerProfile.ownerUid);
+      const hadApp = appsByJobId.has(j.id);
+      const updatedMs = getTimestampMs(j.updatedAt || j.createdAt);
+      if ((wasNotified || hadApp) && (updatedMs === 0 || updatedMs >= twelveHoursAgo)) {
+        consider(j, j.id === highlightedJobId);
+      }
+    });
+
+    return results
+      .sort((a, b) => {
+        if (a.isSpotlight !== b.isSpotlight) return a.isSpotlight ? -1 : 1;
+        return getTimestampMs(b.job.updatedAt || b.job.createdAt) - getTimestampMs(a.job.updatedAt || a.job.createdAt);
+      })
+      .slice(0, 3);
+  }, [jobs, appsByJobId, workerProfile, highlightedJobId, fetchedSpotlightJob, dismissedJobIds]);
 
   // 2. Active Jobs (confirmed deals + pending offers waiting for customer confirmation)
   const activeApps = useMemo(() => {
@@ -375,7 +441,62 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
       );
       setActiveTab('active_job');
     } catch (err) {
-      setActionError(err instanceof Error ? err.message : 'Unable to send acceptance.');
+      const rawMsg = err instanceof Error ? err.message : '';
+      if (rawMsg.toLowerCase().includes('already been confirmed') || rawMsg.toLowerCase().includes('already confirmed')) {
+        setActionError(
+          tr(
+            lang,
+            'This job was just confirmed by another worker. Your fair-rotation priority for upcoming jobs remains unaffected.',
+            'यह काम अभी किसी अन्य कामगार द्वारा कन्फर्म कर दिया गया है। आने वाले कामों के लिए आपकी समान बारी सुरक्षित है।',
+            'हे काम आत्ताच दुसऱ्या कामगाराने कन्फर्म केले आहे. पुढील कामांसाठी तुमची समान बारी सुरक्षित आहे.'
+          )
+        );
+        setAcceptingJobId(null);
+      } else {
+        setActionError(rawMsg || 'Unable to send acceptance.');
+      }
+    } finally {
+      setActionBusyId(null);
+    }
+  };
+
+  const handleConfirmInvitedJob = async (job: JobPosting, app: JobApplication) => {
+    if (!user || !workerProfile) return;
+    setActionBusyId(job.id);
+    setActionError('');
+    setActionFeedback('');
+    try {
+      await respondToHiringInvite({
+        app,
+        decision: 'accepted',
+        workerName: workerProfile.displayName,
+        jobLocationLabel: job.approxLocationLabel || job.workLocationLabel || job.district,
+      });
+      setAcceptingJobId(null);
+      onClearHighlightedJob?.();
+      setActionFeedback(
+        tr(
+          lang,
+          `Job Confirmed! "${job.subService || job.title}" is now assigned to you. Contact the customer below and tap ON THE WAY when ready.`,
+          `काम कन्फर्म हुआ! "${job.subService || job.title}" आपको सौंप दिया गया है। नीचे ग्राहक से संपर्क करें और निकलने पर "रास्ते में हूँ" दबाएँ।`,
+          `काम कन्फर्म झाले! "${job.subService || job.title}" तुम्हाला मिळाले आहे. खाली ग्राहकाशी संपर्क साधा व निघताना "निघालो आहे" दाबा.`
+        )
+      );
+      setActiveTab('active_job');
+    } catch (err) {
+      const rawMsg = err instanceof Error ? err.message : '';
+      if (rawMsg.toLowerCase().includes('already confirmed') || rawMsg.toLowerCase().includes('already been confirmed')) {
+        setActionError(
+          tr(
+            lang,
+            'This job was already confirmed by another worker. Your fair-rotation priority for upcoming jobs remains unaffected.',
+            'यह काम पहले ही किसी अन्य कामगार द्वारा कन्फर्म कर दिया गया है। आने वाले कामों में आपकी समान बारी सुरक्षित है।',
+            'हे काम आधीच दुसऱ्या कामगाराने कन्फर्म केले आहे. पुढील कामांसाठी तुमची समान बारी सुरक्षित आहे.'
+          )
+        );
+      } else {
+        setActionError(rawMsg || 'Unable to confirm job.');
+      }
     } finally {
       setActionBusyId(null);
     }
@@ -707,6 +828,61 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
               </div>
             )}
 
+            {/* Notice for alerted jobs already confirmed by another worker (prevents double-confirmation) */}
+            {confirmedByOtherNotices.length > 0 && (
+              <div className="space-y-2.5">
+                {confirmedByOtherNotices.map(({ job, isSpotlight }) => (
+                  <div
+                    key={`filled_${job.id}`}
+                    className={`rounded-xl border p-4 flex items-start justify-between gap-3 ${
+                      isSpotlight
+                        ? 'bg-amber-50 border-amber-300 ring-2 ring-amber-200/70'
+                        : 'bg-slate-50 border-slate-200'
+                    }`}
+                  >
+                    <div className="space-y-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 border border-amber-300 text-[11px] font-extrabold text-amber-900">
+                          <AlertCircle className="w-3.5 h-3.5" />
+                          {tr(
+                            lang,
+                            'Confirmed by Another Worker',
+                            'अन्य कामगार ने कन्फर्म किया',
+                            'दुसऱ्या कामगाराने कन्फर्म केले'
+                          )}
+                        </span>
+                        <span className="text-[11px] font-bold text-slate-500">
+                          {getLocalizedCategoryLabel(job.category, lang)}
+                        </span>
+                      </div>
+                      <div className="text-sm font-extrabold text-[#0B3B75]">
+                        {job.subService || job.title}
+                      </div>
+                      <p className="text-xs text-slate-600 leading-relaxed">
+                        {tr(
+                          lang,
+                          'This job has already been confirmed by another worker and is now closed. Your fair-rotation turn is not affected — you remain prioritized for upcoming jobs.',
+                          'यह काम पहले ही किसी अन्य कामगार द्वारा कन्फर्म किया जा चुका है। आपकी समान बारी पर कोई असर नहीं पड़ा है — अगले काम में आपको प्राथमिकता मिलेगी।',
+                          'हे काम आधीच दुसऱ्या कामगाराने कन्फर्म केले आहे व आता बंद झाले आहे. तुमच्या समान बारीवर कोणताही परिणाम झालेला नाही — पुढील कामात तुम्हाला प्राधान्य राहील.'
+                        )}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setDismissedJobIds((prev) => (prev.includes(job.id) ? prev : [...prev, job.id]));
+                        if (highlightedJobId === job.id) onClearHighlightedJob?.();
+                      }}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-white cursor-pointer shrink-0"
+                      aria-label="Dismiss notice"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
             {filteredRequests.length === 0 ? (
               <div className="bg-white border border-slate-200 rounded-2xl p-8 text-center space-y-2">
                 <BellRing className="w-8 h-8 text-slate-300 mx-auto" />
@@ -823,27 +999,55 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
                       </div>
                     )}
 
-                    {/* ONLY Two Primary Actions: ACCEPT JOB / DECLINE */}
+                    {/* Primary Actions: Confirm Direct Invite OR Accept & Quote Rate / Decline */}
                     {!isAcceptOpen ? (
-                      <div className="grid grid-cols-2 gap-3 pt-1">
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => handleOpenAcceptForm(job, app)}
-                          className="h-12 rounded-xl bg-[#15803D] hover:bg-[#116830] text-white text-sm font-extrabold inline-flex items-center justify-center gap-2 cursor-pointer"
-                        >
-                          <CheckCircle2 className="w-4 h-4" />
-                          <span>{tr(lang, 'ACCEPT JOB', 'काम स्वीकारें', 'काम स्वीकारा')}</span>
-                        </button>
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => handleDeclineJob(job, app)}
-                          className="h-12 rounded-xl border border-slate-300 bg-white hover:bg-red-50 hover:border-red-300 hover:text-red-700 text-slate-700 text-sm font-bold inline-flex items-center justify-center gap-2 cursor-pointer"
-                        >
-                          <XCircle className="w-4 h-4" />
-                          <span>{tr(lang, 'DECLINE', 'अस्वीकार', 'नकारा')}</span>
-                        </button>
+                      <div className="space-y-2.5 pt-1">
+                        {app?.status === 'invited' && (
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => handleConfirmInvitedJob(job, app)}
+                            className="w-full h-12 rounded-xl bg-[#15803D] hover:bg-[#116830] disabled:opacity-60 text-white text-sm font-extrabold inline-flex items-center justify-center gap-2 shadow-xs cursor-pointer"
+                          >
+                            {busy ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
+                            <span>
+                              {tr(
+                                lang,
+                                `CONFIRM JOB${app.proposedWage > 0 ? ` (₹${app.proposedWage.toLocaleString('en-IN')})` : ''}`,
+                                `काम कन्फर्म करें${app.proposedWage > 0 ? ` (₹${app.proposedWage.toLocaleString('en-IN')})` : ''}`,
+                                `काम कन्फर्म करा${app.proposedWage > 0 ? ` (₹${app.proposedWage.toLocaleString('en-IN')})` : ''}`
+                              )}
+                            </span>
+                          </button>
+                        )}
+                        <div className="grid grid-cols-2 gap-3">
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => handleOpenAcceptForm(job, app)}
+                            className={`h-12 rounded-xl text-sm font-extrabold inline-flex items-center justify-center gap-2 cursor-pointer ${
+                              app?.status === 'invited'
+                                ? 'border border-[#0B3B75] bg-white hover:bg-blue-50 text-[#0B3B75]'
+                                : 'bg-[#15803D] hover:bg-[#116830] text-white'
+                            }`}
+                          >
+                            <CheckCircle2 className="w-4 h-4" />
+                            <span>
+                              {app?.status === 'invited'
+                                ? tr(lang, 'QUOTE OTHER RATE', 'अन्य दर बताएँ', 'वेगळा दर सांगा')
+                                : tr(lang, 'ACCEPT JOB', 'काम स्वीकारें', 'काम स्वीकारा')}
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => handleDeclineJob(job, app)}
+                            className="h-12 rounded-xl border border-slate-300 bg-white hover:bg-red-50 hover:border-red-300 hover:text-red-700 text-slate-700 text-sm font-bold inline-flex items-center justify-center gap-2 cursor-pointer"
+                          >
+                            <XCircle className="w-4 h-4" />
+                            <span>{tr(lang, 'DECLINE', 'अस्वीकार', 'नकारा')}</span>
+                          </button>
+                        </div>
                       </div>
                     ) : (
                       /* Simple 1-Step Worker Rate Quote After Reviewing Work & Photos */
@@ -952,20 +1156,36 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
                 return (
                   <div
                     key={app.id}
-                    className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-4"
+                    className={`bg-white rounded-2xl border p-5 shadow-xs space-y-4 ${
+                      isConfirmed ? 'border-emerald-300 ring-1 ring-emerald-200/70' : 'border-slate-200'
+                    }`}
                   >
                     <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="space-y-1">
-                        <div className="text-xs font-bold uppercase tracking-wider text-[#15803D]">
-                          {isConfirmed
-                            ? tr(lang, 'Confirmed Active Job', 'कन्फर्म सक्रिय काम', 'निश्चित झालेले काम')
-                            : tr(lang, 'Waiting for Customer Confirmation', 'ग्राहक की पुष्टि की प्रतीक्षा', 'ग्राहकाच्या निश्चितीची प्रतीक्षा')}
+                      <div className="space-y-1.5">
+                        <div className="flex flex-wrap items-center gap-2">
+                          {isConfirmed ? (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-emerald-100 border border-emerald-300 text-xs font-extrabold text-emerald-900">
+                              <CheckCircle2 className="w-3.5 h-3.5 text-[#15803D]" />
+                              {tr(lang, 'Job Confirmed', 'काम कन्फर्म हुआ', 'काम कन्फर्म झाले')}
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-50 border border-amber-200 text-xs font-extrabold text-amber-900">
+                              <Clock className="w-3.5 h-3.5 text-[#E06D1B]" />
+                              {tr(lang, 'Waiting for Customer Confirmation', 'ग्राहक की पुष्टि की प्रतीक्षा', 'ग्राहकाच्या निश्चितीची प्रतीक्षा')}
+                            </span>
+                          )}
+                          {job?.category && (
+                            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500">
+                              {getLocalizedCategoryLabel(job.category, lang)}
+                            </span>
+                          )}
                         </div>
                         <h2 className="font-display text-lg sm:text-xl font-extrabold text-[#0B3B75]">
                           {app.jobTitle}
                         </h2>
                         <div className="text-xs text-slate-600 flex flex-wrap items-center gap-2">
-                          <span className="font-semibold">
+                          <span className="font-semibold text-[#0B3B75]">
+                            {tr(lang, 'Customer', 'ग्राहक', 'ग्राहक')}:{' '}
                             {getSafeCustomerLabelForJobOrApp({
                               job,
                               app,
@@ -973,15 +1193,60 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
                             })}
                           </span>
                           <span>·</span>
-                          <span>
+                          <span className="inline-flex items-center gap-1">
+                            <MapPin className="w-3.5 h-3.5 text-[#E06D1B]" />
                             {job ? getPublicJobLocationText(job, isConfirmed) : app.jobLocationLabel || app.jobDistrict}
                           </span>
+                          {(job?.jobDate || app.jobDate) && (
+                            <>
+                              <span>·</span>
+                              <span className="inline-flex items-center gap-1">
+                                <Clock className="w-3.5 h-3.5 text-slate-400" />
+                                {job?.preferredTimeType === 'later'
+                                  ? `${job.jobDate} ${job.startTime || ''}`
+                                  : tr(lang, 'Needed Now', 'अभी तुरंत', 'आता लगेच')}
+                              </span>
+                            </>
+                          )}
                         </div>
                       </div>
                       <div className="font-mono-tabular text-lg font-extrabold text-[#15803D]">
                         ₹{price.toLocaleString('en-IN')}
                       </div>
                     </div>
+
+                    {/* Clear Confirmation Summary & Next Steps for Confirming Worker */}
+                    {isConfirmed && (
+                      <div className="rounded-xl bg-emerald-50/70 border border-emerald-200 p-3.5 space-y-2">
+                        <div className="flex items-center gap-2 text-xs font-extrabold text-emerald-900">
+                          <ShieldCheck className="w-4 h-4 text-[#15803D] shrink-0" />
+                          <span>
+                            {tr(
+                              lang,
+                              'Assigned exclusively to you — other worker alerts are closed.',
+                              'यह काम अब केवल आपको सौंपा गया है — अन्य कामगारों के अलर्ट बंद कर दिए गए हैं।',
+                              'हे काम आता फक्त तुम्हाला मिळाले आहे — इतर कामगारांचे अलर्ट बंद झाले आहेत.'
+                            )}
+                          </span>
+                        </div>
+                        {job?.description && (
+                          <p className="text-xs text-slate-700 leading-relaxed bg-white/80 rounded-lg px-3 py-2 border border-emerald-100">
+                            {job.description}
+                          </p>
+                        )}
+                        <div className="flex items-start gap-2 text-xs text-emerald-950 font-medium">
+                          <PhoneCall className="w-3.5 h-3.5 text-[#0B3B75] shrink-0 mt-0.5" />
+                          <span>
+                            {tr(
+                              lang,
+                              'Next steps: Use Secure Call or Order Chat below to coordinate with the customer and view the unlocked service address, then tap ON THE WAY when leaving.',
+                              'अगला कदम: नीचे सुरक्षित कॉल या ऑर्डर चैट से ग्राहक से बात करें और अनलॉक पता देखें, फिर निकलते समय "रास्ते में हूँ" दबाएँ।',
+                              'पुढील पायरी: खालील सुरक्षित कॉल किंवा चॅटद्वारे ग्राहकाशी संपर्क साधा व अनलॉक पत्ता पहा, आणि निघताना "निघालो आहे" दाबा.'
+                            )}
+                          </span>
+                        </div>
+                      </div>
+                    )}
 
                     {/* Sequential Worker Action Buttons (strictly after Customer Confirmation!) */}
                     {isConfirmed && (

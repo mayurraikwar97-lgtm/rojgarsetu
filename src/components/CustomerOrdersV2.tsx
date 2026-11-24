@@ -1,9 +1,11 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  AlertCircle,
   CheckCircle2,
   ChevronDown,
   ChevronUp,
   ClipboardList,
+  Clock,
   Loader2,
   MapPin,
   MessageSquare,
@@ -13,6 +15,7 @@ import {
   ShieldCheck,
   Star,
   UserCheck,
+  Users,
   X,
   XCircle,
 } from 'lucide-react';
@@ -31,16 +34,21 @@ import {
   cancelDeal,
   cancelOpenJobByCustomer,
   completeDeal,
+  countRemainingEligibleWorkersForJob,
+  dispatchNextJobBatch,
   expandJobSearchRadius,
   getEffectiveDealStatus,
   requestRevisedQuote,
   respondToWorkerOffer,
+  retryJobFairRotationDispatch,
   submitCustomerRating,
   subscribeEmployerApplications,
 } from '../lib/firestoreService';
 import {
+  DEFAULT_BATCH_ESCALATION_WINDOW_MS,
   getLocalizedCategoryLabel,
   getNextRadiusStage,
+  isJobConfirmationClosed,
   normalizeRadiusKm,
 } from '../lib/smartVoiceJobAlert';
 import type {
@@ -105,6 +113,9 @@ export const CustomerOrdersV2: React.FC<CustomerOrdersV2Props> = ({
   // Star Rating state per applicationId
   const [ratingDrafts, setRatingDrafts] = useState<Record<string, { stars: number; note: string }>>({});
   const [openChatCounters, setOpenChatCounters] = useState<Record<string, number>>({});
+  const [autoEscalatingJobId, setAutoEscalatingJobId] = useState<string | null>(null);
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  const escalatedBatchKeysRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (!authReady || !user) return;
@@ -258,18 +269,152 @@ export const CustomerOrdersV2: React.FC<CustomerOrdersV2Props> = ({
     }
   };
 
+  const handleNotifyNextBatch = async (job: JobPosting) => {
+    setBusyId(job.id);
+    setErrorMsg('');
+    try {
+      const res = await dispatchNextJobBatch({ job, workers });
+      if (res.closed) {
+        setFeedbackMsg(
+          tr(
+            lang,
+            'This job is already confirmed. Alerts to other workers are closed.',
+            'यह काम पहले ही कन्फर्म हो चुका है। अन्य कामगारों के लिए अलर्ट बंद हैं।',
+            'हे काम आधीच निश्चित झाले आहे. इतर कामगारांचे अलर्ट बंद आहेत.'
+          )
+        );
+      } else if (res.newlyNotifiedCount > 0) {
+        setFeedbackMsg(
+          tr(
+            lang,
+            `Batch ${res.batchIndex} sent to ${res.newlyNotifiedCount} more priority worker(s) (${res.totalNotifiedCount} total within ${res.currentRadiusKm} km).`,
+            `बैच ${res.batchIndex}: ${res.newlyNotifiedCount} और कामगारों को सूचना भेजी गई (${res.currentRadiusKm} किमी में कुल ${res.totalNotifiedCount})।`,
+            `बॅच ${res.batchIndex}: आणखी ${res.newlyNotifiedCount} कामगारांना रिक्वेस्ट पाठवली (${res.currentRadiusKm} किमी मध्ये एकूण ${res.totalNotifiedCount}).`
+          )
+        );
+      } else {
+        setFeedbackMsg(
+          tr(
+            lang,
+            `All matching workers within ${res.currentRadiusKm} km have already been notified.`,
+            `${res.currentRadiusKm} किमी के सभी उपलब्ध कामगारों को पहले ही सूचना भेजी जा चुकी है।`,
+            `${res.currentRadiusKm} किमी मधील सर्व उपलब्ध कामगारांना आधीच रिक्वेस्ट पाठवली आहे.`
+          )
+        );
+      }
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to notify next batch.');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const handleRetryJobDispatch = async (job: JobPosting) => {
+    setBusyId(job.id);
+    setErrorMsg('');
+    try {
+      const res = await retryJobFairRotationDispatch({ job, workers });
+      if (res.closed) {
+        setFeedbackMsg(
+          tr(
+            lang,
+            'This job is already confirmed. Alerts to other workers are closed.',
+            'यह काम पहले ही कन्फर्म हो चुका है। अन्य कामगारों के लिए अलर्ट बंद हैं।',
+            'हे काम आधीच निश्चित झाले आहे. इतर कामगारांचे अलर्ट बंद आहेत.'
+          )
+        );
+      } else if (res.notifiedCount > 0) {
+        setFeedbackMsg(
+          tr(
+            lang,
+            `Retried! Batch 1 sent to ${res.notifiedCount} priority worker(s) within ${res.currentRadiusKm} km (fair rotation).`,
+            `फिर से भेजा गया! बैच 1: ${res.currentRadiusKm} किमी में ${res.notifiedCount} कामगारों को अलर्ट भेजा गया।`,
+            `पुन्हा पाठवले! बॅच १: ${res.currentRadiusKm} किमी मध्ये ${res.notifiedCount} कामगारांना अलर्ट पाठवला आहे.`
+          )
+        );
+      } else {
+        setFeedbackMsg(
+          tr(
+            lang,
+            'No available workers found nearby right now. Try browsing matching workers directly.',
+            'अभी आस-पास कोई उपलब्ध कामगार नहीं मिला। कृपया मिलते-जुलते कामगार सीधे देखें।',
+            'सध्या जवळ उपलब्ध कामगार सापडले नाहीत. कृपया जुळणारे कामगार थेट पहा.'
+          )
+        );
+      }
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Unable to retry job dispatch.');
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  // Live 5s clock & automatic next-batch escalation for open unconfirmed orders whose batch timed out
+  useEffect(() => {
+    const hasOpenSearchingOrder = activeJobs.some((job) => {
+      if (isJobConfirmationClosed(job)) return false;
+      const jobApps = (appsByJobId.get(job.id) || []).filter((a) => a.status !== 'declined');
+      return !jobApps.some((a) => a.status === 'accepted' || a.status === 'applied');
+    });
+    if (!hasOpenSearchingOrder) return;
+
+    const tick = window.setInterval(() => {
+      setNowMs(Date.now());
+    }, 5000);
+    return () => window.clearInterval(tick);
+  }, [activeJobs, appsByJobId]);
+
+  useEffect(() => {
+    if (!user || autoEscalatingJobId || busyId) return;
+    for (const job of activeJobs) {
+      if (isJobConfirmationClosed(job)) continue;
+      const jobApps = (appsByJobId.get(job.id) || []).filter((a) => a.status !== 'declined');
+      if (jobApps.some((a) => a.status === 'accepted' || a.status === 'applied')) continue;
+
+      const lastDispatchedMs =
+        typeof job.lastBatchDispatchedAtMs === 'number' && job.lastBatchDispatchedAtMs > 0
+          ? job.lastBatchDispatchedAtMs
+          : getTimestampMs(job.createdAt);
+      if (!lastDispatchedMs || nowMs - lastDispatchedMs < DEFAULT_BATCH_ESCALATION_WINDOW_MS) {
+        continue;
+      }
+
+      const remaining = countRemainingEligibleWorkersForJob(job, workers);
+      if (remaining <= 0) continue;
+
+      const escalationKey = `${job.id}_${job.dispatchBatchIndex || 0}_${job.currentRadiusKm || 2}_${lastDispatchedMs}`;
+      if (escalatedBatchKeysRef.current.has(escalationKey)) continue;
+      escalatedBatchKeysRef.current.add(escalationKey);
+
+      setAutoEscalatingJobId(job.id);
+      void dispatchNextJobBatch({ job, workers })
+        .catch(() => undefined)
+        .finally(() => {
+          setAutoEscalatingJobId((cur) => (cur === job.id ? null : cur));
+        });
+      break;
+    }
+  }, [activeJobs, appsByJobId, workers, nowMs, user, autoEscalatingJobId, busyId]);
+
   const handleExpandRadius = async (job: JobPosting) => {
     setBusyId(job.id);
     setErrorMsg('');
     try {
       const res = await expandJobSearchRadius({ job, workers });
       setFeedbackMsg(
-        tr(
-          lang,
-          `Expanded search to ${res.currentRadiusKm} km (${res.totalNotifiedCount} workers notified).`,
-          `खोज ${res.currentRadiusKm} किमी तक बढ़ाई गई (${res.totalNotifiedCount} कामगारों को सूचना भेजी)।`,
-          `शोध अंतर ${res.currentRadiusKm} किमी पर्यंत वाढवले (${res.totalNotifiedCount} कामगारांना रिक्वेस्ट पाठवली).`
-        )
+        res.closed
+          ? tr(
+              lang,
+              'This job is already confirmed. Alerts to other workers are closed.',
+              'यह काम पहले ही कन्फर्म हो चुका है। अन्य कामगारों के लिए अलर्ट बंद हैं।',
+              'हे काम आधीच निश्चित झाले आहे. इतर कामगारांचे अलर्ट बंद आहेत.'
+            )
+          : tr(
+              lang,
+              `Expanded search to ${res.currentRadiusKm} km (${res.totalNotifiedCount} workers notified).`,
+              `खोज ${res.currentRadiusKm} किमी तक बढ़ाई गई (${res.totalNotifiedCount} कामगारों को सूचना भेजी)।`,
+              `शोध अंतर ${res.currentRadiusKm} किमी पर्यंत वाढवले (${res.totalNotifiedCount} कामगारांना रिक्वेस्ट पाठवली).`
+            )
       );
     } catch (err) {
       setErrorMsg(err instanceof Error ? err.message : 'Unable to expand search radius.');
@@ -573,6 +718,23 @@ export const CustomerOrdersV2: React.FC<CustomerOrdersV2Props> = ({
               const currentRadius = normalizeRadiusKm(job.currentRadiusKm ?? job.initialRadiusKm ?? 2, 2);
               const nextRadius = getNextRadiusStage(currentRadius);
               const notifiedCount = Array.isArray(job.notifiedWorkerUids) ? job.notifiedWorkerUids.length : 0;
+              const remainingEligible = !confirmedApp && !isJobConfirmationClosed(job)
+                ? countRemainingEligibleWorkersForJob(job, workers)
+                : 0;
+              const lastDispatchedMs =
+                typeof job.lastBatchDispatchedAtMs === 'number' && job.lastBatchDispatchedAtMs > 0
+                  ? job.lastBatchDispatchedAtMs
+                  : getTimestampMs(job.createdAt);
+              const batchWindowElapsed =
+                lastDispatchedMs > 0 && nowMs - lastDispatchedMs >= DEFAULT_BATCH_ESCALATION_WINDOW_MS;
+              const isEscalatingNow = autoEscalatingJobId === job.id;
+              const allBatchesTimedOut =
+                !confirmedApp &&
+                offerApps.length === 0 &&
+                !isJobConfirmationClosed(job) &&
+                !isEscalatingNow &&
+                remainingEligible === 0 &&
+                (notifiedCount === 0 || batchWindowElapsed);
 
               return (
                 <div
@@ -596,12 +758,25 @@ export const CustomerOrdersV2: React.FC<CustomerOrdersV2Props> = ({
                       </div>
                     </div>
 
-                    {!confirmedApp && (
-                      <div className="flex items-center gap-2">
+                    {!confirmedApp && !isJobConfirmationClosed(job) && (
+                      <div className="flex flex-wrap items-center gap-2">
+                        {remainingEligible > 0 && (
+                          <button
+                            type="button"
+                            disabled={busyId === job.id || isEscalatingNow}
+                            onClick={() => handleNotifyNextBatch(job)}
+                            className="h-9 px-3 rounded-lg border border-[#0B3B75] text-[#0B3B75] hover:bg-blue-50 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <RefreshCw className={`w-3.5 h-3.5 ${busyId === job.id || isEscalatingNow ? 'animate-spin' : ''}`} />
+                            <span>
+                              {tr(lang, 'Next Batch', 'अगला बैच भेजें', 'पुढील बॅच')}
+                            </span>
+                          </button>
+                        )}
                         {nextRadius && (
                           <button
                             type="button"
-                            disabled={busyId === job.id}
+                            disabled={busyId === job.id || isEscalatingNow}
                             onClick={() => handleExpandRadius(job)}
                             className="h-9 px-3 rounded-lg border border-[#E06D1B] text-[#E06D1B] hover:bg-amber-50 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
                           >
@@ -625,25 +800,117 @@ export const CustomerOrdersV2: React.FC<CustomerOrdersV2Props> = ({
 
                   {/* Case A: Searching for Workers (No offer yet) */}
                   {!confirmedApp && offerApps.length === 0 && (
-                    <div className="rounded-xl bg-slate-50 border border-slate-200/80 p-4 space-y-3">
-                      <div className="flex items-center gap-2.5 text-sm font-bold text-[#0B3B75]">
-                        <Radar className="w-4 h-4 text-[#E06D1B]" />
-                        <span>
-                          {notifiedCount > 0
-                            ? tr(
-                                lang,
-                                `Request sent to ${notifiedCount} nearby worker(s) within ${currentRadius} km. Waiting for acceptance...`,
-                                `${currentRadius} किमी में ${notifiedCount} कामगारों को रिक्वेस्ट भेजी गई। स्वीकृति की प्रतीक्षा है...`,
-                                `${currentRadius} किमी मध्ये ${notifiedCount} कामगारांना रिक्वेस्ट पाठवली आहे. प्रतिसादाची प्रतीक्षा आहे...`
-                              )
-                            : tr(
-                                lang,
-                                `Searching within ${currentRadius} km... Tap Expand to search wider.`,
-                                `${currentRadius} किमी में खोज जारी है... अधिक कामगारों के लिए दायरा बढ़ाएँ।`,
-                                `${currentRadius} किमी मध्ये शोध सुरू आहे... अधिक कामगारांसाठी अंतर वाढवा.`
-                              )}
-                        </span>
-                      </div>
+                    <div
+                      className={`rounded-xl border p-4 space-y-3 ${
+                        allBatchesTimedOut
+                          ? 'bg-amber-50/70 border-amber-200'
+                          : 'bg-slate-50 border-slate-200/80'
+                      }`}
+                    >
+                      {isEscalatingNow ? (
+                        <div className="flex items-center gap-2.5 text-sm font-bold text-[#0B3B75]">
+                          <Radar className="w-4 h-4 text-[#E06D1B] animate-spin shrink-0" />
+                          <span>
+                            {tr(
+                              lang,
+                              'Alerting next batch of nearby workers (fair rotation)...',
+                              'अगले नज़दीकी कामगारों को अलर्ट भेजा जा रहा है (समान बारी प्रणाली)...',
+                              'जवळच्या पुढील कामगारांना अलर्ट पाठवला जात आहे...'
+                            )}
+                          </span>
+                        </div>
+                      ) : allBatchesTimedOut ? (
+                        <div className="space-y-3">
+                          <div className="flex items-start gap-2.5">
+                            <AlertCircle className="w-4 h-4 text-[#E06D1B] shrink-0 mt-0.5" />
+                            <div className="space-y-1">
+                              <div className="text-sm font-extrabold text-[#0B3B75]">
+                                {tr(
+                                  lang,
+                                  'All nearby worker batches were alerted — no confirmation received yet',
+                                  'आस-पास के सभी कामगार बैच को अलर्ट भेजा जा चुका है — अभी तक कन्फर्मेशन नहीं मिला',
+                                  'जवळच्या सर्व कामगार बॅचला अलर्ट पाठवला गेला — अद्याप कन्फर्मेशन आले नाही'
+                                )}
+                              </div>
+                              <p className="text-xs text-slate-600">
+                                {tr(
+                                  lang,
+                                  'You can browse matching workers directly to invite someone right away, or retry sending fresh alerts.',
+                                  'आप सीधे मिलते-जुलते कामगार देख सकते हैं या इस काम के लिए फिर से अलर्ट भेज सकते हैं।',
+                                  'तुम्ही जुळणारे कामगार थेट पाहून आमंत्रित करू शकता किंवा पुन्हा अलर्ट पाठवू शकता.'
+                                )}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => onNavigate('find-workers', job.category)}
+                              className="h-10 px-4 rounded-lg bg-[#0B3B75] hover:bg-[#072A54] text-white text-xs font-extrabold inline-flex items-center gap-1.5 cursor-pointer"
+                            >
+                              <Users className="w-3.5 h-3.5" />
+                              <span>
+                                {tr(
+                                  lang,
+                                  'Browse Matching Workers',
+                                  'मिलते-जुलते कामगार सीधे देखें',
+                                  'जुळणारे कामगार थेट पहा'
+                                )}
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              disabled={busyId === job.id}
+                              onClick={() => handleRetryJobDispatch(job)}
+                              className="h-10 px-4 rounded-lg bg-[#E06D1B] hover:bg-[#c55b10] disabled:opacity-60 text-white text-xs font-extrabold inline-flex items-center gap-1.5 cursor-pointer"
+                            >
+                              <RefreshCw className={`w-3.5 h-3.5 ${busyId === job.id ? 'animate-spin' : ''}`} />
+                              <span>
+                                {tr(
+                                  lang,
+                                  'Retry / Repost Alerts',
+                                  'फिर से अलर्ट भेजें / रीपोस्ट करें',
+                                  'पुन्हा अलर्ट पाठवा / रीपोस्ट करा'
+                                )}
+                              </span>
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          <div className="flex items-center gap-2.5 text-sm font-bold text-[#0B3B75]">
+                            <Radar className="w-4 h-4 text-[#E06D1B] shrink-0" />
+                            <span>
+                              {notifiedCount > 0
+                                ? tr(
+                                    lang,
+                                    `Batch ${job.dispatchBatchIndex || 1}: Request sent to ${notifiedCount} priority worker(s) within ${currentRadius} km (fair rotation). Waiting for confirmation...`,
+                                    `बैच ${job.dispatchBatchIndex || 1}: ${currentRadius} किमी में ${notifiedCount} कामगारों को रिक्वेस्ट भेजी गई (समान बारी प्रणाली)। स्वीकृति की प्रतीक्षा है...`,
+                                    `बॅच ${job.dispatchBatchIndex || 1}: ${currentRadius} किमी मध्ये ${notifiedCount} कामगारांना प्राधान्याने रिक्वेस्ट पाठवली आहे. प्रतिसादाची प्रतीक्षा आहे...`
+                                  )
+                                : tr(
+                                    lang,
+                                    `Searching within ${currentRadius} km... Tap Next Batch or Expand to search wider.`,
+                                    `${currentRadius} किमी में खोज जारी है... अधिक कामगारों के लिए अगला बैच या दायरा बढ़ाएँ।`,
+                                    `${currentRadius} किमी मध्ये शोध सुरू आहे... अधिक कामगारांसाठी पुढील बॅच किंवा अंतर वाढवा.`
+                                  )}
+                            </span>
+                          </div>
+                          {remainingEligible > 0 && (
+                            <div className="flex items-center gap-1.5 text-xs font-semibold text-slate-600 pl-6">
+                              <Clock className="w-3.5 h-3.5 text-[#0B3B75]" />
+                              <span>
+                                {tr(
+                                  lang,
+                                  `If unconfirmed, next batch (${remainingEligible} more eligible) will be alerted automatically.`,
+                                  `कन्फर्म न होने पर अगले बैच (${remainingEligible} और उपलब्ध) को अपने-आप अलर्ट भेजा जाएगा।`,
+                                  `कन्फर्म न झाल्यास जवळच्या पुढील कामगारांना (${remainingEligible} उपलब्ध) आपोआप अलर्ट पाठवला जाईल.`
+                                )}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      )}
                       {/* Step 1 of 6 mini bar */}
                       <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
                         {SIX_STEP_STAGE_ORDER.map((stage, idx) => (

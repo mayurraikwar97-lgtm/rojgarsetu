@@ -351,6 +351,9 @@ export const LocalTransportView: React.FC<LocalTransportViewProps> = ({
       void callNotificationApi('/api/notifications/send-matching-job', {
         jobId: result.jobId,
         stageRadiusKm: result.finalRadiusKm ?? 10,
+        ...(result.newlyNotifiedUids && result.newlyNotifiedUids.length > 0
+          ? { targetWorkerUids: result.newlyNotifiedUids }
+          : {}),
       }).catch(() => undefined);
 
       setBikeSuccess({

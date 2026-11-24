@@ -11,13 +11,18 @@ import type { Firestore } from 'firebase-admin/firestore';
 import { getMessaging } from 'firebase-admin/messaging';
 import type { Messaging } from 'firebase-admin/messaging';
 import {
+  DEFAULT_ROTATION_BATCH_SIZE,
   SERVICE_RADIUS_STAGES,
   buildApproxLocationLabel,
   buildSmartJobNotificationContent,
   doesCategoryMatch,
   evaluateWorkerEligibilityForJob,
   getNextRadiusStage,
+  isJobConfirmationClosed,
   normalizeRadiusKm,
+  rankWorkersForFairRotation,
+  resolveRotationBatchSize,
+  selectNextFairRotationBatch,
 } from '../lib/smartVoiceJobAlert.ts';
 import {
   getToneChannelConfig,
@@ -596,6 +601,34 @@ function buildOptionalVoicePayloadFields(target: DeliveryTarget): Record<string,
   };
 }
 
+function extractServerTimestampMs(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
+  if (value && typeof value === 'object') {
+    const obj = value as { toMillis?: () => number; seconds?: number; _seconds?: number };
+    if (typeof obj.toMillis === 'function') {
+      const ms = obj.toMillis();
+      if (Number.isFinite(ms) && ms > 0) return ms;
+    }
+    const sec = typeof obj.seconds === 'number' ? obj.seconds : obj._seconds;
+    if (typeof sec === 'number' && Number.isFinite(sec) && sec > 0) {
+      return sec * 1000;
+    }
+  }
+  return 0;
+}
+
+interface RankedDeliveryTarget {
+  ownerUid: string;
+  target: DeliveryTarget;
+  lastConfirmedJobAtMs?: number;
+  confirmedJobsCount?: number;
+  samePincode: boolean;
+  sameCity: boolean;
+  sameDistrict: boolean;
+  distanceKm: number | null;
+  createdAtMs: number;
+}
+
 function collectStageTargets(params: {
   jobId: string;
   job: FirebaseFirestore.DocumentData;
@@ -604,9 +637,21 @@ function collectStageTargets(params: {
   prefsByUid: Map<string, FirebaseFirestore.DocumentData>;
   stageRadiusKm: number;
   alreadyNotifiedSet: Set<string>;
+  restrictToWorkerUids?: Set<string> | null;
+  dedupeSuffix?: string;
 }): DeliveryTarget[] {
-  const { jobId, job, workersDocs, tokensByUid, prefsByUid, stageRadiusKm, alreadyNotifiedSet } = params;
-  const targets: DeliveryTarget[] = [];
+  const {
+    jobId,
+    job,
+    workersDocs,
+    tokensByUid,
+    prefsByUid,
+    stageRadiusKm,
+    alreadyNotifiedSet,
+    restrictToWorkerUids,
+    dedupeSuffix,
+  } = params;
+  const rankedCandidates: RankedDeliveryTarget[] = [];
 
   const jobCategoryStr = String(job.category || '');
   const jobSkillsArr = Array.isArray(job.requiredSkills) ? job.requiredSkills.map((s: unknown) => String(s)) : [];
@@ -630,8 +675,15 @@ function collectStageTargets(params: {
     const w = wDoc.data();
     const workerUid = String(w.ownerUid || wDoc.id || '');
     if (!workerUid) continue;
+    if (restrictToWorkerUids && restrictToWorkerUids.size > 0 && !restrictToWorkerUids.has(workerUid)) {
+      continue;
+    }
 
     const pref = prefsByUid.get(workerUid);
+    const workerLastConfirmedMs = Number(w.lastConfirmedJobAtMs) || 0;
+    const workerConfirmedCount = Number(w.confirmedJobsCount) || 0;
+    const workerCreatedAtMs = extractServerTimestampMs(w.createdAt);
+
     const evalResult = evaluateWorkerEligibilityForJob({
       job: {
         employerUid: String(job.employerUid || ''),
@@ -639,6 +691,8 @@ function collectStageTargets(params: {
         requiredSkills: jobSkillsArr,
         district: String(job.district || ''),
         cityOrVillage: String(job.cityOrVillage || ''),
+        approxLocationLabel: approxLocLabel,
+        workLocationLabel: typeof job.workLocationLabel === 'string' ? job.workLocationLabel : undefined,
         lat: Number(job.lat),
         lng: Number(job.lng),
       },
@@ -655,6 +709,9 @@ function collectStageTargets(params: {
         availabilityStatus: String(w.availabilityStatus || 'available'),
         preferredLanguage: w.preferredLanguage === 'hi' || w.preferredLanguage === 'mr' ? w.preferredLanguage : undefined,
         preferredRadiusKm: Number(w.preferredRadiusKm) || undefined,
+        lastConfirmedJobAtMs: workerLastConfirmedMs,
+        confirmedJobsCount: workerConfirmedCount,
+        createdAtMs: workerCreatedAtMs,
       },
       pref: pref
         ? {
@@ -697,35 +754,46 @@ function collectStageTargets(params: {
       wageUnit: String(job.wageUnit || 'daily'),
     });
 
-    const dedupeKey = `job_${jobId}_${workerUid}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 115);
+    const safeSuffix = dedupeSuffix ? `_${dedupeSuffix.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 20)}` : '';
+    const dedupeKey = `job_${jobId}_${workerUid}${safeSuffix}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 115);
 
-    targets.push({
-      uid: workerUid,
-      label: String(w.displayName || 'Worker'),
-      role: 'worker',
-      isDemo: false,
-      language: lang,
-      tokens: userTokens.map((t) => ({ docId: t.docId, token: t.token })),
-      title: msg.title,
-      body: msg.body,
-      voiceScript: msg.voiceScript,
-      approxLocationLabel: approxLocLabel,
+    rankedCandidates.push({
+      ownerUid: workerUid,
+      lastConfirmedJobAtMs: workerLastConfirmedMs,
+      confirmedJobsCount: workerConfirmedCount,
+      samePincode: evalResult.samePincode,
+      sameCity: evalResult.sameCity,
+      sameDistrict: evalResult.sameDistrict,
       distanceKm: evalResult.distanceKm,
-      customerName,
-      jobCategory: jobCategoryStr,
-      playSound,
-      speakVoice,
-      eventType: 'hiring_request_created',
-      toneType: 'new_job',
-      category: 'matchingJobs',
-      targetRoute: 'worker-dashboard',
-      targetJobId: jobId,
-      clickUrl: `/?route=worker-dashboard&jobId=${encodeURIComponent(jobId)}&speak=${speakVoice ? '1' : '0'}&lang=${lang}`,
-      dedupeKey,
+      createdAtMs: workerCreatedAtMs,
+      target: {
+        uid: workerUid,
+        label: String(w.displayName || 'Worker'),
+        role: 'worker',
+        isDemo: false,
+        language: lang,
+        tokens: userTokens.map((t) => ({ docId: t.docId, token: t.token })),
+        title: msg.title,
+        body: msg.body,
+        voiceScript: msg.voiceScript,
+        approxLocationLabel: approxLocLabel,
+        distanceKm: evalResult.distanceKm,
+        customerName,
+        jobCategory: jobCategoryStr,
+        playSound,
+        speakVoice,
+        eventType: 'hiring_request_created',
+        toneType: 'new_job',
+        category: 'matchingJobs',
+        targetRoute: 'worker-dashboard',
+        targetJobId: jobId,
+        clickUrl: `/?route=worker-dashboard&jobId=${encodeURIComponent(jobId)}&speak=${speakVoice ? '1' : '0'}&lang=${lang}`,
+        dedupeKey,
+      },
     });
   }
 
-  return targets;
+  return rankWorkersForFairRotation(rankedCandidates).map((entry) => entry.target);
 }
 
 async function dispatchAndRecordTargets(params: {
@@ -1197,6 +1265,27 @@ export async function handleSendMatchingJob(params: {
       return { httpStatus: 403, payload: { error: 'FORBIDDEN' } };
     }
 
+    if (isJobConfirmationClosed(job)) {
+      return {
+        httpStatus: 200,
+        payload: {
+          ok: true,
+          closed: true,
+          matchedWorkersCount: 0,
+          workersWithTokensCount: 0,
+          currentRadiusKm: normalizeRadiusKm(job.currentRadiusKm ?? job.initialRadiusKm ?? 2, 2),
+          hasNextStage: false,
+          hasNextBatch: false,
+          remainingEligibleCount: 0,
+          sentCount: 0,
+          failedCount: 0,
+          inAppOnlyCount: 0,
+          totalNotifiedCount: Array.isArray(job.notifiedWorkerUids) ? job.notifiedWorkerUids.length : 0,
+          message: 'Job already confirmed; alerts closed.',
+        },
+      };
+    }
+
     const [workersSnap, tokensSnap, prefsSnap, existingJobNotifsSnap] = await Promise.all([
       runtime.db.collection('publicWorkers').get(),
       runtime.db.collection('device_tokens').where('enabled', '==', true).get(),
@@ -1224,21 +1313,44 @@ export async function handleSendMatchingJob(params: {
       2
     );
     const autoExpandIfEmpty = params.body?.autoExpandIfEmpty !== false;
+    const resolvedBatchSize = resolveRotationBatchSize(
+      job.workersRequired,
+      params.body?.batchSize ?? job.dispatchBatchSize ?? DEFAULT_ROTATION_BATCH_SIZE
+    );
+    const rawTargetUids = Array.isArray(params.body?.targetWorkerUids)
+      ? params.body.targetWorkerUids
+          .map((u: unknown) => (typeof u === 'string' ? u.trim() : ''))
+          .filter(Boolean)
+          .slice(0, 20)
+      : [];
+    const restrictToWorkerUids = rawTargetUids.length > 0 ? new Set<string>(rawTargetUids) : null;
 
-    const existingNotified: string[] = Array.isArray(job.notifiedWorkerUids)
+    const forceRetry = params.body?.forceRetry === true;
+    const dedupeSuffix =
+      typeof params.body?.dedupeSuffix === 'string' && params.body.dedupeSuffix.trim()
+        ? params.body.dedupeSuffix.trim().slice(0, 20)
+        : forceRetry
+        ? `r${Math.floor(Date.now() / 1000)}`
+        : undefined;
+
+    const existingNotified: string[] = forceRetry
+      ? []
+      : Array.isArray(job.notifiedWorkerUids)
       ? job.notifiedWorkerUids.map((u: unknown) => String(u))
       : [];
 
     // CRITICAL FIX: Do NOT block server FCM push just because client already wrote
     // in-app notification docs & notifiedWorkerUids. Only skip workers who ALREADY
     // succeeded FCM delivery (deliveryStatus === 'sent') or already have an in-app doc with 0 active tokens.
-    const { alreadyHandledSet } = computeAlreadyHandledWorkerUids({
-      existingNotifDocs: existingJobNotifsSnap.docs.map((d) => d.data()),
-      tokensByUid,
-    });
+    const { alreadyHandledSet } = forceRetry
+      ? { alreadyHandledSet: new Set<string>() }
+      : computeAlreadyHandledWorkerUids({
+          existingNotifDocs: existingJobNotifsSnap.docs.map((d) => d.data()),
+          tokensByUid,
+        });
 
     let activeRadiusKm = requestedRadius;
-    let targets = collectStageTargets({
+    let rankedTargets = collectStageTargets({
       jobId,
       job,
       workersDocs: workersSnap.docs,
@@ -1246,13 +1358,15 @@ export async function handleSendMatchingJob(params: {
       prefsByUid,
       stageRadiusKm: activeRadiusKm,
       alreadyNotifiedSet: alreadyHandledSet,
+      restrictToWorkerUids,
+      dedupeSuffix,
     });
 
-    if (targets.length === 0 && autoExpandIfEmpty) {
+    if (rankedTargets.length === 0 && autoExpandIfEmpty && !restrictToWorkerUids) {
       for (const candidateStage of SERVICE_RADIUS_STAGES) {
         if (candidateStage <= activeRadiusKm) continue;
         activeRadiusKm = candidateStage;
-        targets = collectStageTargets({
+        rankedTargets = collectStageTargets({
           jobId,
           job,
           workersDocs: workersSnap.docs,
@@ -1260,12 +1374,36 @@ export async function handleSendMatchingJob(params: {
           prefsByUid,
           stageRadiusKm: activeRadiusKm,
           alreadyNotifiedSet: alreadyHandledSet,
+          dedupeSuffix,
         });
-        if (targets.length > 0) break;
+        if (rankedTargets.length > 0) break;
       }
     }
 
-    const cappedTargets = targets.slice(0, 100);
+    let cappedTargets: DeliveryTarget[] = rankedTargets;
+    let remainingEligibleCount = 0;
+
+    if (!restrictToWorkerUids) {
+      const batchSelection = selectNextFairRotationBatch(
+        rankedTargets.map((t) => ({ ownerUid: t.uid, target: t })),
+        { batchSize: resolvedBatchSize }
+      );
+      cappedTargets = batchSelection.batch.map((entry) => entry.target);
+      remainingEligibleCount = batchSelection.remainingCount;
+    } else {
+      cappedTargets = rankedTargets.slice(0, 20);
+      const fullStagePool = collectStageTargets({
+        jobId,
+        job,
+        workersDocs: workersSnap.docs,
+        tokensByUid,
+        prefsByUid,
+        stageRadiusKm: activeRadiusKm,
+        alreadyNotifiedSet: new Set([...existingNotified, ...cappedTargets.map((t) => t.uid)]),
+      });
+      remainingEligibleCount = fullStagePool.length;
+    }
+
     const result = await dispatchAndRecordTargets({
       runtime,
       targets: cappedTargets,
@@ -1275,6 +1413,7 @@ export async function handleSendMatchingJob(params: {
     const updatedNotifiedUids = Array.from(
       new Set([...existingNotified, ...cappedTargets.map((t) => t.uid)])
     ).slice(0, 100);
+    const currentBatchIdx = Math.max(1, Number(job.dispatchBatchIndex) || 1);
 
     await runtime.db
       .collection('jobs')
@@ -1283,6 +1422,10 @@ export async function handleSendMatchingJob(params: {
         currentRadiusKm: activeRadiusKm,
         radiusStageUpdatedAt: FieldValue.serverTimestamp(),
         notifiedWorkerUids: updatedNotifiedUids,
+        dispatchBatchIndex: currentBatchIdx,
+        dispatchBatchSize: resolvedBatchSize,
+        lastBatchDispatchedAtMs: Date.now(),
+        eligiblePoolCount: Math.min(500, updatedNotifiedUids.length + remainingEligibleCount),
         ...(updatedNotifiedUids.length > 0 ? { dealStatus: 'NOTIFIED' } : {}),
         updatedAt: FieldValue.serverTimestamp(),
       })
@@ -1291,10 +1434,14 @@ export async function handleSendMatchingJob(params: {
     return {
       httpStatus: 200,
       payload: {
+        closed: false,
         matchedWorkersCount: cappedTargets.length,
         workersWithTokensCount: cappedTargets.filter((t) => t.tokens.length > 0).length,
         currentRadiusKm: activeRadiusKm,
         hasNextStage: getNextRadiusStage(activeRadiusKm) !== null,
+        hasNextBatch: remainingEligibleCount > 0 || getNextRadiusStage(activeRadiusKm) !== null,
+        remainingEligibleCount,
+        batchIndex: currentBatchIdx,
         totalNotifiedCount: updatedNotifiedUids.length,
         ...result,
       },
@@ -1344,24 +1491,64 @@ export async function handleExpandJobRadius(params: {
       return { httpStatus: 403, payload: { error: 'FORBIDDEN' } };
     }
 
-    const prevRadius = normalizeRadiusKm(job.currentRadiusKm ?? job.initialRadiusKm ?? 5, 5);
-    const hasExplicitTarget = Boolean(params.body?.targetRadiusKm);
-    const nextStage = hasExplicitTarget
-      ? normalizeRadiusKm(params.body.targetRadiusKm, prevRadius)
-      : getNextRadiusStage(prevRadius);
-
+    const prevRadius = normalizeRadiusKm(job.currentRadiusKm ?? job.initialRadiusKm ?? 2, 2);
     const existingNotified: string[] = Array.isArray(job.notifiedWorkerUids)
       ? job.notifiedWorkerUids.map((u: unknown) => String(u))
       : [];
 
-    if (!nextStage || (!hasExplicitTarget && nextStage <= prevRadius) || (hasExplicitTarget && nextStage < prevRadius)) {
+    if (isJobConfirmationClosed(job)) {
       return {
         httpStatus: 200,
         payload: {
           ok: true,
+          closed: true,
           previousRadiusKm: prevRadius,
           currentRadiusKm: prevRadius,
           hasNextStage: false,
+          hasNextBatch: false,
+          newlyNotifiedCount: 0,
+          sentCount: 0,
+          inAppOnlyCount: 0,
+          totalNotifiedCount: existingNotified.length,
+          message: 'Job already confirmed; alerts closed.',
+        },
+      };
+    }
+
+    const allowSameRadiusBatch = params.body?.allowSameRadiusBatch === true;
+    const hasExplicitTarget = Boolean(params.body?.targetRadiusKm);
+    const nextStage = hasExplicitTarget
+      ? normalizeRadiusKm(params.body.targetRadiusKm, prevRadius)
+      : allowSameRadiusBatch
+      ? prevRadius
+      : getNextRadiusStage(prevRadius);
+
+    const rawTargetUids = Array.isArray(params.body?.targetWorkerUids)
+      ? params.body.targetWorkerUids
+          .map((u: unknown) => (typeof u === 'string' ? u.trim() : ''))
+          .filter(Boolean)
+          .slice(0, 20)
+      : [];
+    const restrictToWorkerUids = rawTargetUids.length > 0 ? new Set<string>(rawTargetUids) : null;
+    const resolvedBatchSize = resolveRotationBatchSize(
+      job.workersRequired,
+      params.body?.batchSize ?? job.dispatchBatchSize ?? DEFAULT_ROTATION_BATCH_SIZE
+    );
+
+    if (
+      !nextStage ||
+      (!allowSameRadiusBatch && !hasExplicitTarget && nextStage <= prevRadius) ||
+      (hasExplicitTarget && nextStage < prevRadius)
+    ) {
+      return {
+        httpStatus: 200,
+        payload: {
+          ok: true,
+          closed: false,
+          previousRadiusKm: prevRadius,
+          currentRadiusKm: prevRadius,
+          hasNextStage: false,
+          hasNextBatch: false,
           newlyNotifiedCount: 0,
           sentCount: 0,
           inAppOnlyCount: 0,
@@ -1398,7 +1585,7 @@ export async function handleExpandJobRadius(params: {
       tokensByUid,
     });
 
-    const targets = collectStageTargets({
+    const rankedTargets = collectStageTargets({
       jobId,
       job,
       workersDocs: workersSnap.docs,
@@ -1406,7 +1593,32 @@ export async function handleExpandJobRadius(params: {
       prefsByUid,
       stageRadiusKm: nextStage,
       alreadyNotifiedSet: alreadyHandledSet,
-    }).slice(0, 100);
+      restrictToWorkerUids,
+    });
+
+    let targets: DeliveryTarget[] = rankedTargets;
+    let remainingEligibleCount = 0;
+
+    if (!restrictToWorkerUids) {
+      const batchSelection = selectNextFairRotationBatch(
+        rankedTargets.map((t) => ({ ownerUid: t.uid, target: t })),
+        { batchSize: resolvedBatchSize }
+      );
+      targets = batchSelection.batch.map((entry) => entry.target);
+      remainingEligibleCount = batchSelection.remainingCount;
+    } else {
+      targets = rankedTargets.slice(0, 20);
+      const fullStagePool = collectStageTargets({
+        jobId,
+        job,
+        workersDocs: workersSnap.docs,
+        tokensByUid,
+        prefsByUid,
+        stageRadiusKm: nextStage,
+        alreadyNotifiedSet: new Set([...existingNotified, ...targets.map((t) => t.uid)]),
+      });
+      remainingEligibleCount = fullStagePool.length;
+    }
 
     const result = await dispatchAndRecordTargets({
       runtime,
@@ -1417,6 +1629,10 @@ export async function handleExpandJobRadius(params: {
     const updatedNotifiedUids = Array.from(
       new Set([...existingNotified, ...targets.map((t) => t.uid)])
     ).slice(0, 100);
+    const nextBatchIdx = Math.min(
+      50,
+      Math.max(Number(job.dispatchBatchIndex) || 1, targets.length > 0 && !restrictToWorkerUids ? (Number(job.dispatchBatchIndex) || 0) + 1 : Number(job.dispatchBatchIndex) || 1)
+    );
 
     await runtime.db
       .collection('jobs')
@@ -1425,6 +1641,10 @@ export async function handleExpandJobRadius(params: {
         currentRadiusKm: nextStage,
         radiusStageUpdatedAt: FieldValue.serverTimestamp(),
         notifiedWorkerUids: updatedNotifiedUids,
+        dispatchBatchIndex: nextBatchIdx,
+        dispatchBatchSize: resolvedBatchSize,
+        lastBatchDispatchedAtMs: Date.now(),
+        eligiblePoolCount: Math.min(500, updatedNotifiedUids.length + remainingEligibleCount),
         ...(updatedNotifiedUids.length > 0 ? { dealStatus: 'NOTIFIED' } : {}),
         updatedAt: FieldValue.serverTimestamp(),
       })
@@ -1433,9 +1653,13 @@ export async function handleExpandJobRadius(params: {
     return {
       httpStatus: 200,
       payload: {
+        closed: false,
         previousRadiusKm: prevRadius,
         currentRadiusKm: nextStage,
         hasNextStage: getNextRadiusStage(nextStage) !== null,
+        hasNextBatch: remainingEligibleCount > 0 || getNextRadiusStage(nextStage) !== null,
+        remainingEligibleCount,
+        batchIndex: nextBatchIdx,
         newlyNotifiedCount: targets.length,
         totalNotifiedCount: updatedNotifiedUids.length,
         ...result,

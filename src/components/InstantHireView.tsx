@@ -742,6 +742,9 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
       void callNotificationApi('/api/notifications/send-matching-job', {
         jobId: result.jobId,
         stageRadiusKm: result.finalRadiusKm ?? initialRadiusKm,
+        ...(result.newlyNotifiedUids && result.newlyNotifiedUids.length > 0
+          ? { targetWorkerUids: result.newlyNotifiedUids }
+          : {}),
       }).catch(() => undefined);
 
       setBookingResult({
@@ -856,6 +859,9 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
       void callNotificationApi('/api/notifications/send-matching-job', {
         jobId: result.jobId,
         stageRadiusKm: result.finalRadiusKm ?? 10,
+        ...(result.newlyNotifiedUids && result.newlyNotifiedUids.length > 0
+          ? { targetWorkerUids: result.newlyNotifiedUids }
+          : {}),
       }).catch(() => undefined);
 
       setQuickSuccess({

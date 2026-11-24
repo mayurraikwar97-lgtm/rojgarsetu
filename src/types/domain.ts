@@ -128,6 +128,9 @@ export interface PublicWorkerProfile {
   preferredRadiusKm?: ServiceRadiusKm;
   voiceAlertsEnabled?: boolean;
   completedJobsCount: number;
+  confirmedJobsCount?: number;
+  lastConfirmedJobAtMs?: number;
+  lastConfirmedApplicationId?: string;
   ratingAvg: number;
   lastRatedApplicationId?: string;
   referralCode?: string;
@@ -293,6 +296,10 @@ export interface JobPosting {
   acceptedApplicationId?: string;
   acceptedWorkerUid?: string;
   notifiedWorkerUids?: string[];
+  dispatchBatchIndex?: number;
+  dispatchBatchSize?: number;
+  lastBatchDispatchedAtMs?: number;
+  eligiblePoolCount?: number;
   approxLocationLabel?: string;
   initialRadiusKm?: ServiceRadiusKm;
   currentRadiusKm?: ServiceRadiusKm;

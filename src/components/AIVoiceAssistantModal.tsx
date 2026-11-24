@@ -828,17 +828,27 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
       const jobId = await createJobPosting(directJobPayload, clientRequestId);
       setPublishedJobId(jobId);
 
+      let batchTargetUids: string[] = [];
+      let batchRadius = 10;
       if (workers.length > 0) {
-        await broadcastSmartJobAlerts({
+        const broadcastRes = await broadcastSmartJobAlerts({
           jobId,
           job: directJobPayload,
           workers,
           stageRadiusKm: 10,
           autoExpandIfEmpty: true,
         }).catch(() => undefined);
+        if (broadcastRes) {
+          batchTargetUids = broadcastRes.newlyNotifiedUids;
+          batchRadius = broadcastRes.finalRadiusKm;
+        }
       }
 
-      void callNotificationApi('/api/notifications/send-matching-job', { jobId }).catch(() => undefined);
+      void callNotificationApi('/api/notifications/send-matching-job', {
+        jobId,
+        stageRadiusKm: batchRadius,
+        ...(batchTargetUids.length > 0 ? { targetWorkerUids: batchTargetUids } : {}),
+      }).catch(() => undefined);
     } catch (err) {
       setFormErrorMsg(err instanceof Error ? err.message : 'Unable to save work request.');
     } finally {

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   AirVent,
+  AlertCircle,
   ArrowLeft,
   ArrowRight,
   Bike,
@@ -28,6 +29,7 @@ import {
   Sparkles,
   Sun,
   Tv,
+  Users,
   Video,
   Wrench,
   Zap,
@@ -55,15 +57,19 @@ import { getSixStepLabel, toSixStepDealStage } from '../lib/dealWorkflow';
 import {
   callNotificationApi,
   createInstantHireRequest,
+  dispatchNextJobBatch,
   expandJobSearchRadius,
   recordCustomerOrderPreference,
+  retryJobFairRotationDispatch,
   saveCustomerDefaultLocation,
   saveOrderExactAddress,
 } from '../lib/firestoreService';
 import { detectBestGpsLocation, searchLocations } from '../lib/locationService';
 import {
+  DEFAULT_BATCH_ESCALATION_WINDOW_MS,
   buildApproxLocationLabel,
   getNextRadiusStage,
+  isJobConfirmationClosed,
 } from '../lib/smartVoiceJobAlert';
 import {
   customProfessionToServiceCategoryV2,
@@ -168,16 +174,27 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
 
-  // Live Searching State (2 km -> 5 km -> 10 km)
+  // Live Searching State (fair-rotation small batches + staged radius 2 km -> 5 km -> 10 km)
   const [createdOrder, setCreatedOrder] = useState<{
     jobId: string;
     title: string;
     category: string;
     notifiedCount: number;
     currentRadiusKm: ServiceRadiusKm;
+    batchIndex: number;
+    remainingEligibleCount: number;
+    hasNextBatch: boolean;
+    confirmed: boolean;
     expanding: boolean;
+    autoEscalating: boolean;
+    allBatchesExhausted: boolean;
+    batchDispatchedAtMs: number;
+    retrying: boolean;
     statusMessage: string;
   } | null>(null);
+  const [secondsUntilNextBatch, setSecondsUntilNextBatch] = useState<number>(
+    Math.ceil(DEFAULT_BATCH_ESCALATION_WINDOW_MS / 1000)
+  );
 
   // Sync saved location preference once available
   useEffect(() => {
@@ -388,7 +405,15 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
       category: selectedCategory.canonicalCategory,
       notifiedCount: 0,
       currentRadiusKm: 2,
+      batchIndex: 0,
+      remainingEligibleCount: 0,
+      hasNextBatch: false,
+      confirmed: false,
       expanding: true,
+      autoEscalating: false,
+      allBatchesExhausted: false,
+      batchDispatchedAtMs: Date.now(),
+      retrying: false,
       statusMessage: tr(
         lang,
         'Searching nearby available workers within 2 km...',
@@ -473,18 +498,33 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
         lng: location.lng,
       }).catch(() => undefined);
 
-      // Trigger real FCM push broadcast (starts at 2 km, auto-expands 5 km -> 10 km if empty)
+      // Trigger real FCM push broadcast synchronized to the exact fair-rotation Batch 1 workers
       let fcmMatched = res.notifiedCount;
       let finalRadius: ServiceRadiusKm = res.finalRadiusKm ?? 2;
+      let batchIndex = res.batchIndex ?? (res.notifiedCount > 0 ? 1 : 0);
+      let remainingEligibleCount = res.remainingEligibleCount ?? 0;
+      let hasNextBatch = res.hasNextBatch ?? getNextRadiusStage(finalRadius) !== null;
       try {
         const pushRes = await callNotificationApi('/api/notifications/send-matching-job', {
           jobId: res.jobId,
-          stageRadiusKm: 2,
+          stageRadiusKm: finalRadius,
           autoExpandIfEmpty: true,
+          ...(res.newlyNotifiedUids && res.newlyNotifiedUids.length > 0
+            ? { targetWorkerUids: res.newlyNotifiedUids }
+            : {}),
         });
         const pushData = pushRes.data || {};
         if (typeof pushData.totalNotifiedCount === 'number' && pushData.totalNotifiedCount > fcmMatched) {
           fcmMatched = pushData.totalNotifiedCount;
+        }
+        if (typeof pushData.batchIndex === 'number' && pushData.batchIndex > batchIndex) {
+          batchIndex = pushData.batchIndex;
+        }
+        if (typeof pushData.remainingEligibleCount === 'number') {
+          remainingEligibleCount = pushData.remainingEligibleCount;
+        }
+        if (typeof pushData.hasNextBatch === 'boolean') {
+          hasNextBatch = pushData.hasNextBatch;
         }
         if (
           pushData.currentRadiusKm === 2 ||
@@ -499,26 +539,35 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
         // Non-blocking: in-app Firestore notification already succeeded
       }
 
+      const noWorkersAnywhere = fcmMatched === 0 && !hasNextBatch;
       setCreatedOrder({
         jobId: res.jobId,
         title,
         category: selectedCategory.canonicalCategory,
         notifiedCount: fcmMatched,
         currentRadiusKm: finalRadius,
+        batchIndex: Math.max(1, batchIndex),
+        remainingEligibleCount,
+        hasNextBatch,
+        confirmed: false,
         expanding: false,
+        autoEscalating: false,
+        allBatchesExhausted: noWorkersAnywhere,
+        batchDispatchedAtMs: Date.now(),
+        retrying: false,
         statusMessage:
           fcmMatched > 0
             ? tr(
                 lang,
-                `Request sent to ${fcmMatched} nearby worker(s) within ${finalRadius} km.`,
-                `${finalRadius} किमी के दायरे में ${fcmMatched} कामगारों को रिक्वेस्ट भेज दी गई है।`,
-                `कामगाराला रिक्वेस्ट पाठवली आहे. (${finalRadius} किमी मध्ये ${fcmMatched} कामगार)`
+                `Batch ${Math.max(1, batchIndex)} sent to ${fcmMatched} priority worker(s) within ${finalRadius} km (fair rotation).`,
+                `बैच ${Math.max(1, batchIndex)}: ${finalRadius} किमी के दायरे में ${fcmMatched} कामगारों को रिक्वेस्ट भेज दी गई है (समान बारी प्रणाली)।`,
+                `बॅच ${Math.max(1, batchIndex)}: ${finalRadius} किमी मध्ये ${fcmMatched} कामगारांना प्राधान्याने रिक्वेस्ट पाठवली आहे.`
               )
             : tr(
                 lang,
-                `Request saved. No worker matched within ${finalRadius} km yet — expand radius or check offers in My Orders.`,
-                `रिक्वेस्ट सेव हो गई है। अभी ${finalRadius} किमी में उपलब्ध कामगार नहीं मिले — दायरा बढ़ाएँ।`,
-                `रिक्वेस्ट जतन झाली आहे. ${finalRadius} किमी मध्ये सध्या उपलब्ध कामगार नाहीत — अंतर वाढवून पुन्हा शोधा.`
+                'No matching workers were immediately available nearby. You can browse matching workers directly or retry sending alerts.',
+                'अभी नज़दीक में कोई उपलब्ध कामगार नहीं मिला। आप सीधे कामगारों की सूची देख सकते हैं या अलर्ट दोबारा भेज सकते हैं।',
+                'सध्या जवळपास उपलब्ध कामगार आढळले नाहीत. तुम्ही थेट कामगार पाहू शकता किंवा पुन्हा अलर्ट पाठवू शकता.'
               ),
       });
 
@@ -544,39 +593,337 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
     }
   };
 
-  const handleExpandRadiusNow = async () => {
-    if (!createdOrder?.jobId) return;
-    const nextStage = getNextRadiusStage(createdOrder.currentRadiusKm);
-    if (!nextStage) return;
-
+  const handleNotifyNextBatchNow = async (isAutoEscalation = false) => {
+    if (!createdOrder?.jobId || createdOrder.confirmed) return;
     const jobObj = jobs.find((j) => j.id === createdOrder.jobId);
     if (!jobObj) return;
 
-    setCreatedOrder((prev) => (prev ? { ...prev, expanding: true } : prev));
+    if (isJobConfirmationClosed(jobObj)) {
+      setCreatedOrder((prev) =>
+        prev
+          ? {
+              ...prev,
+              confirmed: true,
+              hasNextBatch: false,
+              expanding: false,
+              autoEscalating: false,
+              allBatchesExhausted: false,
+              retrying: false,
+              statusMessage: tr(
+                lang,
+                'A worker has confirmed your job! Alerts to other workers are now closed.',
+                'एक कामगार ने आपका काम कन्फर्म कर दिया है! अन्य कामगारों को अलर्ट बंद कर दिए गए हैं।',
+                'एका कामगाराने तुमचे काम निश्चित केले आहे! इतर कामगारांचे अलर्ट बंद झाले आहेत.'
+              ),
+            }
+          : prev
+      );
+      return;
+    }
+
+    setCreatedOrder((prev) =>
+      prev
+        ? {
+            ...prev,
+            expanding: true,
+            autoEscalating: isAutoEscalation,
+            allBatchesExhausted: false,
+            statusMessage: tr(
+              lang,
+              'Alerting next batch of nearby workers...',
+              'अगले नज़दीकी कामगारों को अलर्ट भेजा जा रहा है...',
+              'जवळच्या पुढील कामगारांना अलर्ट पाठवला जात आहे...'
+            ),
+          }
+        : prev
+    );
     try {
-      const res = await expandJobSearchRadius({
-        job: jobObj,
-        workers,
-        targetRadiusKm: nextStage,
-      });
+      const res = await dispatchNextJobBatch({ job: jobObj, workers });
+      const exhaustedNow = !res.closed && res.newlyNotifiedCount === 0 && !res.hasNextBatch;
       setCreatedOrder((prev) =>
         prev
           ? {
               ...prev,
               currentRadiusKm: res.currentRadiusKm,
               notifiedCount: Math.max(prev.notifiedCount, res.totalNotifiedCount),
+              batchIndex: Math.max(prev.batchIndex, res.batchIndex),
+              remainingEligibleCount: res.remainingEligibleCount,
+              hasNextBatch: !res.closed && res.hasNextBatch,
+              confirmed: res.closed,
               expanding: false,
-              statusMessage: tr(
-                lang,
-                `Expanded search to ${res.currentRadiusKm} km · ${res.totalNotifiedCount} worker(s) notified.`,
-                `खोज का दायरा ${res.currentRadiusKm} किमी तक बढ़ाया · ${res.totalNotifiedCount} कामगारों को सूचना भेजी।`,
-                `शोध अंतर ${res.currentRadiusKm} किमी पर्यंत वाढवले · ${res.totalNotifiedCount} कामगारांना रिक्वेस्ट पाठवली.`
-              ),
+              autoEscalating: false,
+              allBatchesExhausted: exhaustedNow,
+              batchDispatchedAtMs: Date.now(),
+              retrying: false,
+              statusMessage: res.closed
+                ? tr(
+                    lang,
+                    'A worker has confirmed your job! Alerts to other workers are now closed.',
+                    'एक कामगार ने आपका काम कन्फर्म कर दिया है! अन्य कामगारों को अलर्ट बंद कर दिए गए हैं।',
+                    'एका कामगाराने तुमचे काम निश्चित केले आहे! इतर कामगारांचे अलर्ट बंद झाले आहेत.'
+                  )
+                : res.newlyNotifiedCount > 0
+                ? tr(
+                    lang,
+                    `Batch ${res.batchIndex} sent to ${res.newlyNotifiedCount} more priority worker(s) (${res.totalNotifiedCount} total within ${res.currentRadiusKm} km).`,
+                    `बैच ${res.batchIndex}: ${res.newlyNotifiedCount} और कामगारों को अलर्ट भेजा गया (${res.currentRadiusKm} किमी में कुल ${res.totalNotifiedCount})।`,
+                    `बॅच ${res.batchIndex}: आणखी ${res.newlyNotifiedCount} कामगारांना अलर्ट पाठवला (${res.currentRadiusKm} किमी मध्ये एकूण ${res.totalNotifiedCount}).`
+                  )
+                : tr(
+                    lang,
+                    'All nearby matching workers were alerted without a confirmation yet. Browse matching workers directly or retry sending alerts.',
+                    'सभी नज़दीकी कामगारों को अलर्ट भेजा जा चुका है पर अभी कन्फर्मेशन नहीं मिला। आप सीधे कामगार देख सकते हैं या फिर से अलर्ट भेज सकते हैं।',
+                    'जवळच्या सर्व पात्र कामगारांना अलर्ट पाठवला आहे, परंतु अद्याप कन्फर्मेशन मिळाले नाही. तुम्ही थेट कामगार पाहू शकता किंवा पुन्हा अलर्ट पाठवू शकता.'
+                  ),
             }
           : prev
       );
     } catch {
-      setCreatedOrder((prev) => (prev ? { ...prev, expanding: false } : prev));
+      setCreatedOrder((prev) =>
+        prev ? { ...prev, expanding: false, autoEscalating: false } : prev
+      );
+    }
+  };
+
+  const handleRetryJobNow = async () => {
+    if (!createdOrder?.jobId || createdOrder.confirmed || createdOrder.retrying) return;
+    const jobObj = jobs.find((j) => j.id === createdOrder.jobId);
+    if (!jobObj) return;
+
+    setCreatedOrder((prev) =>
+      prev
+        ? {
+            ...prev,
+            retrying: true,
+            expanding: true,
+            autoEscalating: false,
+            allBatchesExhausted: false,
+            statusMessage: tr(
+              lang,
+              'Re-alerting nearby workers in fair rotation order...',
+              'नज़दीकी कामगारों को फिर से समान बारी क्रम में अलर्ट भेजा जा रहा है...',
+              'जवळच्या कामगारांना पुन्हा न्याय्य क्रमाने अलर्ट पाठवला जात आहे...'
+            ),
+          }
+        : prev
+    );
+
+    try {
+      const res = await retryJobFairRotationDispatch({ job: jobObj, workers });
+      const exhaustedNow = !res.closed && res.totalNotifiedCount === 0 && !res.hasNextBatch;
+      setCreatedOrder((prev) =>
+        prev
+          ? {
+              ...prev,
+              currentRadiusKm: res.currentRadiusKm,
+              notifiedCount: res.totalNotifiedCount,
+              batchIndex: Math.max(1, res.batchIndex),
+              remainingEligibleCount: res.remainingEligibleCount,
+              hasNextBatch: !res.closed && res.hasNextBatch,
+              confirmed: res.closed,
+              expanding: false,
+              autoEscalating: false,
+              allBatchesExhausted: exhaustedNow,
+              batchDispatchedAtMs: Date.now(),
+              retrying: false,
+              statusMessage: res.closed
+                ? tr(
+                    lang,
+                    'A worker has confirmed your job! Alerts to other workers are now closed.',
+                    'एक कामगार ने आपका काम कन्फर्म कर दिया है! अन्य कामगारों को अलर्ट बंद कर दिए गए हैं।',
+                    'एका कामगाराने तुमचे काम निश्चित केले आहे! इतर कामगारांचे अलर्ट बंद झाले आहेत.'
+                  )
+                : res.totalNotifiedCount > 0
+                ? tr(
+                    lang,
+                    `Retry started — Batch 1 sent to ${res.totalNotifiedCount} nearby worker(s) within ${res.currentRadiusKm} km.`,
+                    `दोबारा अलर्ट शुरू — बैच 1 के ${res.totalNotifiedCount} नज़दीकी कामगारों को सूचना भेजी गई (${res.currentRadiusKm} किमी)।`,
+                    `पुन्हा अलर्ट सुरू — बॅच 1 मधील ${res.totalNotifiedCount} जवळच्या कामगारांना रिक्वेस्ट पाठवली (${res.currentRadiusKm} किमी).`
+                  )
+                : tr(
+                    lang,
+                    'Still no matching workers available nearby. Browse matching workers directly to contact one right away.',
+                    'अभी भी नज़दीक में उपलब्ध कामगार नहीं मिले। तुरंत संपर्क के लिए सीधे कामगारों की सूची देखें।',
+                    'अद्याप जवळपास उपलब्ध कामगार आढळले नाहीत. त्वरित संपर्कासाठी थेट कामगारांची यादी पहा.'
+                  ),
+            }
+          : prev
+      );
+    } catch {
+      setCreatedOrder((prev) =>
+        prev ? { ...prev, retrying: false, expanding: false } : prev
+      );
+    }
+  };
+
+  // Watch live job status: stop alerts immediately when a worker confirms
+  useEffect(() => {
+    if (step !== 'searching' || !createdOrder?.jobId) return;
+    const liveJob = jobs.find((j) => j.id === createdOrder.jobId);
+    if (!liveJob) return;
+
+    if (isJobConfirmationClosed(liveJob) && !createdOrder.confirmed) {
+      setCreatedOrder((prev) =>
+        prev
+          ? {
+              ...prev,
+              confirmed: true,
+              hasNextBatch: false,
+              expanding: false,
+              autoEscalating: false,
+              allBatchesExhausted: false,
+              retrying: false,
+              statusMessage: tr(
+                lang,
+                'A worker has confirmed your job! Alerts to other workers are now closed.',
+                'एक कामगार ने आपका काम कन्फर्म कर दिया है! अन्य कामगारों को अलर्ट बंद कर दिए गए हैं।',
+                'एका कामगाराने तुमचे काम निश्चित केले आहे! इतर कामगारांचे अलर्ट बंद झाले आहेत.'
+              ),
+            }
+          : prev
+      );
+    }
+  }, [step, createdOrder?.jobId, createdOrder?.confirmed, jobs, lang]);
+
+  // Live 1s countdown for current batch window -> auto-escalate next batch OR show exhausted fallback without penalizing workers
+  useEffect(() => {
+    if (
+      step !== 'searching' ||
+      !createdOrder?.jobId ||
+      createdOrder.confirmed ||
+      createdOrder.expanding ||
+      createdOrder.retrying ||
+      createdOrder.allBatchesExhausted
+    ) {
+      return;
+    }
+
+    const liveJob = jobs.find((j) => j.id === createdOrder.jobId);
+    if (liveJob && isJobConfirmationClosed(liveJob)) {
+      return;
+    }
+
+    let triggered = false;
+    const tick = () => {
+      const elapsed = Date.now() - createdOrder.batchDispatchedAtMs;
+      const remainingSec = Math.max(
+        0,
+        Math.ceil((DEFAULT_BATCH_ESCALATION_WINDOW_MS - elapsed) / 1000)
+      );
+      setSecondsUntilNextBatch(remainingSec);
+
+      if (elapsed >= DEFAULT_BATCH_ESCALATION_WINDOW_MS && !triggered) {
+        triggered = true;
+        if (createdOrder.hasNextBatch) {
+          void handleNotifyNextBatchNow(true);
+        } else {
+          setCreatedOrder((prev) =>
+            prev && !prev.confirmed
+              ? {
+                  ...prev,
+                  allBatchesExhausted: true,
+                  autoEscalating: false,
+                  expanding: false,
+                  statusMessage: tr(
+                    lang,
+                    'No worker confirmed within the batch window. You can browse matching workers directly or retry/repost the job.',
+                    'निर्धारित समय में किसी कामगार ने कन्फर्म नहीं किया। आप सीधे कामगार देख सकते हैं या अलर्ट फिर से भेज सकते हैं।',
+                    'दिलेल्या वेळेत कोणत्याही कामगाराने काम कन्फर्म केले नाही. तुम्ही थेट कामगार पाहू शकता किंवा पुन्हा अलर्ट पाठवू शकता.'
+                  ),
+                }
+              : prev
+          );
+        }
+      }
+    };
+
+    tick();
+    const interval = window.setInterval(tick, 1000);
+    return () => window.clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    step,
+    createdOrder?.jobId,
+    createdOrder?.batchIndex,
+    createdOrder?.batchDispatchedAtMs,
+    createdOrder?.expanding,
+    createdOrder?.retrying,
+    createdOrder?.confirmed,
+    createdOrder?.hasNextBatch,
+    createdOrder?.allBatchesExhausted,
+    jobs,
+  ]);
+
+  const handleExpandRadiusNow = async () => {
+    if (!createdOrder?.jobId || createdOrder.confirmed) return;
+    const nextStage = getNextRadiusStage(createdOrder.currentRadiusKm);
+    if (!nextStage) return;
+
+    const jobObj = jobs.find((j) => j.id === createdOrder.jobId);
+    if (!jobObj) return;
+
+    setCreatedOrder((prev) =>
+      prev
+        ? {
+            ...prev,
+            expanding: true,
+            autoEscalating: true,
+            allBatchesExhausted: false,
+            statusMessage: tr(
+              lang,
+              'Alerting next batch of nearby workers...',
+              'अगले नज़दीकी कामगारों को अलर्ट भेजा जा रहा है...',
+              'जवळच्या पुढील कामगारांना अलर्ट पाठवला जात आहे...'
+            ),
+          }
+        : prev
+    );
+    try {
+      const res = await expandJobSearchRadius({
+        job: jobObj,
+        workers,
+        targetRadiusKm: nextStage,
+      });
+      const exhaustedNow =
+        !res.closed &&
+        res.newlyNotifiedCount === 0 &&
+        (res.remainingEligibleCount ?? 0) === 0 &&
+        !res.hasNextStage;
+      setCreatedOrder((prev) =>
+        prev
+          ? {
+              ...prev,
+              currentRadiusKm: res.currentRadiusKm,
+              notifiedCount: Math.max(prev.notifiedCount, res.totalNotifiedCount),
+              batchIndex: Math.max(prev.batchIndex, res.batchIndex ?? prev.batchIndex),
+              remainingEligibleCount: res.remainingEligibleCount ?? 0,
+              hasNextBatch: !res.closed && ((res.remainingEligibleCount ?? 0) > 0 || res.hasNextStage),
+              confirmed: Boolean(res.closed),
+              expanding: false,
+              autoEscalating: false,
+              allBatchesExhausted: exhaustedNow,
+              batchDispatchedAtMs: Date.now(),
+              retrying: false,
+              statusMessage: res.closed
+                ? tr(
+                    lang,
+                    'A worker has confirmed your job! Alerts to other workers are now closed.',
+                    'एक कामगार ने आपका काम कन्फर्म कर दिया है! अन्य कामगारों को अलर्ट बंद कर दिए गए हैं।',
+                    'एका कामगाराने तुमचे काम निश्चित केले आहे! इतर कामगारांचे अलर्ट बंद झाले आहेत.'
+                  )
+                : tr(
+                    lang,
+                    `Expanded search to ${res.currentRadiusKm} km · ${res.totalNotifiedCount} worker(s) notified.`,
+                    `खोज का दायरा ${res.currentRadiusKm} किमी तक बढ़ाया · ${res.totalNotifiedCount} कामगारों को सूचना भेजी।`,
+                    `शोध अंतर ${res.currentRadiusKm} किमी पर्यंत वाढवले · ${res.totalNotifiedCount} कामगारांना रिक्वेस्ट पाठवली.`
+                  ),
+            }
+          : prev
+      );
+    } catch {
+      setCreatedOrder((prev) =>
+        prev ? { ...prev, expanding: false, autoEscalating: false } : prev
+      );
     }
   };
 
@@ -1399,26 +1746,68 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
           </div>
         )}
 
-        {/* ================= VIEW 4: LIVE WORKER SEARCH (2 km -> 5 km -> 10 km) ================= */}
+        {/* ================= VIEW 4: LIVE WORKER SEARCH (Fair-Rotation Batches & Timeout Fallback) ================= */}
         {step === 'searching' && createdOrder && (
           <div className="max-w-xl mx-auto">
             <div className="bg-white border border-slate-200 rounded-2xl p-6 sm:p-8 shadow-sm text-center space-y-5">
-              <div className="w-16 h-16 rounded-2xl mx-auto flex items-center justify-center bg-emerald-50 border border-emerald-200">
-                {createdOrder.expanding ? (
+              <div
+                className={`w-16 h-16 rounded-2xl mx-auto flex items-center justify-center border ${
+                  createdOrder.confirmed
+                    ? 'bg-emerald-50 border-emerald-300'
+                    : createdOrder.allBatchesExhausted
+                    ? 'bg-amber-50 border-amber-300'
+                    : createdOrder.expanding || createdOrder.autoEscalating
+                    ? 'bg-orange-50 border-orange-200'
+                    : 'bg-emerald-50 border-emerald-200'
+                }`}
+              >
+                {createdOrder.confirmed ? (
+                  <CheckCircle2 className="w-8 h-8 text-[#15803D]" />
+                ) : createdOrder.allBatchesExhausted ? (
+                  <AlertCircle className="w-8 h-8 text-[#C25E00]" />
+                ) : createdOrder.expanding || createdOrder.autoEscalating ? (
                   <Radar className="w-8 h-8 text-[#E06D1B] animate-spin" />
                 ) : (
                   <CheckCircle2 className="w-8 h-8 text-[#15803D]" />
                 )}
               </div>
 
-              <div className="space-y-1.5">
+              <div className="space-y-2">
+                {createdOrder.confirmed && (
+                  <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-md bg-emerald-100 border border-emerald-300 text-xs font-extrabold text-[#15803D]">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    <span>{tr(lang, 'Job Confirmed', 'काम कन्फर्म हुआ', 'काम कन्फर्म झाले')}</span>
+                  </div>
+                )}
+
                 <h2 className="font-display text-xl sm:text-2xl font-extrabold text-[#0B3B75]">
-                  {createdOrder.expanding
+                  {createdOrder.confirmed
+                    ? tr(
+                        lang,
+                        'Worker Confirmed Your Job!',
+                        'कामगार ने आपका काम कन्फर्म कर दिया!',
+                        'कामगाराने तुमचे काम कन्फर्म केले!'
+                      )
+                    : createdOrder.autoEscalating
+                    ? tr(
+                        lang,
+                        'Alerting next batch of nearby workers...',
+                        'अगले नज़दीकी कामगारों को अलर्ट भेजा जा रहा है...',
+                        'जवळच्या पुढील कामगारांना अलर्ट पाठवला जात आहे...'
+                      )
+                    : createdOrder.expanding
                     ? tr(
                         lang,
                         'Searching nearby workers...',
                         'आपके नज़दीकी कामगार की तलाश है...',
                         'आपल्या जवळचा कामगार शोधत आहोत...'
+                      )
+                    : createdOrder.allBatchesExhausted
+                    ? tr(
+                        lang,
+                        'No Worker Confirmed in Batch Window',
+                        'समय सीमा में कोई कामगार कन्फर्म नहीं हुआ',
+                        'वेळेत कोणत्याही कामगाराने कन्फर्म केले नाही'
                       )
                     : tr(
                         lang,
@@ -1429,6 +1818,83 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
                 </h2>
                 <p className="text-sm text-slate-600">{createdOrder.statusMessage}</p>
               </div>
+
+              {/* Active Batch Escalation Countdown Indicator */}
+              {!createdOrder.confirmed &&
+                !createdOrder.expanding &&
+                !createdOrder.allBatchesExhausted &&
+                createdOrder.jobId && (
+                  <div className="rounded-xl bg-blue-50/80 border border-blue-200 px-4 py-2.5 text-left flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2 text-xs font-semibold text-[#0B3B75]">
+                      <Clock className="w-4 h-4 text-[#E06D1B] shrink-0" />
+                      <span>
+                        {createdOrder.hasNextBatch
+                          ? tr(
+                              lang,
+                              `Batch ${createdOrder.batchIndex} active · Auto-alerting next batch in ${secondsUntilNextBatch}s`,
+                              `बैच ${createdOrder.batchIndex} सक्रिय · ${secondsUntilNextBatch} सेकंड में अगले नज़दीकी कामगारों को अलर्ट भेजा जाएगा`,
+                              `बॅच ${createdOrder.batchIndex} सुरू · ${secondsUntilNextBatch} सेकंदात जवळच्या पुढील कामगारांना अलर्ट पाठवला जाईल`
+                            )
+                          : tr(
+                              lang,
+                              `Final batch (${createdOrder.batchIndex}) waiting for confirmation · ${secondsUntilNextBatch}s left`,
+                              `अंतिम बैच (${createdOrder.batchIndex}) कन्फर्मेशन की प्रतीक्षा में · ${secondsUntilNextBatch} सेकंड शेष`,
+                              `अंतिम बॅच (${createdOrder.batchIndex}) कन्फर्मेशनची प्रतीक्षा · ${secondsUntilNextBatch} सेकंद बाकी`
+                            )}
+                      </span>
+                    </div>
+                    <span className="font-mono-tabular text-xs font-extrabold text-[#C25E00] shrink-0">
+                      {secondsUntilNextBatch}s
+                    </span>
+                  </div>
+                )}
+
+              {/* All Eligible Batches Timed Out — Clear Fallback Options */}
+              {createdOrder.allBatchesExhausted && !createdOrder.confirmed && (
+                <div className="rounded-xl bg-amber-50 border border-amber-300 p-4 text-left space-y-3">
+                  <p className="text-xs font-semibold text-amber-900 leading-relaxed">
+                    {tr(
+                      lang,
+                      'All nearby eligible batches were alerted without confirmation yet. Non-responding workers were not penalized. Choose your next step below:',
+                      'सभी नज़दीकी पात्र बैचों को अलर्ट भेजा जा चुका है। आप नीचे से सीधे कामगार चुन सकते हैं या दोबारा अलर्ट भेज सकते हैं:',
+                      'जवळच्या सर्व पात्र बॅचेसना अलर्ट पाठवला गेला आहे. तुम्ही खालील पर्यायातून थेट कामगार निवडू शकता किंवा पुन्हा अलर्ट पाठवू शकता:'
+                    )}
+                  </p>
+                  <div className="flex flex-col sm:flex-row gap-2.5">
+                    <button
+                      type="button"
+                      onClick={() => onNavigate('find-workers', createdOrder.category)}
+                      className="flex-1 h-11 px-4 rounded-xl bg-[#0B3B75] hover:bg-[#072A54] text-white text-xs sm:text-sm font-bold inline-flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <Users className="w-4 h-4" />
+                      <span>
+                        {tr(
+                          lang,
+                          'Browse Matching Workers',
+                          'मिलते-जुलते कामगार देखें',
+                          'योग्य कामगार थेट पहा'
+                        )}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={createdOrder.retrying}
+                      onClick={handleRetryJobNow}
+                      className="flex-1 h-11 px-4 rounded-xl bg-[#E06D1B] hover:bg-[#c55b10] disabled:opacity-60 text-white text-xs sm:text-sm font-bold inline-flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      <RefreshCw className={`w-4 h-4 ${createdOrder.retrying ? 'animate-spin' : ''}`} />
+                      <span>
+                        {tr(
+                          lang,
+                          'Retry / Repost Alerts',
+                          'दोबारा अलर्ट भेजें',
+                          'पुन्हा अलर्ट पाठवा'
+                        )}
+                      </span>
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {/* Radius Stages Indicator: 2 km -> 5 km -> 10 km */}
               <div className="grid grid-cols-3 gap-2 max-w-xs mx-auto pt-1">
@@ -1456,47 +1922,101 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
                     onClick={() =>
                       onNavigate('employer-dashboard', undefined, createdOrder.jobId)
                     }
-                    className="flex-1 h-12 px-5 rounded-xl bg-[#0B3B75] hover:bg-[#072A54] text-white text-sm font-bold inline-flex items-center justify-center gap-2 cursor-pointer"
+                    className={`flex-1 h-12 px-5 rounded-xl text-white text-sm font-bold inline-flex items-center justify-center gap-2 cursor-pointer ${
+                      createdOrder.confirmed
+                        ? 'bg-[#15803D] hover:bg-[#116931]'
+                        : 'bg-[#0B3B75] hover:bg-[#072A54]'
+                    }`}
                   >
                     <span>
-                      {tr(
-                        lang,
-                        'Track Order & View Offers',
-                        'ऑर्डर ट्रैक करें और ऑफर देखें',
-                        'ऑर्डर ट्रॅक करा व ऑफर पहा'
-                      )}
+                      {createdOrder.confirmed
+                        ? tr(
+                            lang,
+                            'Open Confirmed Order & Contact Worker',
+                            'कन्फर्म ऑर्डर खोलें व संपर्क करें',
+                            'कन्फर्म ऑर्डर उघडा व संपर्क करा'
+                          )
+                        : tr(
+                            lang,
+                            'Track Order & View Offers',
+                            'ऑर्डर ट्रैक करें और ऑफर देखें',
+                            'ऑर्डर ट्रॅक करा व ऑफर पहा'
+                          )}
                     </span>
                     <ArrowRight className="w-4 h-4" />
                   </button>
                 )}
 
-                {!createdOrder.expanding && getNextRadiusStage(createdOrder.currentRadiusKm) && (
-                  <button
-                    type="button"
-                    onClick={handleExpandRadiusNow}
-                    className="h-12 px-4 rounded-xl border border-[#E06D1B] text-[#E06D1B] hover:bg-amber-50 text-sm font-bold inline-flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <RefreshCw className="w-4 h-4" />
-                    <span>
-                      {tr(
-                        lang,
-                        `Expand to ${getNextRadiusStage(createdOrder.currentRadiusKm)} km`,
-                        `${getNextRadiusStage(createdOrder.currentRadiusKm)} किमी तक बढ़ाएँ`,
-                        `${getNextRadiusStage(createdOrder.currentRadiusKm)} किमी पर्यंत वाढवा`
-                      )}
-                    </span>
-                  </button>
-                )}
+                {!createdOrder.expanding &&
+                  !createdOrder.confirmed &&
+                  !createdOrder.allBatchesExhausted &&
+                  createdOrder.hasNextBatch && (
+                    <button
+                      type="button"
+                      onClick={() => void handleNotifyNextBatchNow(false)}
+                      className="h-12 px-4 rounded-xl border border-[#0B3B75] text-[#0B3B75] hover:bg-blue-50 text-sm font-bold inline-flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                      <span>
+                        {createdOrder.remainingEligibleCount > 0
+                          ? tr(
+                              lang,
+                              `Alert Next Batch (${createdOrder.remainingEligibleCount} waiting)`,
+                              `अगले बैच को अलर्ट भेजें (${createdOrder.remainingEligibleCount} प्रतीक्षा में)`,
+                              `पुढील बॅचला अलर्ट पाठवा (${createdOrder.remainingEligibleCount} प्रतीक्षेत)`
+                            )
+                          : tr(
+                              lang,
+                              `Expand to ${getNextRadiusStage(createdOrder.currentRadiusKm) ?? 30} km`,
+                              `${getNextRadiusStage(createdOrder.currentRadiusKm) ?? 30} किमी तक बढ़ाएँ`,
+                              `${getNextRadiusStage(createdOrder.currentRadiusKm) ?? 30} किमी पर्यंत वाढवा`
+                            )}
+                      </span>
+                    </button>
+                  )}
+
+                {!createdOrder.expanding &&
+                  !createdOrder.confirmed &&
+                  !createdOrder.allBatchesExhausted &&
+                  createdOrder.remainingEligibleCount > 0 &&
+                  getNextRadiusStage(createdOrder.currentRadiusKm) && (
+                    <button
+                      type="button"
+                      onClick={handleExpandRadiusNow}
+                      className="h-12 px-4 rounded-xl border border-[#E06D1B] text-[#E06D1B] hover:bg-amber-50 text-sm font-bold inline-flex items-center justify-center gap-1.5 cursor-pointer"
+                    >
+                      <RefreshCw className="w-4 h-4" />
+                      <span>
+                        {tr(
+                          lang,
+                          `Expand to ${getNextRadiusStage(createdOrder.currentRadiusKm)} km`,
+                          `${getNextRadiusStage(createdOrder.currentRadiusKm)} किमी तक बढ़ाएँ`,
+                          `${getNextRadiusStage(createdOrder.currentRadiusKm)} किमी पर्यंत वाढवा`
+                        )}
+                      </span>
+                    </button>
+                  )}
               </div>
 
               {!createdOrder.expanding && (
-                <button
-                  type="button"
-                  onClick={resetToHome}
-                  className="text-xs font-bold text-slate-500 hover:text-[#0B3B75] cursor-pointer"
-                >
-                  {tr(lang, 'Book Another Service', 'एक और सेवा बुक करें', 'दुसरी सेवा बुक करा')}
-                </button>
+                <div className="flex items-center justify-center gap-4 pt-1">
+                  {createdOrder.allBatchesExhausted && !createdOrder.confirmed && (
+                    <button
+                      type="button"
+                      onClick={() => setStep('order_form')}
+                      className="text-xs font-bold text-[#0B3B75] hover:underline cursor-pointer"
+                    >
+                      {tr(lang, 'Edit & Repost Job', 'काम संपादित कर फिर पोस्ट करें', 'काम बदलून पुन्हा पोस्ट करा')}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={resetToHome}
+                    className="text-xs font-bold text-slate-500 hover:text-[#0B3B75] cursor-pointer"
+                  >
+                    {tr(lang, 'Book Another Service', 'एक और सेवा बुक करें', 'दुसरी सेवा बुक करा')}
+                  </button>
+                </div>
               )}
             </div>
           </div>

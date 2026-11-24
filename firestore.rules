@@ -126,7 +126,8 @@ service cloud.firestore {
           'paymentReceiptNo', 'certificateNo', 'verifiedAtIso',
           'isWomenEnterprise', 'photoDocId',
           'preferredLanguage', 'preferredRadiusKm', 'voiceAlertsEnabled',
-          'completedJobsCount', 'ratingAvg', 'lastRatedApplicationId',
+          'completedJobsCount', 'confirmedJobsCount', 'lastConfirmedJobAtMs', 'lastConfirmedApplicationId',
+          'ratingAvg', 'lastRatedApplicationId',
           'referralCode', 'referredByCode', 'referredByUid', 'referredByName',
           'customProfessionId', 'customProfessionName', 'customProfessionStatus',
           'workDescription', 'workPhotoUrls',
@@ -162,6 +163,9 @@ service cloud.firestore {
         && (!('preferredRadiusKm' in data) || data.preferredRadiusKm in [2, 5, 10, 20, 30])
         && optBool(data, 'voiceAlertsEnabled')
         && isNum(data.completedJobsCount, 0, 100000)
+        && optNum(data, 'confirmedJobsCount', 0, 100000)
+        && optNum(data, 'lastConfirmedJobAtMs', 0, 9999999999999)
+        && optId(data, 'lastConfirmedApplicationId')
         && isNum(data.ratingAvg, 0, 5)
         && optId(data, 'lastRatedApplicationId')
         && optCode(data, 'referralCode')
@@ -344,7 +348,9 @@ service cloud.firestore {
           'destinationLocationLabel', 'destinationLat', 'destinationLng', 'transportItemType',
           'photoAnalyzed', 'subService', 'preferredTimeType', 'startingPrice',
           'status', 'dealStatus', 'acceptedApplicationId',
-          'acceptedWorkerUid', 'notifiedWorkerUids', 'approxLocationLabel',
+          'acceptedWorkerUid', 'notifiedWorkerUids',
+          'dispatchBatchIndex', 'dispatchBatchSize', 'lastBatchDispatchedAtMs', 'eligiblePoolCount',
+          'approxLocationLabel',
           'initialRadiusKm', 'currentRadiusKm', 'radiusStageUpdatedAt',
           'applicationsCount', 'createdAt', 'updatedAt'
         ])
@@ -394,6 +400,10 @@ service cloud.firestore {
         && (!('acceptedApplicationId' in data) || isValidId(data.acceptedApplicationId))
         && (!('acceptedWorkerUid' in data) || isValidId(data.acceptedWorkerUid))
         && (!('notifiedWorkerUids' in data) || (data.notifiedWorkerUids is list && data.notifiedWorkerUids.size() <= 100))
+        && optNum(data, 'dispatchBatchIndex', 0, 100)
+        && optNum(data, 'dispatchBatchSize', 1, 50)
+        && optNum(data, 'lastBatchDispatchedAtMs', 0, 9999999999999)
+        && optNum(data, 'eligiblePoolCount', 0, 10000)
         && (!('approxLocationLabel' in data) || (data.approxLocationLabel is string && data.approxLocationLabel.size() <= 160))
         && (!('initialRadiusKm' in data) || data.initialRadiusKm in [2, 5, 10, 20, 30])
         && (!('currentRadiusKm' in data) || data.currentRadiusKm in [2, 5, 10, 20, 30])
@@ -1268,6 +1278,9 @@ service cloud.firestore {
         && (!('customProfessionStatus' in incoming()) || incoming().customProfessionStatus == 'pending')
         && !('paymentReceiptNo' in incoming())
         && !('certificateNo' in incoming())
+        && !('lastConfirmedJobAtMs' in incoming())
+        && !('lastConfirmedApplicationId' in incoming())
+        && (!('confirmedJobsCount' in incoming()) || incoming().confirmedJobsCount == 0)
         && incoming().completedJobsCount == 0
         && incoming().ratingAvg == 0
         && isValidTimestampOnCreate();
@@ -1310,6 +1323,31 @@ service cloud.firestore {
             && 'workerRating' in get(/databases/$(database)/documents/applications/$(incoming().lastRatedApplicationId)).data
             && incoming().completedJobsCount >= existing().completedJobsCount
             && incoming().completedJobsCount <= existing().completedJobsCount + 1
+          ) ||
+          (
+            incoming().registrationId == existing().registrationId
+            && existing().verificationStatus != 'suspended'
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'confirmedJobsCount', 'lastConfirmedJobAtMs', 'lastConfirmedApplicationId', 'updatedAt'
+            ])
+            && 'lastConfirmedApplicationId' in incoming()
+            && isValidId(incoming().lastConfirmedApplicationId)
+            && (!('lastConfirmedApplicationId' in existing()) || incoming().lastConfirmedApplicationId != existing().lastConfirmedApplicationId)
+            && exists(/databases/$(database)/documents/applications/$(incoming().lastConfirmedApplicationId))
+            && get(/databases/$(database)/documents/applications/$(incoming().lastConfirmedApplicationId)).data.workerUid == workerId
+            && (
+              get(/databases/$(database)/documents/applications/$(incoming().lastConfirmedApplicationId)).data.employerUid == request.auth.uid ||
+              get(/databases/$(database)/documents/applications/$(incoming().lastConfirmedApplicationId)).data.workerUid == request.auth.uid
+            )
+            && (
+              get(/databases/$(database)/documents/applications/$(incoming().lastConfirmedApplicationId)).data.status == 'accepted' ||
+              get(/databases/$(database)/documents/applications/$(incoming().lastConfirmedApplicationId)).data.dealStatus == 'DEAL_CONFIRMED'
+            )
+            && 'confirmedJobsCount' in incoming()
+            && incoming().confirmedJobsCount == (('confirmedJobsCount' in existing() ? existing().confirmedJobsCount : 0) + 1)
+            && 'lastConfirmedJobAtMs' in incoming()
+            && incoming().lastConfirmedJobAtMs > 0
+            && incoming().lastConfirmedJobAtMs >= ('lastConfirmedJobAtMs' in existing() ? existing().lastConfirmedJobAtMs : 0)
           )
         );
       allow delete: if isValidId(workerId) && isAdmin();
@@ -1439,7 +1477,9 @@ service cloud.firestore {
               'destinationLocationLabel', 'destinationLat', 'destinationLng', 'transportItemType',
               'photoAnalyzed', 'subService', 'preferredTimeType', 'startingPrice',
               'status', 'dealStatus', 'acceptedApplicationId', 'acceptedWorkerUid',
-              'notifiedWorkerUids', 'approxLocationLabel', 'initialRadiusKm',
+              'notifiedWorkerUids', 'dispatchBatchIndex', 'dispatchBatchSize',
+              'lastBatchDispatchedAtMs', 'eligiblePoolCount',
+              'approxLocationLabel', 'initialRadiusKm',
               'currentRadiusKm', 'radiusStageUpdatedAt', 'updatedAt'
             ])
           ) ||
@@ -1642,7 +1682,6 @@ service cloud.firestore {
         && isVerifiedUser()
         && isValidVehiclePrivate(incoming())
         && incoming().ownerUid == request.auth.uid
-        && incoming().mobileVerified == true
         && isValidTimestampOnCreate();
       allow update: if isValidId(vehicleId)
         && isVerifiedUser()
@@ -1653,7 +1692,6 @@ service cloud.firestore {
           isAdmin() ||
           (
             isOwner(existing().ownerUid)
-            && incoming().mobileVerified == true
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'ownerName', 'mobile', 'mobileVerified', 'verificationMethod', 'testPinHash',
               'email', 'rcOrLicenseNotes', 'updatedAt'

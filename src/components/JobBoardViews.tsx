@@ -13,9 +13,9 @@ import {
   isFemaleCustomerProtected,
 } from '../lib/customerPrivacy';
 import {
+  broadcastSmartJobAlerts,
   callNotificationApi,
   createJobPosting,
-  notifyMatchingWorkersInApp,
   saveOrderExactAddress,
   submitWorkerOffer,
 } from '../lib/firestoreService';
@@ -25,6 +25,7 @@ import {
   buildSmartJobVoiceScript,
   calculateValidDistanceKm,
   getPublicJobLocationText,
+  isJobConfirmationClosed,
   SERVICE_RADIUS_STAGES,
 } from '../lib/smartVoiceJobAlert';
 import { getJobPhotoUrls, MAX_WORK_PHOTOS } from '../lib/workPhotoService';
@@ -88,11 +89,22 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
     return st ? st.districts.map((d) => d.name) : [];
   }, [stateFilter]);
 
+  const highlightedJobRecord = useMemo(
+    () => (highlightedJobId ? jobs.find((j) => j.id === highlightedJobId) || null : null),
+    [jobs, highlightedJobId]
+  );
+  const highlightedJobAlreadyConfirmed = Boolean(
+    highlightedJobRecord && isJobConfirmationClosed(highlightedJobRecord)
+  );
+  const highlightedJobConfirmedByMe = Boolean(
+    highlightedJobRecord && user && highlightedJobRecord.acceptedWorkerUid === user.uid
+  );
+
   const filteredJobs = useMemo(() => {
     const q = search.trim().toLowerCase();
     const locQ = areaPincodeFilter.trim().toLowerCase();
     const list = jobs
-      .filter((j) => j.status === 'open')
+      .filter((j) => j.status === 'open' && !isJobConfirmationClosed(j))
       .filter((j) => !stateFilter || j.state === stateFilter)
       .filter((j) => !districtFilter || j.district === districtFilter)
       .filter((j) => {
@@ -321,11 +333,43 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
       </div>
 
       {highlightedJobId && (
-        <div className="mb-6 bg-amber-50 border-2 border-[#E06D1B] rounded-lg px-4 py-3 flex items-center justify-between gap-3">
+        <div
+          className={`mb-6 rounded-lg px-4 py-3 flex items-center justify-between gap-3 border-2 ${
+            highlightedJobConfirmedByMe
+              ? 'bg-emerald-50 border-emerald-400'
+              : highlightedJobAlreadyConfirmed
+              ? 'bg-slate-100 border-slate-300'
+              : 'bg-amber-50 border-[#E06D1B]'
+          }`}
+        >
           <div className="flex items-center gap-2 text-xs sm:text-sm font-semibold text-[#0B3B75]">
-            <BellRing className="w-4 h-4 text-[#E06D1B] shrink-0" />
+            {highlightedJobConfirmedByMe ? (
+              <CheckCircle2 className="w-4 h-4 text-[#15803D] shrink-0" />
+            ) : (
+              <BellRing
+                className={`w-4 h-4 shrink-0 ${
+                  highlightedJobAlreadyConfirmed ? 'text-slate-500' : 'text-[#E06D1B]'
+                }`}
+              />
+            )}
             <span>
-              Opened directly from your ROJGAR SETU push notification. Review details below and tap Apply.
+              {highlightedJobConfirmedByMe
+                ? lang === 'mr'
+                  ? `काम कन्फर्म झाले — "${highlightedJobRecord?.title || ''}" हे काम तुम्ही कन्फर्म केले आहे. ग्राहक संपर्क व पुढील माहितीसाठी कामगार डॅशबोर्ड उघडा.`
+                  : lang === 'hi'
+                  ? `काम कन्फर्म हुआ — "${highlightedJobRecord?.title || ''}" आपने कन्फर्म किया है। ग्राहक संपर्क व अगले चरण के लिए कामगार डैशबोर्ड खोलें।`
+                  : `Job Confirmed — You confirmed "${highlightedJobRecord?.title || ''}". Open Worker Dashboard for customer contact & next steps.`
+                : highlightedJobAlreadyConfirmed
+                ? lang === 'mr'
+                  ? `"${highlightedJobRecord?.title || ''}" हे काम दुसऱ्या कामगाराने आधीच कन्फर्म केले आहे. तुमची न्याय्य बारी बदललेली नाही — पुढील कामात तुम्हाला प्राधान्य मिळेल.`
+                  : lang === 'hi'
+                  ? `"${highlightedJobRecord?.title || ''}" पहले ही किसी अन्य कामगार द्वारा कन्फर्म हो चुका है। आपकी बारी सुरक्षित है — अगले काम में आपको प्राथमिकता मिलेगी।`
+                  : `"${highlightedJobRecord?.title || ''}" has already been confirmed by another worker. Your fair-rotation turn is unaffected — you will be prioritized for the next matching job.`
+                : lang === 'mr'
+                ? 'ROJGAR SETU अलर्टमधून हे काम उघडले आहे. खाली तपशील पाहून अर्ज करा.'
+                : lang === 'hi'
+                ? 'ROJGAR SETU नोटिफिकेशन से यह काम खोला गया है। नीचे विवरण देखें और आवेदन करें।'
+                : 'Opened directly from your ROJGAR SETU push notification. Review details below and tap Apply.'}
             </span>
           </div>
           {onClearHighlightedJob && (
@@ -334,7 +378,7 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
               onClick={onClearHighlightedJob}
               className="text-xs font-bold text-[#C25E00] hover:underline shrink-0 cursor-pointer"
             >
-              Dismiss
+              {lang === 'mr' ? 'बंद करा' : lang === 'hi' ? 'बंद करें' : 'Dismiss'}
             </button>
           )}
         </div>
@@ -1106,14 +1150,19 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
       setPincode('');
 
       let inAppNotified = 0;
+      let batchTargetUids: string[] = [];
+      let batchFinalRadius = initialRadiusKm;
       if (workers.length > 0) {
-        inAppNotified = await notifyMatchingWorkersInApp({
+        const broadcastRes = await broadcastSmartJobAlerts({
           jobId: id,
           job: jobPayload,
           workers,
           stageRadiusKm: initialRadiusKm,
           autoExpandIfEmpty: true,
         });
+        inAppNotified = broadcastRes.notifiedCount;
+        batchTargetUids = broadcastRes.newlyNotifiedUids;
+        batchFinalRadius = broadcastRes.finalRadiusKm;
       }
 
       try {
@@ -1125,20 +1174,21 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
           message?: string;
         }>('/api/notifications/send-matching-job', {
           jobId: id,
-          stageRadiusKm: initialRadiusKm,
+          stageRadiusKm: batchFinalRadius,
+          ...(batchTargetUids.length > 0 ? { targetWorkerUids: batchTargetUids } : {}),
         });
         if ((res.data.sentCount || 0) > 0) {
           setPushDispatchNotice(
-            `Notified ${Math.max(inAppNotified, res.data.matchedWorkersCount || 0)} matching worker(s) (${res.data.sentCount} push delivery).`
+            `Batch 1 notified ${Math.max(inAppNotified, res.data.matchedWorkersCount || 0)} priority worker(s) via fair rotation (${res.data.sentCount} push delivery).`
           );
         } else if (inAppNotified > 0 || (res.data.matchedWorkersCount || 0) > 0) {
           setPushDispatchNotice(
-            `${Math.max(inAppNotified, res.data.matchedWorkersCount || 0)} matching worker(s) notified immediately in-app.`
+            `Batch 1 notified ${Math.max(inAppNotified, res.data.matchedWorkersCount || 0)} priority worker(s) immediately in-app (fair rotation).`
           );
         }
       } catch {
         if (inAppNotified > 0) {
-          setPushDispatchNotice(`${inAppNotified} matching worker(s) notified immediately in-app.`);
+          setPushDispatchNotice(`Batch 1 notified ${inAppNotified} priority worker(s) immediately in-app (fair rotation).`);
         }
       }
     } catch (err) {

@@ -445,6 +445,60 @@ export function buildSmartJobNotificationContent(params: {
   };
 }
 
+export const DEFAULT_ROTATION_BATCH_SIZE = 3;
+export const DEFAULT_BATCH_ESCALATION_WINDOW_MS = 45_000;
+
+export function extractSixDigitPincode(text?: string | null): string {
+  if (!text || typeof text !== 'string') return '';
+  const match = text.match(/\b([1-9]\d{5})\b/);
+  return match ? match[1] : '';
+}
+
+export function resolveRotationBatchSize(workersRequired?: unknown, requestedBatchSize?: unknown): number {
+  const explicit = Number(requestedBatchSize);
+  if (Number.isFinite(explicit) && explicit >= 1) {
+    return Math.min(20, Math.max(1, Math.round(explicit)));
+  }
+  const reqWorkers = Number(workersRequired);
+  if (Number.isFinite(reqWorkers) && reqWorkers > 1) {
+    return Math.min(10, Math.max(DEFAULT_ROTATION_BATCH_SIZE, Math.ceil(reqWorkers * 2)));
+  }
+  return DEFAULT_ROTATION_BATCH_SIZE;
+}
+
+export function isJobConfirmationClosed(
+  job?: {
+    status?: string;
+    dealStatus?: string;
+    acceptedApplicationId?: string;
+    acceptedWorkerUid?: string;
+    workersRequired?: number;
+  } | null
+): boolean {
+  if (!job) return true;
+  if (job.status === 'closed' || job.status === 'completed' || job.status === 'cancelled') {
+    return true;
+  }
+  if (
+    job.dealStatus === 'DEAL_CONFIRMED' ||
+    job.dealStatus === 'WORKER_ON_THE_WAY' ||
+    job.dealStatus === 'WORK_IN_PROGRESS' ||
+    job.dealStatus === 'COMPLETED' ||
+    job.dealStatus === 'CANCELLED'
+  ) {
+    return true;
+  }
+  const requiredCount = Number(job.workersRequired);
+  const isSingleWorkerJob = !Number.isFinite(requiredCount) || requiredCount <= 1;
+  if (
+    isSingleWorkerJob &&
+    (Boolean(job.acceptedApplicationId) || Boolean(job.acceptedWorkerUid) || job.status === 'in_progress')
+  ) {
+    return true;
+  }
+  return false;
+}
+
 export interface EligibilityWorkerInput {
   ownerUid: string;
   displayName: string;
@@ -458,6 +512,9 @@ export interface EligibilityWorkerInput {
   availabilityStatus: string;
   preferredLanguage?: Language;
   preferredRadiusKm?: number;
+  lastConfirmedJobAtMs?: number;
+  confirmedJobsCount?: number;
+  createdAtMs?: number;
 }
 
 export interface EligibilityJobInput {
@@ -466,6 +523,9 @@ export interface EligibilityJobInput {
   requiredSkills: string[];
   district: string;
   cityOrVillage?: string;
+  approxLocationLabel?: string;
+  workLocationLabel?: string;
+  pincode?: string;
   lat: number;
   lng: number;
 }
@@ -493,6 +553,109 @@ export interface WorkerEligibilityEvaluation {
     | 'outside_radius';
   distanceKm: number | null;
   effectiveRadiusLimitKm: number;
+  samePincode: boolean;
+  sameCity: boolean;
+  sameDistrict: boolean;
+}
+
+export interface FairRotationCandidate {
+  ownerUid: string;
+  lastConfirmedJobAtMs?: number;
+  confirmedJobsCount?: number;
+  samePincode?: boolean;
+  sameCity?: boolean;
+  sameDistrict?: boolean;
+  distanceKm?: number | null;
+  createdAtMs?: number;
+}
+
+export function normalizeConfirmedTimestampMs(value: unknown): number {
+  const num = Number(value);
+  return Number.isFinite(num) && num > 0 ? num : 0;
+}
+
+export function normalizeConfirmedJobsCount(value: unknown): number {
+  const num = Number(value);
+  return Number.isFinite(num) && num > 0 ? Math.floor(num) : 0;
+}
+
+/**
+ * Ranks eligible workers for fair turn-based dispatch based ONLY on confirmed jobs:
+ * 1. Workers who have NEVER confirmed a job (lastConfirmedJobAtMs === 0) come first,
+ *    followed by workers who went longest without a confirmed job (oldest timestamp first).
+ * 2. Fewer total confirmed jobs come first.
+ * 3. Closer local match (same pincode > same city > same district > shorter distance).
+ * 4. Deterministic tie-breaker (earlier account creation, then UID).
+ *
+ * IMPORTANT: Receiving an alert or declining/missing an alert NEVER updates these counters,
+ * so workers are never pushed back in rotation unless they actually confirm a job.
+ */
+export function rankWorkersForFairRotation<T extends FairRotationCandidate>(entries: readonly T[]): T[] {
+  return [...entries].sort((a, b) => {
+    const aLastMs = normalizeConfirmedTimestampMs(a.lastConfirmedJobAtMs);
+    const bLastMs = normalizeConfirmedTimestampMs(b.lastConfirmedJobAtMs);
+    if (aLastMs !== bLastMs) {
+      return aLastMs - bLastMs;
+    }
+
+    const aCount = normalizeConfirmedJobsCount(a.confirmedJobsCount);
+    const bCount = normalizeConfirmedJobsCount(b.confirmedJobsCount);
+    if (aCount !== bCount) {
+      return aCount - bCount;
+    }
+
+    const aPin = a.samePincode ? 1 : 0;
+    const bPin = b.samePincode ? 1 : 0;
+    if (aPin !== bPin) return bPin - aPin;
+
+    const aCity = a.sameCity ? 1 : 0;
+    const bCity = b.sameCity ? 1 : 0;
+    if (aCity !== bCity) return bCity - aCity;
+
+    const aDistMatch = a.sameDistrict ? 1 : 0;
+    const bDistMatch = b.sameDistrict ? 1 : 0;
+    if (aDistMatch !== bDistMatch) return bDistMatch - aDistMatch;
+
+    const aDist = typeof a.distanceKm === 'number' && Number.isFinite(a.distanceKm) ? a.distanceKm : Number.POSITIVE_INFINITY;
+    const bDist = typeof b.distanceKm === 'number' && Number.isFinite(b.distanceKm) ? b.distanceKm : Number.POSITIVE_INFINITY;
+    if (aDist !== bDist) return aDist - bDist;
+
+    const aCreated = normalizeConfirmedTimestampMs(a.createdAtMs);
+    const bCreated = normalizeConfirmedTimestampMs(b.createdAtMs);
+    if (aCreated !== bCreated) {
+      if (aCreated === 0) return 1;
+      if (bCreated === 0) return -1;
+      return aCreated - bCreated;
+    }
+
+    return String(a.ownerUid || '').localeCompare(String(b.ownerUid || ''));
+  });
+}
+
+export function selectNextFairRotationBatch<T extends FairRotationCandidate>(
+  rankedEntries: readonly T[],
+  options?: {
+    batchSize?: number;
+    alreadyNotifiedUids?: ReadonlySet<string> | readonly string[];
+  }
+): {
+  batch: T[];
+  remainingCount: number;
+  totalEligibleCount: number;
+} {
+  const batchSize = resolveRotationBatchSize(1, options?.batchSize ?? DEFAULT_ROTATION_BATCH_SIZE);
+  const excludedSet =
+    options?.alreadyNotifiedUids instanceof Set
+      ? options.alreadyNotifiedUids
+      : new Set(Array.isArray(options?.alreadyNotifiedUids) ? options.alreadyNotifiedUids : []);
+
+  const unnotified = rankedEntries.filter((entry) => Boolean(entry.ownerUid) && !excludedSet.has(entry.ownerUid));
+  const batch = unnotified.slice(0, batchSize);
+  return {
+    batch,
+    remainingCount: Math.max(0, unnotified.length - batch.length),
+    totalEligibleCount: unnotified.length,
+  };
 }
 
 export function evaluateWorkerEligibilityForJob(params: {
@@ -504,20 +667,37 @@ export function evaluateWorkerEligibilityForJob(params: {
 }): WorkerEligibilityEvaluation {
   const { job, worker, pref, stageRadiusKm, alreadyNotifiedUids } = params;
 
+  const baseMiss = (
+    reason: WorkerEligibilityEvaluation['reason'],
+    distanceKm: number | null = null,
+    effectiveRadiusLimitKm: number = stageRadiusKm,
+    samePincode = false,
+    sameCity = false,
+    sameDistrict = false
+  ): WorkerEligibilityEvaluation => ({
+    eligible: false,
+    reason,
+    distanceKm,
+    effectiveRadiusLimitKm,
+    samePincode,
+    sameCity,
+    sameDistrict,
+  });
+
   if (!worker.ownerUid || (job.employerUid && worker.ownerUid === job.employerUid)) {
-    return { eligible: false, reason: 'self_employer', distanceKm: null, effectiveRadiusLimitKm: stageRadiusKm };
+    return baseMiss('self_employer');
   }
   if (alreadyNotifiedUids?.has(worker.ownerUid)) {
-    return { eligible: false, reason: 'already_notified', distanceKm: null, effectiveRadiusLimitKm: stageRadiusKm };
+    return baseMiss('already_notified');
   }
   if (worker.verificationStatus === 'suspended') {
-    return { eligible: false, reason: 'suspended', distanceKm: null, effectiveRadiusLimitKm: stageRadiusKm };
+    return baseMiss('suspended');
   }
   if (worker.availabilityStatus !== 'available') {
-    return { eligible: false, reason: 'not_available', distanceKm: null, effectiveRadiusLimitKm: stageRadiusKm };
+    return baseMiss('not_available');
   }
   if (pref && (pref.masterEnabled === false || pref.matchingJobs === false)) {
-    return { eligible: false, reason: 'notifications_disabled', distanceKm: null, effectiveRadiusLimitKm: stageRadiusKm };
+    return baseMiss('notifications_disabled');
   }
 
   const categoryMatched = doesCategoryMatch(
@@ -528,12 +708,21 @@ export function evaluateWorkerEligibilityForJob(params: {
     pref?.preferredCategories
   );
   if (!categoryMatched) {
-    return { eligible: false, reason: 'category_mismatch', distanceKm: null, effectiveRadiusLimitKm: stageRadiusKm };
+    return baseMiss('category_mismatch');
   }
 
   const workerMaxRadius = normalizeRadiusKm(pref?.preferredRadiusKm ?? worker.preferredRadiusKm ?? 30, 30);
   const normalizedStage = normalizeRadiusKm(stageRadiusKm, 2);
   const effectiveRadius = Math.min(normalizedStage, workerMaxRadius);
+
+  const jobPincode =
+    extractSixDigitPincode(job.pincode) ||
+    extractSixDigitPincode(job.cityOrVillage) ||
+    extractSixDigitPincode(job.approxLocationLabel) ||
+    extractSixDigitPincode(job.workLocationLabel);
+  const workerPincode =
+    extractSixDigitPincode(worker.cityOrVillage) || extractSixDigitPincode(worker.district);
+  const samePincode = Boolean(jobPincode && workerPincode && jobPincode === workerPincode);
 
   const sameCity =
     Boolean(job.cityOrVillage && worker.cityOrVillage) &&
@@ -547,6 +736,7 @@ export function evaluateWorkerEligibilityForJob(params: {
   if (distKm !== null) {
     if (
       distKm <= effectiveRadius ||
+      (samePincode && distKm <= Math.max(effectiveRadius, 25)) ||
       (sameCity && normalizedStage >= 5 && distKm <= Math.max(effectiveRadius, 12)) ||
       (sameDistrict && normalizedStage >= 20 && workerMaxRadius >= 20 && distKm <= 120)
     ) {
@@ -555,30 +745,26 @@ export function evaluateWorkerEligibilityForJob(params: {
         reason: 'matched',
         distanceKm: distKm,
         effectiveRadiusLimitKm: effectiveRadius,
+        samePincode,
+        sameCity,
+        sameDistrict,
       };
     }
-    return {
-      eligible: false,
-      reason: 'outside_radius',
-      distanceKm: distKm,
-      effectiveRadiusLimitKm: effectiveRadius,
-    };
+    return baseMiss('outside_radius', distKm, effectiveRadius, samePincode, sameCity, sameDistrict);
   }
 
-  // Fallback when worker lacks valid GPS coordinates: match same city immediately or same district from stage >= 10 km
-  if (sameCity || (sameDistrict && normalizedStage >= 10)) {
+  // Fallback when worker lacks valid GPS coordinates: match same pincode or same city immediately, or same district from stage >= 10 km
+  if (samePincode || sameCity || (sameDistrict && normalizedStage >= 10)) {
     return {
       eligible: true,
       reason: 'matched',
       distanceKm: null,
       effectiveRadiusLimitKm: effectiveRadius,
+      samePincode,
+      sameCity,
+      sameDistrict,
     };
   }
 
-  return {
-    eligible: false,
-    reason: 'outside_radius',
-    distanceKm: null,
-    effectiveRadiusLimitKm: effectiveRadius,
-  };
+  return baseMiss('outside_radius', null, effectiveRadius, samePincode, sameCity, sameDistrict);
 }

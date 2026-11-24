@@ -21,6 +21,7 @@ import { auth, db, handleFirestoreError, OperationType } from './firebase';
 import { grantAcceptedCustomerPhoto } from './photoStorageService';
 import { normalizeTenDigitIndianMobile } from './pinAuth';
 import {
+  DEFAULT_ROTATION_BATCH_SIZE,
   SERVICE_RADIUS_STAGES,
   buildApproxLocationLabel,
   buildSmartJobNotificationContent,
@@ -28,8 +29,12 @@ import {
   doesCategoryMatch,
   evaluateWorkerEligibilityForJob,
   getNextRadiusStage,
+  isJobConfirmationClosed,
   normalizeCategoryToken,
   normalizeRadiusKm,
+  rankWorkersForFairRotation,
+  resolveRotationBatchSize,
+  selectNextFairRotationBatch,
 } from './smartVoiceJobAlert';
 import {
   formatMaskedBridgeCode,
@@ -767,6 +772,71 @@ export async function createJobPosting(
   }
 }
 
+function extractTimestampMs(value: unknown): number {
+  if (typeof value === 'number' && Number.isFinite(value) && value > 0) return value;
+  if (value && typeof value === 'object') {
+    const maybeObj = value as { toMillis?: () => number; seconds?: number };
+    if (typeof maybeObj.toMillis === 'function') {
+      const ms = maybeObj.toMillis();
+      if (Number.isFinite(ms) && ms > 0) return ms;
+    }
+    if (typeof maybeObj.seconds === 'number' && Number.isFinite(maybeObj.seconds) && maybeObj.seconds > 0) {
+      return maybeObj.seconds * 1000;
+    }
+  }
+  return 0;
+}
+
+/**
+ * Updates a worker's fair-rotation position ONLY when a job is genuinely confirmed.
+ * Idempotent per applicationId (re-confirming the same application never double-increments).
+ * NEVER call this when dispatching alerts or when a worker misses/declines a notification.
+ */
+export async function recordWorkerConfirmedJobRotation(params: {
+  workerUid: string;
+  applicationId: string;
+  confirmedAtMs?: number;
+}): Promise<boolean> {
+  const { workerUid, applicationId, confirmedAtMs } = params;
+  if (!workerUid || !applicationId) return false;
+
+  try {
+    const workerRef = doc(db, 'publicWorkers', workerUid);
+    const workerSnap = await getDoc(workerRef);
+    if (!workerSnap.exists()) return false;
+
+    const data = workerSnap.data() as Partial<PublicWorkerProfile>;
+    if (data.lastConfirmedApplicationId === applicationId) {
+      return false;
+    }
+
+    const prevCount =
+      typeof data.confirmedJobsCount === 'number' &&
+      Number.isFinite(data.confirmedJobsCount) &&
+      data.confirmedJobsCount >= 0
+        ? Math.floor(data.confirmedJobsCount)
+        : 0;
+    const prevLastMs =
+      typeof data.lastConfirmedJobAtMs === 'number' &&
+      Number.isFinite(data.lastConfirmedJobAtMs) &&
+      data.lastConfirmedJobAtMs >= 0
+        ? Math.floor(data.lastConfirmedJobAtMs)
+        : 0;
+    const nextConfirmedMs = Math.max(prevLastMs, Math.floor(confirmedAtMs ?? Date.now()));
+
+    await updateDoc(workerRef, {
+      confirmedJobsCount: prevCount + 1,
+      lastConfirmedJobAtMs: nextConfirmedMs,
+      lastConfirmedApplicationId: applicationId.slice(0, 140),
+      updatedAt: serverTimestamp(),
+    });
+    return true;
+  } catch {
+    // Non-blocking: never break deal confirmation flow if rotation metadata sync fails
+    return false;
+  }
+}
+
 export type SmartBroadcastJobInput = Pick<
   JobPosting,
   | 'employerUid'
@@ -789,7 +859,29 @@ export type SmartBroadcastJobInput = Pick<
   approxLocationLabel?: string;
   initialRadiusKm?: ServiceRadiusKm;
   currentRadiusKm?: ServiceRadiusKm;
+  workersRequired?: number;
+  status?: JobPosting['status'];
+  dealStatus?: DealStatus;
+  acceptedApplicationId?: string;
+  acceptedWorkerUid?: string;
+  dispatchBatchIndex?: number;
+  dispatchBatchSize?: number;
+  lastBatchDispatchedAtMs?: number;
+  eligiblePoolCount?: number;
 };
+
+export interface SmartBroadcastBatchResult {
+  notifiedCount: number;
+  finalRadiusKm: ServiceRadiusKm;
+  hasNextStage: boolean;
+  hasNextBatch: boolean;
+  remainingEligibleCount: number;
+  batchIndex: number;
+  totalEligibleCount: number;
+  newlyNotifiedUids: string[];
+  notifiedWorkerUids: string[];
+  closed: boolean;
+}
 
 export async function broadcastSmartJobAlerts(params: {
   jobId: string;
@@ -798,12 +890,9 @@ export async function broadcastSmartJobAlerts(params: {
   alreadyNotifiedUids?: string[];
   stageRadiusKm?: ServiceRadiusKm;
   autoExpandIfEmpty?: boolean;
-}): Promise<{
-  notifiedCount: number;
-  finalRadiusKm: ServiceRadiusKm;
-  hasNextStage: boolean;
-  notifiedWorkerUids: string[];
-}> {
+  batchSize?: number;
+  dedupeSuffix?: string;
+}): Promise<SmartBroadcastBatchResult> {
   const {
     jobId,
     job,
@@ -811,6 +900,8 @@ export async function broadcastSmartJobAlerts(params: {
     alreadyNotifiedUids = [],
     stageRadiusKm,
     autoExpandIfEmpty = true,
+    batchSize,
+    dedupeSuffix,
   } = params;
 
   const seenUids = new Set(alreadyNotifiedUids.filter(Boolean));
@@ -818,6 +909,29 @@ export async function broadcastSmartJobAlerts(params: {
     stageRadiusKm ?? job.currentRadiusKm ?? job.initialRadiusKm ?? 2,
     2
   );
+  const resolvedBatchSize = resolveRotationBatchSize(
+    job.workersRequired,
+    batchSize ?? job.dispatchBatchSize ?? DEFAULT_ROTATION_BATCH_SIZE
+  );
+  const priorBatchIndex =
+    typeof job.dispatchBatchIndex === 'number' && Number.isFinite(job.dispatchBatchIndex) && job.dispatchBatchIndex >= 0
+      ? Math.floor(job.dispatchBatchIndex)
+      : 0;
+
+  if (isJobConfirmationClosed(job)) {
+    return {
+      notifiedCount: 0,
+      finalRadiusKm: activeRadius,
+      hasNextStage: false,
+      hasNextBatch: false,
+      remainingEligibleCount: 0,
+      batchIndex: priorBatchIndex,
+      totalEligibleCount: 0,
+      newlyNotifiedUids: [],
+      notifiedWorkerUids: Array.from(seenUids),
+      closed: true,
+    };
+  }
 
   const evaluateAtStage = (radiusKm: ServiceRadiusKm) =>
     workers
@@ -829,6 +943,8 @@ export async function broadcastSmartJobAlerts(params: {
             requiredSkills: job.requiredSkills || [],
             district: job.district,
             cityOrVillage: job.cityOrVillage,
+            approxLocationLabel: job.approxLocationLabel,
+            workLocationLabel: job.workLocationLabel,
             lat: Number(job.lat),
             lng: Number(job.lng),
           },
@@ -845,11 +961,25 @@ export async function broadcastSmartJobAlerts(params: {
             availabilityStatus: w.availabilityStatus,
             preferredLanguage: w.preferredLanguage,
             preferredRadiusKm: w.preferredRadiusKm,
+            lastConfirmedJobAtMs: w.lastConfirmedJobAtMs,
+            confirmedJobsCount: w.confirmedJobsCount,
+            createdAtMs: extractTimestampMs(w.createdAt),
           },
           stageRadiusKm: radiusKm,
           alreadyNotifiedUids: seenUids,
         });
-        return { worker: w, evalRes };
+        return {
+          ownerUid: w.ownerUid,
+          worker: w,
+          evalRes,
+          lastConfirmedJobAtMs: w.lastConfirmedJobAtMs,
+          confirmedJobsCount: w.confirmedJobsCount,
+          samePincode: evalRes.samePincode,
+          sameCity: evalRes.sameCity,
+          sameDistrict: evalRes.sameDistrict,
+          distanceKm: evalRes.distanceKm,
+          createdAtMs: extractTimestampMs(w.createdAt),
+        };
       })
       .filter((entry) => entry.evalRes.eligible);
 
@@ -864,6 +994,12 @@ export async function broadcastSmartJobAlerts(params: {
     }
   }
 
+  const rankedEntries = rankWorkersForFairRotation(matchedEntries);
+  const batchSelection = selectNextFairRotationBatch(rankedEntries, {
+    batchSize: resolvedBatchSize,
+    alreadyNotifiedUids: seenUids,
+  });
+
   const approxLocLabel =
     job.approxLocationLabel ||
     buildApproxLocationLabel({
@@ -874,10 +1010,12 @@ export async function broadcastSmartJobAlerts(params: {
   const wageSummary = job.offeredWage > 0 ? `₹${job.offeredWage}/${job.wageUnit}` : '';
 
   const notifiedUids: string[] = [...alreadyNotifiedUids];
+  const newlyNotifiedUids: string[] = [];
   let dispatchedCount = 0;
 
-  for (const { worker: w, evalRes } of matchedEntries.slice(0, 40)) {
+  for (const { worker: w, evalRes } of batchSelection.batch) {
     notifiedUids.push(w.ownerUid);
+    newlyNotifiedUids.push(w.ownerUid);
     dispatchedCount += 1;
 
     const workerLang: Language = w.preferredLanguage || 'en';
@@ -916,14 +1054,26 @@ export async function broadcastSmartJobAlerts(params: {
       metadataLabel: `${job.category} · ${approxLocLabel}${evalRes.distanceKm !== null ? ` (~${evalRes.distanceKm} km)` : ''}${wageSummary ? ` · ${wageSummary}` : ''}`,
       targetRoute: 'worker-dashboard',
       targetJobId: jobId,
-      dedupeKey: sanitizeSafeId(`job_${jobId}_${w.ownerUid}`),
+      dedupeKey: sanitizeSafeId(`job_${jobId}_${w.ownerUid}${dedupeSuffix ? `_${dedupeSuffix}` : ''}`),
     });
   }
 
   const mergedNotified = Array.from(new Set(notifiedUids)).slice(0, 100);
+  const mergedNotifiedSet = new Set(mergedNotified);
+  const nextBatchIndex = dispatchedCount > 0 ? Math.min(50, priorBatchIndex + 1) : priorBatchIndex;
+  const totalPoolEstimate = Math.min(500, seenUids.size + batchSelection.totalEligibleCount);
+  const remainingBeyondCurrentRadius =
+    batchSelection.remainingCount > 0
+      ? batchSelection.remainingCount
+      : evaluateAtStage(30).filter((entry) => !mergedNotifiedSet.has(entry.ownerUid)).length;
+
   await updateDoc(doc(db, 'jobs', jobId), {
     currentRadiusKm: activeRadius,
     radiusStageUpdatedAt: serverTimestamp(),
+    dispatchBatchIndex: nextBatchIndex,
+    dispatchBatchSize: resolvedBatchSize,
+    lastBatchDispatchedAtMs: Date.now(),
+    eligiblePoolCount: totalPoolEstimate,
     ...(dispatchedCount > 0 ? { dealStatus: 'NOTIFIED', notifiedWorkerUids: mergedNotified } : {}),
     updatedAt: serverTimestamp(),
   }).catch(() => undefined);
@@ -932,7 +1082,13 @@ export async function broadcastSmartJobAlerts(params: {
     notifiedCount: dispatchedCount,
     finalRadiusKm: activeRadius,
     hasNextStage: getNextRadiusStage(activeRadius) !== null,
+    hasNextBatch: remainingBeyondCurrentRadius > 0,
+    remainingEligibleCount: remainingBeyondCurrentRadius,
+    batchIndex: nextBatchIndex,
+    totalEligibleCount: batchSelection.totalEligibleCount,
+    newlyNotifiedUids,
     notifiedWorkerUids: mergedNotified,
+    closed: false,
   };
 }
 
@@ -943,23 +1099,34 @@ export async function notifyMatchingWorkersInApp(params: {
   alreadyNotifiedUids?: string[];
   stageRadiusKm?: ServiceRadiusKm;
   autoExpandIfEmpty?: boolean;
+  batchSize?: number;
 }): Promise<number> {
   const res = await broadcastSmartJobAlerts(params);
   return res.notifiedCount;
 }
 
-export async function expandJobSearchRadius(params: {
+/**
+ * Dispatches the next fair-rotation batch of workers if the job is still open & unconfirmed.
+ * Stops immediately once a worker confirms the job. If all eligible workers in the current
+ * radius have been notified, cleanly advances to the next radius stage and notifies its top batch.
+ */
+export async function dispatchNextJobBatch(params: {
   job: JobPosting;
   workers: PublicWorkerProfile[];
-  targetRadiusKm?: ServiceRadiusKm;
+  batchSize?: number;
 }): Promise<{
+  closed: boolean;
   previousRadiusKm: ServiceRadiusKm;
   currentRadiusKm: ServiceRadiusKm;
-  hasNextStage: boolean;
+  batchIndex: number;
   newlyNotifiedCount: number;
+  newlyNotifiedUids: string[];
+  remainingEligibleCount: number;
+  hasNextBatch: boolean;
+  hasNextStage: boolean;
   totalNotifiedCount: number;
 }> {
-  const { job, workers, targetRadiusKm } = params;
+  const { job, workers, batchSize } = params;
   let freshJob: JobPosting = job;
 
   try {
@@ -972,11 +1139,284 @@ export async function expandJobSearchRadius(params: {
   }
 
   const prevRadius = normalizeRadiusKm(freshJob.currentRadiusKm ?? freshJob.initialRadiusKm ?? 2, 2);
-  const nextRadius = targetRadiusKm ?? getNextRadiusStage(prevRadius);
-
   const existingNotified = Array.isArray(freshJob.notifiedWorkerUids)
     ? freshJob.notifiedWorkerUids
     : [];
+
+  if (isJobConfirmationClosed(freshJob)) {
+    return {
+      closed: true,
+      previousRadiusKm: prevRadius,
+      currentRadiusKm: prevRadius,
+      batchIndex: Number(freshJob.dispatchBatchIndex) || 0,
+      newlyNotifiedCount: 0,
+      newlyNotifiedUids: [],
+      remainingEligibleCount: 0,
+      hasNextBatch: false,
+      hasNextStage: false,
+      totalNotifiedCount: existingNotified.length,
+    };
+  }
+
+  const resolvedBatchSize = resolveRotationBatchSize(
+    freshJob.workersRequired,
+    batchSize ?? freshJob.dispatchBatchSize ?? DEFAULT_ROTATION_BATCH_SIZE
+  );
+
+  // 1) Try next un-notified batch in the SAME radius first
+  let broadcastResult = await broadcastSmartJobAlerts({
+    jobId: freshJob.id,
+    job: freshJob,
+    workers,
+    alreadyNotifiedUids: existingNotified,
+    stageRadiusKm: prevRadius,
+    autoExpandIfEmpty: false,
+    batchSize: resolvedBatchSize,
+  });
+
+  // 2) If current radius pool is exhausted, advance to the next radius stage automatically
+  if (broadcastResult.notifiedCount === 0 && !broadcastResult.closed) {
+    const nextStage = getNextRadiusStage(prevRadius);
+    if (nextStage) {
+      broadcastResult = await broadcastSmartJobAlerts({
+        jobId: freshJob.id,
+        job: freshJob,
+        workers,
+        alreadyNotifiedUids: existingNotified,
+        stageRadiusKm: nextStage,
+        autoExpandIfEmpty: true,
+        batchSize: resolvedBatchSize,
+      });
+    }
+  }
+
+  // Trigger server FCM push for the exact newly selected fair-rotation batch
+  if (broadcastResult.newlyNotifiedUids.length > 0 && !broadcastResult.closed) {
+    void callNotificationApi('/api/notifications/expand-job-radius', {
+      jobId: freshJob.id,
+      targetRadiusKm: broadcastResult.finalRadiusKm,
+      targetWorkerUids: broadcastResult.newlyNotifiedUids,
+      allowSameRadiusBatch: true,
+      batchSize: resolvedBatchSize,
+    }).catch(() => undefined);
+  }
+
+  return {
+    closed: broadcastResult.closed,
+    previousRadiusKm: prevRadius,
+    currentRadiusKm: broadcastResult.finalRadiusKm,
+    batchIndex: broadcastResult.batchIndex,
+    newlyNotifiedCount: broadcastResult.notifiedCount,
+    newlyNotifiedUids: broadcastResult.newlyNotifiedUids,
+    remainingEligibleCount: broadcastResult.remainingEligibleCount,
+    hasNextBatch: broadcastResult.hasNextBatch,
+    hasNextStage: broadcastResult.hasNextStage,
+    totalNotifiedCount: broadcastResult.notifiedWorkerUids.length,
+  };
+}
+
+/**
+ * Computes how many eligible un-notified workers remain across all radius stages (up to 30 km).
+ * Used to determine whether all eligible batches for an open job have been exhausted.
+ */
+export function countRemainingEligibleWorkersForJob(
+  job: JobPosting,
+  workers: PublicWorkerProfile[]
+): number {
+  if (isJobConfirmationClosed(job)) return 0;
+  const seenUids = new Set(
+    Array.isArray(job.notifiedWorkerUids) ? job.notifiedWorkerUids.filter(Boolean) : []
+  );
+  let count = 0;
+  for (const w of workers) {
+    const evalRes = evaluateWorkerEligibilityForJob({
+      job: {
+        employerUid: job.employerUid,
+        category: job.category,
+        requiredSkills: job.requiredSkills || [],
+        district: job.district,
+        cityOrVillage: job.cityOrVillage,
+        approxLocationLabel: job.approxLocationLabel,
+        workLocationLabel: job.workLocationLabel,
+        lat: Number(job.lat),
+        lng: Number(job.lng),
+      },
+      worker: {
+        ownerUid: w.ownerUid,
+        displayName: w.displayName,
+        primarySkill: w.primarySkill,
+        skills: w.skills || [],
+        district: w.district,
+        cityOrVillage: w.cityOrVillage,
+        approxLat: w.approxLat,
+        approxLng: w.approxLng,
+        verificationStatus: w.verificationStatus,
+        availabilityStatus: w.availabilityStatus,
+        preferredLanguage: w.preferredLanguage,
+        preferredRadiusKm: w.preferredRadiusKm,
+        lastConfirmedJobAtMs: w.lastConfirmedJobAtMs,
+        confirmedJobsCount: w.confirmedJobsCount,
+        createdAtMs: extractTimestampMs(w.createdAt),
+      },
+      stageRadiusKm: 30,
+      alreadyNotifiedUids: seenUids,
+    });
+    if (evalRes.eligible) count += 1;
+  }
+  return count;
+}
+
+/**
+ * Restarts a fresh fair-rotation dispatch cycle for an open unconfirmed job when all batches
+ * timed out without a confirmation. NEVER alters any worker's rotation timestamp/count.
+ */
+export async function retryJobFairRotationDispatch(params: {
+  job: JobPosting;
+  workers: PublicWorkerProfile[];
+  batchSize?: number;
+}): Promise<{
+  closed: boolean;
+  currentRadiusKm: ServiceRadiusKm;
+  batchIndex: number;
+  notifiedCount: number;
+  newlyNotifiedUids: string[];
+  remainingEligibleCount: number;
+  hasNextBatch: boolean;
+  totalNotifiedCount: number;
+}> {
+  const { job, workers, batchSize } = params;
+  let freshJob: JobPosting = job;
+
+  try {
+    const freshSnap = await getDoc(doc(db, 'jobs', job.id));
+    if (freshSnap.exists()) {
+      freshJob = { id: freshSnap.id, ...freshSnap.data() } as JobPosting;
+    }
+  } catch {
+    // Fallback to passed snapshot
+  }
+
+  const initialRadius = normalizeRadiusKm(freshJob.initialRadiusKm ?? 2, 2);
+  if (isJobConfirmationClosed(freshJob)) {
+    return {
+      closed: true,
+      currentRadiusKm: normalizeRadiusKm(freshJob.currentRadiusKm ?? initialRadius, initialRadius),
+      batchIndex: Number(freshJob.dispatchBatchIndex) || 0,
+      notifiedCount: 0,
+      newlyNotifiedUids: [],
+      remainingEligibleCount: 0,
+      hasNextBatch: false,
+      totalNotifiedCount: Array.isArray(freshJob.notifiedWorkerUids)
+        ? freshJob.notifiedWorkerUids.length
+        : 0,
+    };
+  }
+
+  const resolvedBatchSize = resolveRotationBatchSize(
+    freshJob.workersRequired,
+    batchSize ?? freshJob.dispatchBatchSize ?? DEFAULT_ROTATION_BATCH_SIZE
+  );
+  const retryTag = `r${Math.floor(Date.now() / 1000)}`;
+
+  // Reset only the job's dispatch tracking fields (workers' rotation positions remain untouched)
+  await updateDoc(doc(db, 'jobs', freshJob.id), {
+    notifiedWorkerUids: [],
+    dispatchBatchIndex: 0,
+    dispatchBatchSize: resolvedBatchSize,
+    currentRadiusKm: initialRadius,
+    lastBatchDispatchedAtMs: Date.now(),
+    radiusStageUpdatedAt: serverTimestamp(),
+    dealStatus: 'REQUESTED',
+    updatedAt: serverTimestamp(),
+  }).catch(() => undefined);
+
+  const resetJob: JobPosting = {
+    ...freshJob,
+    notifiedWorkerUids: [],
+    dispatchBatchIndex: 0,
+    currentRadiusKm: initialRadius,
+  };
+
+  const broadcastResult = await broadcastSmartJobAlerts({
+    jobId: freshJob.id,
+    job: resetJob,
+    workers,
+    alreadyNotifiedUids: [],
+    stageRadiusKm: initialRadius,
+    autoExpandIfEmpty: true,
+    batchSize: resolvedBatchSize,
+    dedupeSuffix: retryTag,
+  });
+
+  if (broadcastResult.newlyNotifiedUids.length > 0 && !broadcastResult.closed) {
+    void callNotificationApi('/api/notifications/send-matching-job', {
+      jobId: freshJob.id,
+      stageRadiusKm: broadcastResult.finalRadiusKm,
+      targetWorkerUids: broadcastResult.newlyNotifiedUids,
+      forceRetry: true,
+      dedupeSuffix: retryTag,
+      batchSize: resolvedBatchSize,
+    }).catch(() => undefined);
+  }
+
+  return {
+    closed: broadcastResult.closed,
+    currentRadiusKm: broadcastResult.finalRadiusKm,
+    batchIndex: broadcastResult.batchIndex,
+    notifiedCount: broadcastResult.notifiedCount,
+    newlyNotifiedUids: broadcastResult.newlyNotifiedUids,
+    remainingEligibleCount: broadcastResult.remainingEligibleCount,
+    hasNextBatch: broadcastResult.hasNextBatch,
+    totalNotifiedCount: broadcastResult.notifiedWorkerUids.length,
+  };
+}
+
+export async function expandJobSearchRadius(params: {
+  job: JobPosting;
+  workers: PublicWorkerProfile[];
+  targetRadiusKm?: ServiceRadiusKm;
+  batchSize?: number;
+}): Promise<{
+  previousRadiusKm: ServiceRadiusKm;
+  currentRadiusKm: ServiceRadiusKm;
+  hasNextStage: boolean;
+  newlyNotifiedCount: number;
+  totalNotifiedCount: number;
+  remainingEligibleCount?: number;
+  batchIndex?: number;
+  closed?: boolean;
+}> {
+  const { job, workers, targetRadiusKm, batchSize } = params;
+  let freshJob: JobPosting = job;
+
+  try {
+    const freshSnap = await getDoc(doc(db, 'jobs', job.id));
+    if (freshSnap.exists()) {
+      freshJob = { id: freshSnap.id, ...freshSnap.data() } as JobPosting;
+    }
+  } catch {
+    // Fallback to passed snapshot
+  }
+
+  const prevRadius = normalizeRadiusKm(freshJob.currentRadiusKm ?? freshJob.initialRadiusKm ?? 2, 2);
+  const existingNotified = Array.isArray(freshJob.notifiedWorkerUids)
+    ? freshJob.notifiedWorkerUids
+    : [];
+
+  if (isJobConfirmationClosed(freshJob)) {
+    return {
+      previousRadiusKm: prevRadius,
+      currentRadiusKm: prevRadius,
+      hasNextStage: false,
+      newlyNotifiedCount: 0,
+      totalNotifiedCount: existingNotified.length,
+      remainingEligibleCount: 0,
+      batchIndex: Number(freshJob.dispatchBatchIndex) || 0,
+      closed: true,
+    };
+  }
+
+  const nextRadius = targetRadiusKm ?? getNextRadiusStage(prevRadius);
 
   if (!nextRadius || nextRadius <= prevRadius) {
     return {
@@ -985,8 +1425,16 @@ export async function expandJobSearchRadius(params: {
       hasNextStage: false,
       newlyNotifiedCount: 0,
       totalNotifiedCount: existingNotified.length,
+      remainingEligibleCount: 0,
+      batchIndex: Number(freshJob.dispatchBatchIndex) || 0,
+      closed: false,
     };
   }
+
+  const resolvedBatchSize = resolveRotationBatchSize(
+    freshJob.workersRequired,
+    batchSize ?? freshJob.dispatchBatchSize ?? DEFAULT_ROTATION_BATCH_SIZE
+  );
 
   const broadcastResult = await broadcastSmartJobAlerts({
     jobId: freshJob.id,
@@ -995,12 +1443,18 @@ export async function expandJobSearchRadius(params: {
     alreadyNotifiedUids: existingNotified,
     stageRadiusKm: nextRadius,
     autoExpandIfEmpty: false,
+    batchSize: resolvedBatchSize,
   });
 
-  // Trigger server FCM push for newly eligible workers cleanly without blocking UI
+  // Trigger server FCM push for newly eligible fair-rotation batch cleanly without blocking UI
   void callNotificationApi('/api/notifications/expand-job-radius', {
     jobId: freshJob.id,
     targetRadiusKm: nextRadius,
+    ...(broadcastResult.newlyNotifiedUids.length > 0
+      ? { targetWorkerUids: broadcastResult.newlyNotifiedUids }
+      : {}),
+    allowSameRadiusBatch: true,
+    batchSize: resolvedBatchSize,
   }).catch(() => undefined);
 
   return {
@@ -1009,6 +1463,9 @@ export async function expandJobSearchRadius(params: {
     hasNextStage: getNextRadiusStage(nextRadius) !== null,
     newlyNotifiedCount: broadcastResult.notifiedCount,
     totalNotifiedCount: broadcastResult.notifiedWorkerUids.length,
+    remainingEligibleCount: broadcastResult.remainingEligibleCount,
+    batchIndex: broadcastResult.batchIndex,
+    closed: broadcastResult.closed,
   };
 }
 
@@ -1018,7 +1475,16 @@ export async function createInstantHireRequest(
   inviteNote?: string,
   idempotencyKey?: string,
   allMatchingWorkersPool?: PublicWorkerProfile[]
-): Promise<{ jobId: string; invitedCount: number; notifiedCount: number; finalRadiusKm?: ServiceRadiusKm }> {
+): Promise<{
+  jobId: string;
+  invitedCount: number;
+  notifiedCount: number;
+  finalRadiusKm?: ServiceRadiusKm;
+  newlyNotifiedUids?: string[];
+  batchIndex?: number;
+  remainingEligibleCount?: number;
+  hasNextBatch?: boolean;
+}> {
   const safeKey = idempotencyKey ? idempotencyKey.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120) : '';
   let alreadyExisted = false;
   if (safeKey && safeKey.length >= 8) {
@@ -1160,9 +1626,14 @@ export async function createInstantHireRequest(
     }
   }
 
-  // Broadcast category-wise staged voice job alerts when broadcasting to eligible workers
+  // Broadcast fair-rotation small-batch voice job alerts when broadcasting to eligible workers
   let extraNotified = 0;
   let finalRadiusKm: ServiceRadiusKm = initialStageKm;
+  let newlyNotifiedUids: string[] = selectedWorkers.map((w) => w.ownerUid);
+  let batchIndex = selectedWorkers.length > 0 ? 1 : 0;
+  let remainingEligibleCount = 0;
+  let hasNextBatch = false;
+
   if (allMatchingWorkersPool && allMatchingWorkersPool.length > 0 && selectedWorkers.length === 0) {
     const broadcastRes = await broadcastSmartJobAlerts({
       jobId,
@@ -1178,6 +1649,10 @@ export async function createInstantHireRequest(
     });
     extraNotified = broadcastRes.notifiedCount;
     finalRadiusKm = broadcastRes.finalRadiusKm;
+    newlyNotifiedUids = broadcastRes.newlyNotifiedUids;
+    batchIndex = broadcastRes.batchIndex;
+    remainingEligibleCount = broadcastRes.remainingEligibleCount;
+    hasNextBatch = broadcastRes.hasNextBatch;
   }
 
   return {
@@ -1185,6 +1660,10 @@ export async function createInstantHireRequest(
     invitedCount: selectedWorkers.length,
     notifiedCount: selectedWorkers.length + extraNotified,
     finalRadiusKm,
+    newlyNotifiedUids,
+    batchIndex,
+    remainingEligibleCount,
+    hasNextBatch,
   };
 }
 
@@ -1314,6 +1793,19 @@ export async function submitWorkerOffer(params: {
     offerMessage,
     existingApplicationId,
   } = params;
+
+  // Immediately block new offers if this job was already confirmed by another worker
+  if (isJobConfirmationClosed(job)) {
+    throw new Error('This job has already been confirmed by another worker.');
+  }
+  const latestJobSnap = await getDoc(doc(db, 'jobs', job.id)).catch(() => null);
+  if (latestJobSnap?.exists()) {
+    const latestJob = latestJobSnap.data() as JobPosting;
+    if (isJobConfirmationClosed(latestJob) && latestJob.acceptedWorkerUid !== workerUid) {
+      throw new Error('This job has already been confirmed by another worker.');
+    }
+  }
+
   const price = Math.max(1, Math.round(Number(offeredPrice) || job.offeredWage || worker.expectedWage || 100));
   const safeTravel =
     typeof travelCharges === 'number' && Number.isFinite(travelCharges) && travelCharges > 0
@@ -1398,15 +1890,43 @@ export async function respondToHiringInvite(params: {
   jobLocationLabel?: string;
 }): Promise<void> {
   const { app, decision, workerName, jobLocationLabel } = params;
+  // Prevent duplicate confirmation clicks
+  if (
+    decision === 'accepted' &&
+    (app.status === 'accepted' || app.dealStatus === 'DEAL_CONFIRMED' || app.dealStatus === 'WORK_IN_PROGRESS')
+  ) {
+    return;
+  }
+
   const nextDealStatus: DealStatus = decision === 'accepted' ? 'DEAL_CONFIRMED' : 'CANCELLED';
   const path = `applications/${app.id}`;
 
   try {
+    let isSingleWorkerOrder = true;
+    if (decision === 'accepted') {
+      const jobSnap = await getDoc(doc(db, 'jobs', app.jobId)).catch(() => null);
+      if (jobSnap?.exists()) {
+        const jobData = jobSnap.data() as JobPosting;
+        const requiredCount = Number(jobData.workersRequired) || 1;
+        isSingleWorkerOrder = requiredCount <= 1;
+        if (
+          isSingleWorkerOrder &&
+          ((jobData.acceptedApplicationId && jobData.acceptedApplicationId !== app.id) ||
+            (jobData.acceptedWorkerUid && jobData.acceptedWorkerUid !== app.workerUid) ||
+            (isJobConfirmationClosed(jobData) && jobData.acceptedWorkerUid !== app.workerUid))
+        ) {
+          throw new Error('Another worker has already confirmed this job.');
+        }
+      }
+    }
+
     await updateDoc(doc(db, 'applications', app.id), {
       status: decision,
       dealStatus: nextDealStatus,
       liveTrackingAuthorized: decision === 'accepted',
-      ...(decision === 'accepted' ? { dealConfirmedAt: serverTimestamp() } : { cancelledAt: serverTimestamp(), cancelledByUid: app.workerUid }),
+      ...(decision === 'accepted'
+        ? { dealConfirmedAt: serverTimestamp() }
+        : { cancelledAt: serverTimestamp(), cancelledByUid: app.workerUid }),
       updatedAt: serverTimestamp(),
     });
 
@@ -1418,6 +1938,41 @@ export async function respondToHiringInvite(params: {
         acceptedWorkerUid: app.workerUid,
         updatedAt: serverTimestamp(),
       }).catch(() => undefined);
+
+      // Update fair rotation ONLY when this worker genuinely confirms the job
+      await recordWorkerConfirmedJobRotation({
+        workerUid: app.workerUid,
+        applicationId: app.id,
+      });
+
+      // Close competing pending invitations/offers on single-worker jobs immediately
+      if (isSingleWorkerOrder) {
+        try {
+          const siblingSnap = await getDocs(
+            query(
+              collection(db, 'applications'),
+              where('employerUid', '==', app.employerUid),
+              where('jobId', '==', app.jobId)
+            )
+          );
+          for (const sibDoc of siblingSnap.docs) {
+            if (sibDoc.id === app.id) continue;
+            const sibData = sibDoc.data() as JobApplication;
+            if (sibData.status === 'applied' || sibData.status === 'invited') {
+              await updateDoc(doc(db, 'applications', sibDoc.id), {
+                status: 'declined',
+                dealStatus: 'REJECTED',
+                liveTrackingAuthorized: false,
+                cancelledAt: serverTimestamp(),
+                cancelledByUid: app.workerUid,
+                updatedAt: serverTimestamp(),
+              }).catch(() => undefined);
+            }
+          }
+        } catch {
+          // Non-blocking safeguard (worker may not have list permission on sibling docs)
+        }
+      }
     }
 
     await dispatchTwoWayDealNotification({
@@ -1450,6 +2005,9 @@ export async function respondToHiringInvite(params: {
       },
     });
   } catch (err) {
+    if (err instanceof Error && err.message.includes('Another worker has already confirmed')) {
+      throw err;
+    }
     handleFirestoreError(err, OperationType.UPDATE, path);
   }
 }
@@ -1522,6 +2080,12 @@ export async function respondToWorkerOffer(params: {
         acceptedWorkerUid: app.workerUid,
         updatedAt: serverTimestamp(),
       }).catch(() => undefined);
+
+      // Update fair rotation ONLY when this worker's job is genuinely confirmed
+      await recordWorkerConfirmedJobRotation({
+        workerUid: app.workerUid,
+        applicationId: app.id,
+      });
 
       // For single-worker orders, automatically close/decline competing pending offers so multiple workers cannot be accepted
       if (isSingleWorkerOrder) {
@@ -1655,6 +2219,7 @@ export async function confirmDealByParticipant(params: {
 
   try {
     await updateDoc(doc(db, 'applications', app.id), {
+      status: 'accepted',
       dealStatus: 'DEAL_CONFIRMED',
       dealConfirmedAt: serverTimestamp(),
       ...(actorRole === 'worker' ? { liveTrackingAuthorized: true } : { agreedPrice, liveTrackingAuthorized: true }),
@@ -1664,8 +2229,16 @@ export async function confirmDealByParticipant(params: {
     await updateDoc(doc(db, 'jobs', app.jobId), {
       dealStatus: 'DEAL_CONFIRMED',
       status: 'in_progress',
+      acceptedApplicationId: app.id,
+      acceptedWorkerUid: app.workerUid,
       updatedAt: serverTimestamp(),
     }).catch(() => undefined);
+
+    // Update fair rotation ONLY when this worker's job is genuinely confirmed (idempotent per applicationId)
+    await recordWorkerConfirmedJobRotation({
+      workerUid: app.workerUid,
+      applicationId: app.id,
+    });
 
     const counterpartyUid = actorRole === 'customer' ? app.workerUid : app.employerUid;
     const counterpartyRole = actorRole === 'customer' ? 'worker' : 'employer';
