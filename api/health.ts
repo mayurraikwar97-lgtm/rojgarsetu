@@ -13,8 +13,10 @@ export default function handler(req: ServerlessRequest, res: ServerlessResponse)
 
   if (mode === 'public-config') {
     const mapsApiKey = (process.env.VITE_GOOGLE_MAPS_API_KEY || process.env.GOOGLE_MAPS_API_KEY || '').trim();
+    const firebaseVapidKey = (process.env.VITE_FIREBASE_VAPID_KEY || process.env.FIREBASE_VAPID_KEY || '').trim();
     sendJson(res, 200, {
       mapsApiKey,
+      firebaseVapidKey,
       smsGatewayConfigured: otp.smsProviderConfigured,
       otp,
     });

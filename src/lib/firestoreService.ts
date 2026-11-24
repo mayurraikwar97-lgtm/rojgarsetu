@@ -2868,8 +2868,8 @@ export function subscribeUserNotifications(
     (snap) => {
       const list = snap.docs.map((d) => ({ id: d.id, ...d.data() } as AppNotificationRecord));
       list.sort((a, b) => {
-        const ta = (a.createdAt as { seconds?: number })?.seconds ?? 0;
-        const tb = (b.createdAt as { seconds?: number })?.seconds ?? 0;
+        const ta = (a.createdAt as { seconds?: number } | null)?.seconds ?? Number.MAX_SAFE_INTEGER;
+        const tb = (b.createdAt as { seconds?: number } | null)?.seconds ?? Number.MAX_SAFE_INTEGER;
         return tb - ta;
       });
       onData(list);

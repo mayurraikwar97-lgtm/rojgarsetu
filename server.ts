@@ -366,9 +366,11 @@ async function startServer() {
 
   app.get('/api/public-config', (_req: Request, res: Response) => {
     const mapsApiKey = getMapsApiKey();
+    const firebaseVapidKey = (process.env.VITE_FIREBASE_VAPID_KEY || process.env.FIREBASE_VAPID_KEY || '').trim();
     const otpConfig = getOtpPublicConfig();
     res.json({
       mapsApiKey,
+      firebaseVapidKey,
       smsGatewayConfigured: otpConfig.smsProviderConfigured,
       otp: otpConfig,
     });

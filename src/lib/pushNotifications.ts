@@ -1,23 +1,28 @@
 import {
+  collection,
   doc,
+  getDoc,
   getDocs,
   query,
   serverTimestamp,
   setDoc,
   updateDoc,
   where,
-  collection,
 } from 'firebase/firestore';
 import { deleteToken, getToken, onMessage } from 'firebase/messaging';
-import { getFirebaseVapidKey } from './appConfig';
+import { getFirebaseVapidKey, resolveFirebaseVapidKey } from './appConfig';
 import { db, getFirebaseMessaging } from './firebase';
 import type { Language, NotificationPreferences, NotificationToneType } from '../types/domain';
 import { getToneTypeForEvent } from './dealWorkflow';
+
+const FCM_SW_URL = '/firebase-messaging-sw.js';
+const FCM_SW_SCOPE = '/firebase-cloud-messaging-push-scope';
 
 export interface PushOptInResult {
   ok: boolean;
   reason?:
     | 'UNSUPPORTED'
+    | 'IOS_REQUIRES_PWA'
     | 'PERMISSION_DENIED'
     | 'PERMISSION_DISMISSED'
     | 'MISSING_VAPID_KEY'
@@ -33,26 +38,50 @@ export interface BrowserNotificationState {
   permission: NotificationPermission | 'unsupported';
   hasVapidKey: boolean;
   isStandalone: boolean;
+  isIOS: boolean;
+  requiresIOSHomeScreen: boolean;
+}
+
+function tr(lang: Language, en: string, hi: string, mr: string): string {
+  return lang === 'hi' ? hi : lang === 'mr' ? mr : en;
+}
+
+function detectIsIOS(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /iphone|ipad|ipod/i.test(navigator.userAgent);
+}
+
+function detectIsStandalone(): boolean {
+  if (typeof window === 'undefined') return false;
+  return (
+    window.matchMedia('(display-mode: standalone)').matches ||
+    (window.navigator as unknown as { standalone?: boolean }).standalone === true
+  );
 }
 
 export function getBrowserNotificationState(): BrowserNotificationState {
-  if (typeof window === 'undefined' || !('Notification' in window)) {
+  const isIOS = detectIsIOS();
+  const isStandalone = detectIsStandalone();
+  const requiresIOSHomeScreen = isIOS && !isStandalone;
+
+  if (typeof window === 'undefined' || !('Notification' in window) || !('serviceWorker' in navigator)) {
     return {
       supported: false,
       permission: 'unsupported',
       hasVapidKey: Boolean(getFirebaseVapidKey()),
-      isStandalone: false,
+      isStandalone,
+      isIOS,
+      requiresIOSHomeScreen,
     };
   }
-  const isStandalone =
-    window.matchMedia('(display-mode: standalone)').matches ||
-    (window.navigator as unknown as { standalone?: boolean }).standalone === true;
 
   return {
-    supported: true,
+    supported: !requiresIOSHomeScreen,
     permission: Notification.permission,
     hasVapidKey: Boolean(getFirebaseVapidKey()),
     isStandalone,
+    isIOS,
+    requiresIOSHomeScreen,
   };
 }
 
@@ -90,16 +119,79 @@ function hashTokenDocId(uid: string, token: string): string {
   return `${cleanUid}_${hash.toString(16)}`;
 }
 
+/**
+ * Waits for a specific ServiceWorkerRegistration (e.g. /firebase-messaging-sw.js)
+ * to finish installing/activating so getToken() never races against a fresh install.
+ */
+async function waitForServiceWorkerActive(
+  swReg: ServiceWorkerRegistration,
+  timeoutMs = 8000
+): Promise<ServiceWorkerRegistration> {
+  if (swReg.active && swReg.active.state === 'activated') {
+    return swReg;
+  }
+
+  const candidate = swReg.installing || swReg.waiting || swReg.active;
+  if (!candidate) return swReg;
+
+  if (candidate.state === 'activated') return swReg;
+
+  await new Promise<void>((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      candidate.removeEventListener('statechange', onStateChange);
+      window.clearTimeout(timer);
+      resolve();
+    };
+    const onStateChange = () => {
+      if (candidate.state === 'activated' || candidate.state === 'redundant') {
+        finish();
+      }
+    };
+    const timer = window.setTimeout(finish, timeoutMs);
+    candidate.addEventListener('statechange', onStateChange);
+  });
+
+  return swReg;
+}
+
+/**
+ * Registers (or reuses & updates) the dedicated Firebase Cloud Messaging service worker
+ * and ensures it is active before token generation.
+ */
+export async function getOrRegisterMessagingServiceWorker(): Promise<ServiceWorkerRegistration> {
+  if (typeof navigator === 'undefined' || !('serviceWorker' in navigator)) {
+    throw new Error('Service Worker API is unavailable in this browser.');
+  }
+
+  let swReg = await navigator.serviceWorker.getRegistration(FCM_SW_SCOPE);
+  if (!swReg) {
+    swReg = await navigator.serviceWorker.register(FCM_SW_URL, {
+      scope: FCM_SW_SCOPE,
+      updateViaCache: 'none',
+    });
+  } else {
+    // Non-blocking background update check so SW fixes propagate promptly
+    void swReg.update().catch(() => undefined);
+  }
+
+  return waitForServiceWorkerActive(swReg);
+}
+
+/**
+ * Upserts notification_preferences/{uid} using single-document getDoc (compliant with
+ * Firestore security rules where `list` is admin-only and `get` is owner-allowed).
+ */
 export async function ensureNotificationPreferencesDoc(
   uid: string,
   language: Language,
   masterEnabled: boolean
 ): Promise<void> {
   const ref = doc(db, 'notification_preferences', uid);
-  const snap = await getDocs(
-    query(collection(db, 'notification_preferences'), where('ownerUid', '==', uid))
-  );
-  if (snap.empty) {
+  const existing = await getDoc(ref);
+  if (!existing.exists()) {
     const initial: Omit<NotificationPreferences, 'id'> = {
       ownerUid: uid,
       masterEnabled,
@@ -127,6 +219,54 @@ export async function ensureNotificationPreferencesDoc(
   }
 }
 
+async function upsertDeviceTokenDoc(params: {
+  uid: string;
+  role: 'worker' | 'employer' | 'admin' | 'demo_worker';
+  language: Language;
+  fcmToken: string;
+  isDemo: boolean;
+  demoAccountId?: string;
+}): Promise<string> {
+  const tokenId = hashTokenDocId(params.uid, params.fcmToken);
+  const meta = detectTokenClientMeta();
+  const tokenDocRef = doc(db, 'device_tokens', tokenId);
+
+  const existingSnap = await getDoc(tokenDocRef);
+  if (existingSnap.exists()) {
+    await updateDoc(tokenDocRef, {
+      role: params.role,
+      isDemo: params.isDemo,
+      ...(params.demoAccountId ? { demoAccountId: params.demoAccountId } : {}),
+      token: params.fcmToken,
+      platform: meta.platform,
+      browser: meta.browser,
+      preferredLanguage: params.language,
+      enabled: true,
+      userAgentShort: meta.userAgentShort,
+      lastSeenAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } else {
+    await setDoc(tokenDocRef, {
+      ownerUid: params.uid,
+      role: params.role,
+      isDemo: params.isDemo,
+      ...(params.demoAccountId ? { demoAccountId: params.demoAccountId } : {}),
+      token: params.fcmToken,
+      platform: meta.platform,
+      browser: meta.browser,
+      preferredLanguage: params.language,
+      enabled: true,
+      userAgentShort: meta.userAgentShort,
+      lastSeenAt: serverTimestamp(),
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  }
+
+  return tokenId;
+}
+
 export async function enablePushNotificationsForUser(params: {
   uid: string;
   role: 'worker' | 'employer' | 'admin' | 'demo_worker';
@@ -136,12 +276,30 @@ export async function enablePushNotificationsForUser(params: {
 }): Promise<PushOptInResult> {
   const { uid, role, language, isDemo = false, demoAccountId } = params;
 
+  const state = getBrowserNotificationState();
+  if (state.requiresIOSHomeScreen) {
+    return {
+      ok: false,
+      reason: 'IOS_REQUIRES_PWA',
+      message: tr(
+        language,
+        'On iPhone/iPad, tap Share → Add to Home Screen first, then open ROJGAR SETU from your Home Screen to enable background push notifications.',
+        'iPhone/iPad पर पहले Share → Add to Home Screen करें, फिर Home Screen से ROJGAR SETU खोलकर बैकग्राउंड पुश सूचनाएं चालू करें।',
+        'iPhone/iPad वर आधी Share → Add to Home Screen करा, नंतर Home Screen वरून ROJGAR SETU उघडून बॅकग्राउंड पुश सूचना सुरू करा.'
+      ),
+    };
+  }
+
   if (typeof window === 'undefined' || !('Notification' in window) || !('serviceWorker' in navigator)) {
     return {
       ok: false,
       reason: 'UNSUPPORTED',
-      message:
+      message: tr(
+        language,
         'This browser does not support Web Push notifications. Use Chrome on Android/Desktop or Safari (16.4+ installed to Home Screen) on iPhone.',
+        'यह ब्राउज़र वेब पुश सूचनाओं का समर्थन नहीं करता। कृपया Android/Desktop पर Chrome या iPhone पर Home Screen ऐप का उपयोग करें।',
+        'हा ब्राउझर वेब पुश सूचनांना सपोर्ट करत नाही. कृपया Android/Desktop वर Chrome किंवा iPhone वर Home Screen अ‍ॅप वापरा.'
+      ),
     };
   }
 
@@ -149,34 +307,50 @@ export async function enablePushNotificationsForUser(params: {
     return {
       ok: false,
       reason: 'PERMISSION_DENIED',
-      message:
+      message: tr(
+        language,
         'Notification permission is blocked in your browser settings. Open Site Settings → Notifications → Allow for ROJGAR SETU.',
+        'ब्राउज़र सेटिंग्स में सूचनाएं ब्लॉक हैं। कृपया Site Settings → Notifications → Allow चुनें।',
+        'ब्राउझर सेटिंग्जमध्ये सूचना ब्लॉक केल्या आहेत. कृपया Site Settings → Notifications → Allow करा.'
+      ),
     };
   }
 
-  const permission = await Notification.requestPermission();
+  const permission =
+    Notification.permission === 'granted' ? 'granted' : await Notification.requestPermission();
   if (permission !== 'granted') {
     return {
       ok: false,
       reason: 'PERMISSION_DISMISSED',
-      message: 'Notification permission was not granted. You can enable it anytime when ready.',
+      message: tr(
+        language,
+        'Notification permission was not granted. You can enable it anytime when ready.',
+        'सूचना अनुमति नहीं दी गई। आप जब चाहें इसे फिर से चालू कर सकते हैं।',
+        'सूचनांची परवानगी दिली गेली नाही. तुम्ही कधीही पुन्हा सुरू करू शकता.'
+      ),
     };
   }
 
+  let preferenceSaved = false;
   try {
     await ensureNotificationPreferencesDoc(uid, language, true);
+    preferenceSaved = true;
   } catch (err) {
     console.warn('Could not save notification preferences:', err);
   }
 
-  const vapidKey = getFirebaseVapidKey();
+  const vapidKey = await resolveFirebaseVapidKey();
   if (!vapidKey) {
     return {
       ok: false,
       reason: 'MISSING_VAPID_KEY',
-      preferenceSaved: true,
-      message:
-        'Notification preferences saved, but VITE_FIREBASE_VAPID_KEY is not configured yet for Web Push token generation.',
+      preferenceSaved,
+      message: tr(
+        language,
+        'In-app alerts are active, but VITE_FIREBASE_VAPID_KEY is not configured yet for background Web Push tokens.',
+        'इन-ऐप अलर्ट चालू हैं, लेकिन बैकग्राउंड वेब पुश टोकन के लिए VITE_FIREBASE_VAPID_KEY अभी सेट नहीं है।',
+        'इन-अ‍ॅप अलर्ट सुरू आहेत, पण बॅकग्राउंड वेब पुशसाठी VITE_FIREBASE_VAPID_KEY अद्याप सेट केलेली नाही.'
+      ),
     };
   }
 
@@ -185,23 +359,24 @@ export async function enablePushNotificationsForUser(params: {
     return {
       ok: false,
       reason: 'UNSUPPORTED',
-      preferenceSaved: true,
-      message:
-        'Firebase Messaging is unavailable in this browser context. On iPhone, first add ROJGAR SETU to Home Screen via Safari.',
+      preferenceSaved,
+      message: tr(
+        language,
+        'Firebase Messaging is unavailable in this browser context. On iPhone, open ROJGAR SETU from your Home Screen.',
+        'इस ब्राउज़र में Firebase Messaging उपलब्ध नहीं है। iPhone पर Home Screen से ऐप खोलें।',
+        'या ब्राउझरमध्ये Firebase Messaging उपलब्ध नाही. iPhone वर Home Screen वरून अ‍ॅप उघडा.'
+      ),
     };
   }
 
   let swReg: ServiceWorkerRegistration;
   try {
-    swReg = await navigator.serviceWorker.register('/firebase-messaging-sw.js', {
-      scope: '/firebase-cloud-messaging-push-scope',
-    });
-    await navigator.serviceWorker.ready;
+    swReg = await getOrRegisterMessagingServiceWorker();
   } catch (err) {
     return {
       ok: false,
       reason: 'SW_ERROR',
-      preferenceSaved: true,
+      preferenceSaved,
       message: err instanceof Error ? err.message : 'Service worker registration failed.',
     };
   }
@@ -215,51 +390,24 @@ export async function enablePushNotificationsForUser(params: {
       return {
         ok: false,
         reason: 'TOKEN_ERROR',
-        preferenceSaved: true,
-        message: 'Browser did not return a push token. Please verify HTTPS and VAPID configuration.',
+        preferenceSaved,
+        message: tr(
+          language,
+          'Browser did not return a push token. Please verify HTTPS and VAPID configuration.',
+          'ब्राउज़र से पुश टोकन प्राप्त नहीं हुआ। कृपया HTTPS और VAPID कॉन्फ़िगरेशन जांचें।',
+          'ब्राउझरकडून पुश टोकन मिळाले नाही. कृपया HTTPS आणि VAPID सेटिंग तपासा.'
+        ),
       };
     }
 
-    const tokenId = hashTokenDocId(uid, fcmToken);
-    const meta = detectTokenClientMeta();
-    const tokenDocRef = doc(db, 'device_tokens', tokenId);
-
-    const existingSnap = await getDocs(
-      query(collection(db, 'device_tokens'), where('ownerUid', '==', uid))
-    );
-    const existingSelf = existingSnap.docs.find((d) => d.id === tokenId);
-
-    if (existingSelf) {
-      await updateDoc(tokenDocRef, {
-        role,
-        isDemo,
-        ...(demoAccountId ? { demoAccountId } : {}),
-        token: fcmToken,
-        platform: meta.platform,
-        browser: meta.browser,
-        preferredLanguage: language,
-        enabled: true,
-        userAgentShort: meta.userAgentShort,
-        lastSeenAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-    } else {
-      await setDoc(tokenDocRef, {
-        ownerUid: uid,
-        role,
-        isDemo,
-        ...(demoAccountId ? { demoAccountId } : {}),
-        token: fcmToken,
-        platform: meta.platform,
-        browser: meta.browser,
-        preferredLanguage: language,
-        enabled: true,
-        userAgentShort: meta.userAgentShort,
-        lastSeenAt: serverTimestamp(),
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-    }
+    await upsertDeviceTokenDoc({
+      uid,
+      role,
+      language,
+      fcmToken,
+      isDemo,
+      demoAccountId,
+    });
 
     if (isDemo && demoAccountId) {
       try {
@@ -276,28 +424,37 @@ export async function enablePushNotificationsForUser(params: {
     return {
       ok: true,
       token: fcmToken,
-      preferenceSaved: true,
-      message: 'Mobile push notifications are now active on this device.',
+      preferenceSaved,
+      message: tr(
+        language,
+        'Background & live push notifications are now active on this device.',
+        'इस डिवाइस पर लाइव और बैकग्राउंड पुश सूचनाएं अब चालू हो गई हैं।',
+        'या डिव्हाइसवर लाइव्ह आणि बॅकग्राउंड पुश सूचना आता सुरू झाल्या आहेत.'
+      ),
     };
   } catch (err) {
     return {
       ok: false,
       reason: 'TOKEN_ERROR',
-      preferenceSaved: true,
+      preferenceSaved,
       message: err instanceof Error ? err.message : 'Unable to register FCM device token.',
     };
   }
 }
 
+let lastSilentSyncAt = 0;
+let lastSilentSyncUid = '';
+
 /**
- * Silently refreshes and saves the user's FCM device token on login / app load
- * ONLY when browser Notification permission is already 'granted' (no permission prompt).
- * Keeps worker & customer device tokens fresh so background / screen-off push delivery stays reliable.
+ * Silently refreshes and saves the user's FCM device token on login / app load / foreground resume
+ * ONLY when browser Notification permission is already 'granted' (never triggers a prompt).
+ * Keeps worker & customer device tokens fresh so background / closed-app push delivery stays reliable.
  */
 export async function syncPushTokenSilentlyIfGranted(params: {
   uid: string;
   role: 'worker' | 'employer' | 'admin' | 'demo_worker';
   language: Language;
+  force?: boolean;
 }): Promise<boolean> {
   if (
     typeof window === 'undefined' ||
@@ -308,17 +465,19 @@ export async function syncPushTokenSilentlyIfGranted(params: {
     return false;
   }
 
-  const vapidKey = getFirebaseVapidKey();
+  const now = Date.now();
+  if (!params.force && lastSilentSyncUid === params.uid && now - lastSilentSyncAt < 5 * 60 * 1000) {
+    return true;
+  }
+
+  const vapidKey = await resolveFirebaseVapidKey();
   if (!vapidKey) return false;
 
   try {
     const messaging = await getFirebaseMessaging();
     if (!messaging) return false;
 
-    const swReg = await navigator.serviceWorker.register('/firebase-messaging-sw.js', {
-      scope: '/firebase-cloud-messaging-push-scope',
-    });
-    await navigator.serviceWorker.ready;
+    const swReg = await getOrRegisterMessagingServiceWorker();
 
     const fcmToken = await getToken(messaging, {
       vapidKey,
@@ -326,44 +485,16 @@ export async function syncPushTokenSilentlyIfGranted(params: {
     });
     if (!fcmToken) return false;
 
-    const tokenId = hashTokenDocId(params.uid, fcmToken);
-    const meta = detectTokenClientMeta();
-    const tokenDocRef = doc(db, 'device_tokens', tokenId);
+    await upsertDeviceTokenDoc({
+      uid: params.uid,
+      role: params.role,
+      language: params.language,
+      fcmToken,
+      isDemo: false,
+    });
 
-    const existingSnap = await getDocs(
-      query(collection(db, 'device_tokens'), where('ownerUid', '==', params.uid))
-    );
-    const existingSelf = existingSnap.docs.find((d) => d.id === tokenId);
-
-    if (existingSelf) {
-      await updateDoc(tokenDocRef, {
-        role: params.role,
-        isDemo: false,
-        token: fcmToken,
-        platform: meta.platform,
-        browser: meta.browser,
-        preferredLanguage: params.language,
-        enabled: true,
-        userAgentShort: meta.userAgentShort,
-        lastSeenAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-    } else {
-      await setDoc(tokenDocRef, {
-        ownerUid: params.uid,
-        role: params.role,
-        isDemo: false,
-        token: fcmToken,
-        platform: meta.platform,
-        browser: meta.browser,
-        preferredLanguage: params.language,
-        enabled: true,
-        userAgentShort: meta.userAgentShort,
-        lastSeenAt: serverTimestamp(),
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-    }
+    lastSilentSyncAt = Date.now();
+    lastSilentSyncUid = params.uid;
     return true;
   } catch (err) {
     console.warn('Silent push token sync skipped:', err);
@@ -373,11 +504,10 @@ export async function syncPushTokenSilentlyIfGranted(params: {
 
 export async function disablePushNotificationsForUser(uid: string): Promise<void> {
   try {
-    const prefSnap = await getDocs(
-      query(collection(db, 'notification_preferences'), where('ownerUid', '==', uid))
-    );
-    if (!prefSnap.empty) {
-      await updateDoc(doc(db, 'notification_preferences', uid), {
+    const prefRef = doc(db, 'notification_preferences', uid);
+    const prefSnap = await getDoc(prefRef);
+    if (prefSnap.exists()) {
+      await updateDoc(prefRef, {
         masterEnabled: false,
         updatedAt: serverTimestamp(),
       });
@@ -425,13 +555,13 @@ export async function disableCurrentDeviceTokenOnLogout(uid: string): Promise<vo
   ) {
     return;
   }
-  const vapidKey = getFirebaseVapidKey();
+  const vapidKey = await resolveFirebaseVapidKey();
   if (!vapidKey) return;
 
   try {
     const messaging = await getFirebaseMessaging();
     if (!messaging) return;
-    const swReg = await navigator.serviceWorker.getRegistration('/firebase-cloud-messaging-push-scope');
+    const swReg = await navigator.serviceWorker.getRegistration(FCM_SW_SCOPE);
     if (!swReg) return;
     const currentToken = await getToken(messaging, {
       vapidKey,
@@ -451,22 +581,26 @@ export async function disableCurrentDeviceTokenOnLogout(uid: string): Promise<vo
   }
 }
 
+export interface ForegroundPushPayload {
+  notificationId?: string;
+  dedupeKey?: string;
+  title: string;
+  body: string;
+  route?: string;
+  jobId?: string;
+  demoJobId?: string;
+  lang?: Language;
+  voiceScript?: string;
+  approxLocationLabel?: string;
+  distanceKm?: number;
+  toneType?: NotificationToneType;
+  eventType?: string;
+  playSound?: boolean;
+  speakVoice?: boolean;
+}
+
 export async function subscribeForegroundPush(
-  onReceive: (payload: {
-    title: string;
-    body: string;
-    route?: string;
-    jobId?: string;
-    demoJobId?: string;
-    lang?: Language;
-    voiceScript?: string;
-    approxLocationLabel?: string;
-    distanceKm?: number;
-    toneType?: NotificationToneType;
-    eventType?: string;
-    playSound?: boolean;
-    speakVoice?: boolean;
-  }) => void
+  onReceive: (payload: ForegroundPushPayload) => void
 ): Promise<() => void> {
   const messaging = await getFirebaseMessaging();
   if (!messaging) return () => undefined;
@@ -481,6 +615,8 @@ export async function subscribeForegroundPush(
       eventType: payload.data?.eventType,
     });
     onReceive({
+      notificationId: payload.data?.notificationId || undefined,
+      dedupeKey: payload.data?.dedupeKey || undefined,
       title,
       body,
       route: payload.data?.route,

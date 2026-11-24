@@ -14,6 +14,10 @@ import {
 } from '../lib/adsReferralService';
 import { detectBestGpsLocation } from '../lib/locationService';
 import {
+  getOtpFraudWarningLocalized,
+  isWorkerRegistrationOtpEnabled,
+} from '../lib/otpFeatureFlags';
+import {
   buildWorkerPhotoDocId,
   deleteProfilePhotoRecord,
   uploadProfilePhotoRecord,
@@ -76,6 +80,8 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
 }) => {
   const { lang, t } = useLanguage();
   const { user, authError, clearAuthError, workerProfile, workerPrivate, signInWithGoogle, refreshUserProfiles } = useAuth();
+  const workerOtpRequired = isWorkerRegistrationOtpEnabled();
+  const fraudWarning = getOtpFraudWarningLocalized(lang);
   const authBannerRef = useRef<HTMLDivElement | null>(null);
   const errorBoxRef = useRef<HTMLDivElement | null>(null);
 
@@ -375,7 +381,7 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
       failValidation('Please enter a valid 10-digit Indian mobile number starting with 6–9.');
       return null;
     }
-    if (!mobileVerified) {
+    if (workerOtpRequired && !mobileVerified) {
       failValidation(
         'Please complete mobile OTP verification before submitting. (If live SMS is unavailable, use authorized Demo Registration Mode for pre-launch testing.)'
       );
@@ -1165,29 +1171,73 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
           </div>
         </div>
 
+        <div
+          role="note"
+          className="rounded-lg bg-amber-50 border border-amber-300 px-3.5 py-2.5 text-xs text-amber-950 flex items-start gap-2.5"
+        >
+          <ShieldAlert className="w-4 h-4 text-[#B45309] shrink-0 mt-0.5" />
+          <div className="space-y-0.5 leading-relaxed">
+            <p className="font-bold text-amber-950">{fraudWarning.primaryMr}</p>
+            {fraudWarning.secondaryLocalized && (
+              <p className="text-[11px] font-medium text-amber-900">{fraudWarning.secondaryLocalized}</p>
+            )}
+          </div>
+        </div>
+
         <div>
           <label className="block text-xs font-semibold text-slate-700 mb-1">
             {t.workerForm.mobile} *
           </label>
-          <OtpVerificationBox
-            mobile={mobile}
-            allowTestPinFallback={false}
-            onOpenDemoMode={() => onNavigate('demo-testing')}
-            onMobileChange={(v) => {
-              setMobile(v);
-              setMobileVerified(false);
-              setVerificationMethod(undefined);
-              setTestPinHash('');
-            }}
-            verified={mobileVerified}
-            verifiedMethod={verificationMethod}
-            onVerified={(m, meta) => {
-              setMobile(m);
-              setMobileVerified(true);
-              setVerificationMethod(meta?.method);
-              setTestPinHash(meta?.testPinHash || '');
-            }}
-          />
+          {workerOtpRequired ? (
+            <OtpVerificationBox
+              mobile={mobile}
+              allowTestPinFallback={false}
+              onOpenDemoMode={() => onNavigate('demo-testing')}
+              onMobileChange={(v) => {
+                setMobile(v);
+                setMobileVerified(false);
+                setVerificationMethod(undefined);
+                setTestPinHash('');
+              }}
+              verified={mobileVerified}
+              verifiedMethod={verificationMethod}
+              onVerified={(m, meta) => {
+                setMobile(m);
+                setMobileVerified(true);
+                setVerificationMethod(meta?.method);
+                setTestPinHash(meta?.testPinHash || '');
+              }}
+            />
+          ) : (
+            <div className="space-y-1.5">
+              <div className="relative">
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-mono-tabular font-semibold text-slate-500">
+                  +91
+                </span>
+                <input
+                  type="tel"
+                  inputMode="numeric"
+                  autoComplete="tel-national"
+                  maxLength={10}
+                  required
+                  value={mobile}
+                  onChange={(e) => {
+                    const digits = e.target.value.replace(/\D/g, '').slice(0, 10);
+                    setMobile(digits);
+                  }}
+                  placeholder="98XXXXXXXX"
+                  className="w-full pl-11 pr-3 py-2 border border-slate-300 rounded-md text-sm font-mono-tabular focus:outline-none focus:ring-2 focus:ring-[#0B3B75]"
+                />
+              </div>
+              <p className="text-[11px] text-slate-500">
+                {lang === 'mr'
+                  ? '१० अंकी मोबाईल क्रमांक टाका — नोंदणीसाठी कोणताही ओटीपी किंवा कॉल पडताळणी लागत नाही.'
+                  : lang === 'hi'
+                  ? '10 अंकों का मोबाइल नंबर दर्ज करें — पंजीकरण के लिए किसी OTP या कॉल सत्यापन की आवश्यकता नहीं है।'
+                  : 'Enter your 10-digit Indian mobile number — no OTP or call verification is required to register.'}
+              </p>
+            </div>
+          )}
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
@@ -2054,6 +2104,19 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
                 </span>
               </p>
             )}
+
+            <div
+              role="note"
+              className="rounded-lg bg-amber-50 border border-amber-300 px-3.5 py-2.5 text-xs text-amber-950 flex items-start gap-2"
+            >
+              <ShieldAlert className="w-4 h-4 text-[#B45309] shrink-0 mt-0.5" />
+              <div className="space-y-0.5 leading-relaxed">
+                <p className="font-bold text-amber-950">{fraudWarning.primaryMr}</p>
+                {fraudWarning.secondaryLocalized && (
+                  <p className="text-[11px] font-medium text-amber-900">{fraudWarning.secondaryLocalized}</p>
+                )}
+              </div>
+            </div>
 
             {errorMsg && (
               <div

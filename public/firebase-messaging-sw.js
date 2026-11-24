@@ -2,6 +2,14 @@
 importScripts('https://www.gstatic.com/firebasejs/11.6.1/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/11.6.1/firebase-messaging-compat.js');
 
+self.addEventListener('install', () => {
+  self.skipWaiting();
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil(self.clients.claim());
+});
+
 firebase.initializeApp({
   apiKey: 'AIzaSyBsz6oLTCJstiNNXU5YR-J-AIQP4cuYmOA',
   authDomain: 'gen-lang-client-0174765083.firebaseapp.com',
@@ -48,10 +56,9 @@ function getSwTagPrefix(toneType) {
 
 messaging.onBackgroundMessage((payload) => {
   // CRITICAL: When FCM sends top-level `notification` / `webpush.notification`,
-  // Chrome/Android automatically displays the OS notification with sound & vibration
-  // (even when the screen is off / app is backgrounded). Calling showNotification again
-  // here would create duplicates or override OS sound channels. Only render manually
-  // for data-only background messages.
+  // Chrome/Android/Safari automatically displays the OS notification with sound & vibration
+  // (even when the screen is off or browser is closed). Calling showNotification again
+  // here would create duplicate alerts. Only render manually for data-only background messages.
   if (payload && payload.notification) {
     return;
   }
@@ -60,8 +67,9 @@ messaging.onBackgroundMessage((payload) => {
   const title = data.title || 'ROJGAR SETU';
   const body = data.body || 'New update on ROJGAR SETU.';
   const toneType = data.toneType || 'general';
-  const baseTag = data.dedupeKey || data.jobId || data.demoJobId || 'alert';
-  const tag = `${getSwTagPrefix(toneType)}-${baseTag}`;
+  const dedupeKey = data.dedupeKey || data.notificationId || '';
+  const baseTag = dedupeKey || data.jobId || data.demoJobId || 'alert';
+  const tag = `${getSwTagPrefix(toneType)}-${baseTag}`.slice(0, 96);
   const normalizedRoute =
     data.route === 'find-work' || (!data.route && data.jobId)
       ? 'worker-dashboard'
@@ -73,7 +81,7 @@ messaging.onBackgroundMessage((payload) => {
       ? `/?route=${encodeURIComponent(normalizedRoute)}&jobId=${encodeURIComponent(data.jobId)}`
       : `/?route=${encodeURIComponent(normalizedRoute)}`;
   const isSilent = data.playSound === 'false';
-  const openActionTitle = 'OPEN';
+  const openActionTitle = data.lang === 'mr' ? 'उघडा' : data.lang === 'hi' ? 'खोलें' : 'OPEN';
 
   return self.registration.showNotification(title, {
     body,
@@ -90,6 +98,10 @@ messaging.onBackgroundMessage((payload) => {
       route: normalizedRoute,
       jobId: data.jobId || '',
       demoJobId: data.demoJobId || '',
+      notificationId: data.notificationId || '',
+      dedupeKey,
+      title,
+      body,
       voiceScript: data.voiceScript || '',
       lang: data.lang || 'en',
       approxLocationLabel: data.approxLocationLabel || '',
@@ -109,11 +121,26 @@ function extractNotificationData(notification) {
     raw && raw.FCM_MSG && raw.FCM_MSG.data && typeof raw.FCM_MSG.data === 'object'
       ? raw.FCM_MSG.data
       : {};
-  return Object.assign({}, fcmMsgData, raw);
+  const fcmNotif =
+    raw && raw.FCM_MSG && raw.FCM_MSG.notification && typeof raw.FCM_MSG.notification === 'object'
+      ? raw.FCM_MSG.notification
+      : {};
+  return Object.assign(
+    {
+      title: notification && notification.title ? notification.title : fcmNotif.title || '',
+      body: notification && notification.body ? notification.body : fcmNotif.body || '',
+    },
+    fcmMsgData,
+    raw
+  );
 }
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
+  if (event.action === 'dismiss') {
+    return;
+  }
+
   const data = extractNotificationData(event.notification);
   const rawRoute = data.route === 'find-work' ? 'worker-dashboard' : data.route || '';
   const fallbackRoute = rawRoute || 'worker-dashboard';
@@ -128,6 +155,7 @@ self.addEventListener('notificationclick', (event) => {
       event.notification.data.FCM_MSG.fcmOptions &&
       event.notification.data.FCM_MSG.fcmOptions.link) ||
     fallbackUrl;
+
   const targetUrlObj = new URL(rawUrl, self.location.origin);
   if (targetUrlObj.searchParams.get('route') === 'find-work') {
     targetUrlObj.searchParams.set('route', 'worker-dashboard');
@@ -137,35 +165,54 @@ self.addEventListener('notificationclick', (event) => {
   if (data.jobId && !targetUrlObj.searchParams.has('jobId')) {
     targetUrlObj.searchParams.set('jobId', String(data.jobId));
   }
+  if (data.demoJobId && !targetUrlObj.searchParams.has('demoJobId')) {
+    targetUrlObj.searchParams.set('demoJobId', String(data.demoJobId));
+  }
   if (data.speak && !targetUrlObj.searchParams.has('speak')) {
     targetUrlObj.searchParams.set('speak', String(data.speak));
   }
   if (data.lang && !targetUrlObj.searchParams.has('lang')) {
     targetUrlObj.searchParams.set('lang', String(data.lang));
   }
+  const notifKey = data.dedupeKey || data.notificationId || '';
+  if (notifKey && !targetUrlObj.searchParams.has('notifKey')) {
+    targetUrlObj.searchParams.set('notifKey', String(notifKey));
+  }
+  if (data.notificationId && !targetUrlObj.searchParams.has('notifId')) {
+    targetUrlObj.searchParams.set('notifId', String(data.notificationId));
+  }
+  targetUrlObj.searchParams.set('fromPush', '1');
   const targetUrl = targetUrlObj.href;
 
   event.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
-      for (const client of clientList) {
-        if (client.url.startsWith(self.location.origin) && 'focus' in client) {
-          client.postMessage({
-            type: 'ROJGAR_SETU_DEEP_LINK',
-            clickUrl: targetUrl,
-            route: rawRoute || targetUrlObj.searchParams.get('route') || '',
-            jobId: data.jobId || '',
-            demoJobId: data.demoJobId || '',
-            voiceScript: data.voiceScript || '',
-            lang: data.lang || '',
-            approxLocationLabel: data.approxLocationLabel || '',
-            distanceKm: data.distanceKm || '',
-            toneType: data.toneType || 'general',
-            eventType: data.eventType || '',
-            playSound: data.playSound !== false && data.playSound !== 'false',
-            speakVoice: data.speakVoice !== false && data.speakVoice !== 'false',
-          });
-          return client.focus();
-        }
+      const sameOriginClients = clientList.filter((c) => c.url && c.url.startsWith(self.location.origin));
+      const preferredClient =
+        sameOriginClients.find((c) => c.visibilityState === 'visible') || sameOriginClients[0];
+
+      if (preferredClient && 'focus' in preferredClient) {
+        preferredClient.postMessage({
+          type: 'ROJGAR_SETU_DEEP_LINK',
+          fromPush: true,
+          clickUrl: targetUrl,
+          route: rawRoute || targetUrlObj.searchParams.get('route') || '',
+          jobId: data.jobId || '',
+          demoJobId: data.demoJobId || '',
+          notificationId: data.notificationId || '',
+          dedupeKey: data.dedupeKey || '',
+          title: data.title || '',
+          body: data.body || '',
+          voiceScript: data.voiceScript || '',
+          lang: data.lang || '',
+          approxLocationLabel: data.approxLocationLabel || '',
+          distanceKm: data.distanceKm || '',
+          toneType: data.toneType || 'general',
+          eventType: data.eventType || '',
+          playSound: data.playSound !== false && data.playSound !== 'false',
+          speakVoice: data.speakVoice !== false && data.speakVoice !== 'false',
+          speak: data.speak === '1' || data.speak === true,
+        });
+        return preferredClient.focus();
       }
       if (self.clients.openWindow) {
         return self.clients.openWindow(targetUrl);

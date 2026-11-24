@@ -13,6 +13,7 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import { auth, db, handleFirestoreError, OperationType } from './firebase';
+import { isWorkerRegistrationOtpEnabled } from './otpFeatureFlags';
 import {
   callServerReferralEligibilityCheck,
   ensureWorkerReferralCode,
@@ -427,7 +428,7 @@ export async function submitWorkerRegistrationPaymentProof(params: {
   if (!params.refundPolicyAccepted || !params.noEmploymentGuaranteeAccepted) {
     throw new Error('Please accept the Refund Policy and No Employment Guarantee disclosure before submitting payment.');
   }
-  if (!params.otpVerified) {
+  if (isWorkerRegistrationOtpEnabled() && !params.otpVerified) {
     throw new Error('Mobile OTP verification must be completed before submitting registration payment.');
   }
 

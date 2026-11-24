@@ -871,6 +871,7 @@ async function dispatchAndRecordTargets(params: {
         route: target.targetRoute,
         jobId: target.targetJobId || '',
         demoJobId: target.targetDemoJobId || '',
+        notificationId: safeDocId || '',
         dedupeKey: target.dedupeKey,
         lang: target.language,
         toneType,

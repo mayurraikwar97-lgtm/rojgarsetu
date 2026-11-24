@@ -5,6 +5,21 @@ export const OTP_COOLDOWN_SECONDS = 45; // resend cooldown
 export const OTP_FAILURE_COOLDOWN_SECONDS = 30; // retry cooldown after SMS dispatch failure
 export const MAX_OTP_VERIFY_ATTEMPTS = 5;
 
+/**
+ * Clean server-side feature flags to toggle Voice OTP & Worker Registration OTP.
+ * Both default to FALSE (disabled) and can be safely re-enabled via environment
+ * variables without rewriting any OTP code or routes.
+ */
+export function isServerVoiceOtpEnabled(): boolean {
+  const raw = (process.env.VOICE_OTP_ENABLED || '').trim().toLowerCase();
+  return raw === 'true' || raw === '1' || raw === 'yes';
+}
+
+export function isServerWorkerOtpRequired(): boolean {
+  const raw = (process.env.WORKER_OTP_REQUIRED || '').trim().toLowerCase();
+  return raw === 'true' || raw === '1' || raw === 'yes';
+}
+
 export type SmsProviderKind = '2factor' | 'msg91' | 'fast2sms' | 'twilio_verify' | 'twilio_sms' | 'webhook';
 
 export interface NormalizedIndianMobile {
@@ -305,7 +320,9 @@ export function getOtpPublicConfig(): {
   providerLabel: string;
   channel: 'SMS';
   deliveryChannel: 'sms_only';
+  voiceOtpEnabled: boolean;
   voiceFallbackDisabled: boolean;
+  workerRegistrationOtpRequired: boolean;
   dltConfigured: boolean;
   firebasePhoneAuthEnabled: boolean;
   cooldownSeconds: number;
@@ -314,13 +331,17 @@ export function getOtpPublicConfig(): {
   missingConfig: string[];
 } {
   const cfg = resolveSmsProviderConfig();
+  const voiceOtpEnabled = isServerVoiceOtpEnabled();
+  const workerRegistrationOtpRequired = isServerWorkerOtpRequired();
   return {
     smsProviderConfigured: cfg.configured,
     providerType: cfg.provider,
     providerLabel: cfg.providerLabel,
     channel: 'SMS',
     deliveryChannel: 'sms_only',
-    voiceFallbackDisabled: true,
+    voiceOtpEnabled,
+    voiceFallbackDisabled: !voiceOtpEnabled,
+    workerRegistrationOtpRequired,
     dltConfigured: cfg.dltConfigured,
     firebasePhoneAuthEnabled:
       (process.env.VITE_FIREBASE_PHONE_AUTH_ENABLED || process.env.FIREBASE_PHONE_AUTH_ENABLED || '').trim().toLowerCase() === 'true',
@@ -709,7 +730,8 @@ export async function handleOtpRequest(
         error: 'VOICE_OTP_DISABLED',
         channel: 'SMS',
         deliveryChannel: 'sms_only',
-        voiceFallbackDisabled: true,
+        voiceOtpEnabled: isServerVoiceOtpEnabled(),
+        voiceFallbackDisabled: !isServerVoiceOtpEnabled(),
         message: 'Voice Call OTP is disabled. Only channel: "SMS" is supported.',
       },
     };

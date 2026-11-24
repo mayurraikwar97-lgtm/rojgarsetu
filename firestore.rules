@@ -1322,7 +1322,6 @@ service cloud.firestore {
         && isOwner(workerId)
         && isValidWorkerPrivate(incoming())
         && incoming().ownerUid == request.auth.uid
-        && incoming().mobileVerified == true
         && incoming().idVerificationStatus in ['not_submitted', 'voluntary_pending']
         && isValidTimestampOnCreate();
       allow update: if isValidId(workerId)
@@ -1334,7 +1333,6 @@ service cloud.firestore {
           isAdmin() ||
           (
             isOwner(existing().ownerUid)
-            && incoming().mobileVerified == true
             && (!('referralCode' in existing()) || incoming().referralCode == existing().referralCode)
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'fullName', 'mobile', 'mobileVerified', 'verificationMethod', 'testPinHash',

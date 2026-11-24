@@ -6,6 +6,7 @@ import { getApps, initializeApp } from 'firebase-admin/app';
 import type { App } from 'firebase-admin/app';
 import { getAuth } from 'firebase-admin/auth';
 import type { DecodedIdToken } from 'firebase-admin/auth';
+import { isServerWorkerOtpRequired } from './otpEngine.js';
 
 const BOOTSTRAPPED_ADMIN_EMAIL = 'mayurraikwar97@gmail.com';
 const DEFAULT_PROJECT_ID = 'gen-lang-client-0174765083';
@@ -272,8 +273,8 @@ export function evaluateReferralRewardEligibility(
     );
   }
 
-  // 1b. Mobile OTP Verification Mandatory Check
-  if (input.otpVerified === false) {
+  // 1b. Mobile OTP Verification Check (enforced only when WORKER_OTP_REQUIRED=true)
+  if (isServerWorkerOtpRequired() && input.otpVerified === false) {
     fraudFlags.push('OTP_NOT_VERIFIED');
     return buildResult(
       false,

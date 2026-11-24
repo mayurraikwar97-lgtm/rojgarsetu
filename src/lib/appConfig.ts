@@ -11,8 +11,36 @@ export function getCanonicalAppUrl(): string {
   return '';
 }
 
+let runtimeVapidKeyCache: string | null = null;
+let runtimeVapidKeyPromise: Promise<string> | null = null;
+
 export function getFirebaseVapidKey(): string {
-  return (import.meta.env.VITE_FIREBASE_VAPID_KEY || '').trim();
+  const buildTime = (import.meta.env.VITE_FIREBASE_VAPID_KEY || '').trim();
+  if (buildTime) return buildTime;
+  return runtimeVapidKeyCache || '';
+}
+
+export async function resolveFirebaseVapidKey(): Promise<string> {
+  const immediate = getFirebaseVapidKey();
+  if (immediate) return immediate;
+  if (runtimeVapidKeyCache !== null) return runtimeVapidKeyCache;
+  if (!runtimeVapidKeyPromise) {
+    runtimeVapidKeyPromise = fetch('/api/public-config', { cache: 'no-store' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data: { firebaseVapidKey?: string } | null) => {
+        const key = typeof data?.firebaseVapidKey === 'string' ? data.firebaseVapidKey.trim() : '';
+        runtimeVapidKeyCache = key;
+        return key;
+      })
+      .catch(() => {
+        runtimeVapidKeyCache = '';
+        return '';
+      })
+      .finally(() => {
+        runtimeVapidKeyPromise = null;
+      });
+  }
+  return runtimeVapidKeyPromise;
 }
 
 export function buildDeepLinkPath(params: {

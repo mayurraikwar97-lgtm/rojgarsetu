@@ -32,6 +32,37 @@
   }
 }
 
+@keyframes rs-toast-slide-down {
+  0% {
+    opacity: 0;
+    transform: translateY(-20px) scale(0.98);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes rs-toast-progress-shrink {
+  from {
+    transform: scaleX(1);
+  }
+  to {
+    transform: scaleX(0);
+  }
+}
+
+.animate-rs-toast-in {
+  animation: rs-toast-slide-down 240ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.animate-rs-toast-progress {
+  transform-origin: left center;
+  animation-name: rs-toast-progress-shrink;
+  animation-timing-function: linear;
+  animation-fill-mode: forwards;
+}
+
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;

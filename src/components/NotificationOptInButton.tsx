@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Bell, BellOff, BellRing, CheckCircle2, Info } from 'lucide-react';
+import { Bell, BellOff, BellRing, CheckCircle2, Info, Smartphone } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../i18n/LanguageContext';
 import { subscribeUserDeviceTokens } from '../lib/firestoreService';
@@ -7,6 +7,7 @@ import {
   disablePushNotificationsForUser,
   enablePushNotificationsForUser,
   getBrowserNotificationState,
+  type BrowserNotificationState,
 } from '../lib/pushNotifications';
 import type { DeviceTokenRecord, Language } from '../types/domain';
 
@@ -37,7 +38,19 @@ export const NotificationOptInButton: React.FC<NotificationOptInButtonProps> = (
   const [busy, setBusy] = useState(false);
   const [statusMsg, setStatusMsg] = useState('');
   const [statusKind, setStatusKind] = useState<'ok' | 'warn' | 'info'>('info');
-  const browserState = getBrowserNotificationState();
+  const [browserState, setBrowserState] = useState<BrowserNotificationState>(() =>
+    getBrowserNotificationState()
+  );
+
+  useEffect(() => {
+    const refresh = () => setBrowserState(getBrowserNotificationState());
+    window.addEventListener('focus', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      window.removeEventListener('focus', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, []);
 
   useEffect(() => {
     if (!user?.emailVerified) {
@@ -61,6 +74,7 @@ export const NotificationOptInButton: React.FC<NotificationOptInButtonProps> = (
         isDemo,
         demoAccountId,
       });
+      setBrowserState(getBrowserNotificationState());
       setStatusMsg(res.message);
       setStatusKind(res.ok ? 'ok' : 'warn');
       if (res.ok) onStatusChange?.(true);
@@ -75,6 +89,7 @@ export const NotificationOptInButton: React.FC<NotificationOptInButtonProps> = (
     setStatusMsg('');
     try {
       await disablePushNotificationsForUser(user.uid);
+      setBrowserState(getBrowserNotificationState());
       setStatusMsg(
         tr(
           lang,
@@ -129,11 +144,25 @@ export const NotificationOptInButton: React.FC<NotificationOptInButtonProps> = (
             <span>
               {busy
                 ? tr(lang, 'Activating...', 'चालू हो रहा है...', 'सुरू होत आहे...')
-                : tr(lang, 'Enable Notifications', 'Enable Notifications', 'Enable Notifications')}
+                : tr(lang, 'Enable Notifications', 'सूचनाएं चालू करें', 'सूचना सुरू करा')}
             </span>
           </button>
         )}
       </div>
+
+      {browserState.requiresIOSHomeScreen && !statusMsg && (
+        <div className="flex items-start gap-1.5 text-xs text-[#0B3B75] bg-blue-50 border border-blue-200 rounded p-2">
+          <Smartphone className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+          <span>
+            {tr(
+              lang,
+              'On iPhone/iPad, tap Share → Add to Home Screen first so background push alerts work even when Safari is closed.',
+              'iPhone/iPad पर बैकग्राउंड पुश सूचनाओं के लिए पहले Share → Add to Home Screen करें और होम स्क्रीन से ऐप खोलें।',
+              'iPhone/iPad वर बॅकग्राउंड पुश सूचनांसाठी आधी Share → Add to Home Screen करा आणि होम स्क्रीनवरून अ‍ॅप उघडा.'
+            )}
+          </span>
+        </div>
+      )}
 
       {browserState.permission === 'denied' && !statusMsg && (
         <div className="flex items-start gap-1.5 text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded p-2">

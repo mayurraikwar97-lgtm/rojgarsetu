@@ -1,11 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, BellRing, Volume2, VolumeX, X } from 'lucide-react';
+import { AlertTriangle, X } from 'lucide-react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { LanguageProvider, useLanguage } from './i18n/LanguageContext';
 import {
   subscribeForegroundPush,
   syncPushTokenSilentlyIfGranted,
 } from './lib/pushNotifications';
+import {
+  buildNotificationDedupeKeys,
+  isNotificationAlreadyHandled,
+  markBackgroundNotificationClicked,
+  markNotificationShown,
+} from './lib/notificationDedupe';
 import {
   markAllNotificationsRead,
   markNotificationRead,
@@ -20,7 +26,7 @@ import {
   subscribeVehicleListings,
 } from './lib/firestoreService';
 import { buildSmartJobVoiceScript } from './lib/smartVoiceJobAlert';
-import { getToneChannelConfig, getToneTypeForEvent } from './lib/dealWorkflow';
+import { getToneTypeForEvent } from './lib/dealWorkflow';
 import {
   playNotificationTone,
   speakJobAlert,
@@ -66,6 +72,10 @@ import {
   TrustSafetyView,
 } from './components/InstitutionalPages';
 import { AdvertiserDashboardView } from './components/AdvertiserDashboardView';
+import {
+  TopNotificationBanner,
+  type TopAlertNotificationItem,
+} from './components/TopNotificationBanner';
 import { captureReferralCodeFromUrl } from './lib/adsReferralService';
 
 const VALID_ROUTES: PageRoute[] = [
@@ -135,24 +145,13 @@ const AppShell: React.FC = () => {
     jobId: string;
     lang?: Language;
     voiceScript?: string;
+    fromPush?: boolean;
   } | null>(null);
+  const [pendingPushReadIds, setPendingPushReadIds] = useState<string[]>([]);
 
-  const [foregroundPush, setForegroundPush] = useState<{
-    title: string;
-    body: string;
-    route?: PageRoute;
-    jobId?: string;
-    demoJobId?: string;
-    voiceScript?: string;
-    lang?: Language;
-    approxLocationLabel?: string;
-    distanceKm?: number;
-    playSound?: boolean;
-    speakVoice?: boolean;
-    toneType?: NotificationToneType;
-    eventType?: string;
-    speechBlockedHint?: boolean;
-  } | null>(null);
+  const [alertQueue, setAlertQueue] = useState<TopAlertNotificationItem[]>([]);
+  const activeTopAlert = alertQueue[0] || null;
+  const queuedAlertsCount = Math.max(0, alertQueue.length - 1);
 
   const [workers, setWorkers] = useState<PublicWorkerProfile[]>([]);
   const [employers, setEmployers] = useState<PublicEmployerProfile[]>([]);
@@ -239,6 +238,44 @@ const AppShell: React.FC = () => {
     [navigate]
   );
 
+  const enqueueTopAlert = useCallback(
+    (item: Omit<TopAlertNotificationItem, 'id' | 'receivedAtMs'>): boolean => {
+      const keys = buildNotificationDedupeKeys({
+        notificationId: item.notificationId,
+        dedupeKey: item.dedupeKey,
+        jobId: item.jobId,
+        demoJobId: item.demoJobId,
+        eventType: item.eventType,
+        title: item.title,
+        body: item.body,
+      });
+      if (keys.length > 0 && isNotificationAlreadyHandled(keys)) {
+        return false;
+      }
+      if (keys.length > 0) {
+        markNotificationShown(keys);
+      }
+      const nextItem: TopAlertNotificationItem = {
+        ...item,
+        id: item.notificationId || item.dedupeKey || `alert_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`,
+        receivedAtMs: Date.now(),
+      };
+      setAlertQueue((prev) => {
+        if (prev.some((existing) => existing.id === nextItem.id)) {
+          return prev;
+        }
+        return [...prev, nextItem].slice(-6);
+      });
+      return true;
+    },
+    []
+  );
+
+  const dismissCurrentTopAlert = useCallback(() => {
+    stopVoiceAlert();
+    setAlertQueue((prev) => prev.slice(1));
+  }, []);
+
   const triggerSmartVoicePlayback = useCallback(
     async (opts: {
       voiceScript?: string;
@@ -269,7 +306,9 @@ const AppShell: React.FC = () => {
           toneType: resolvedTone,
         });
         if (res.speechStatus === 'blocked_or_silent') {
-          setForegroundPush((prev) => (prev ? { ...prev, speechBlockedHint: true } : prev));
+          setAlertQueue((prev) =>
+            prev.length > 0 ? [{ ...prev[0], speechBlockedHint: true }, ...prev.slice(1)] : prev
+          );
         }
       } else if (allowSound) {
         await playNotificationTone(resolvedTone);
@@ -296,7 +335,7 @@ const AppShell: React.FC = () => {
     return subscribeNotificationPreferences(user.uid, setNotifPrefs);
   }, [user?.uid, user?.emailVerified]);
 
-  // Silently refresh FCM device token whenever permission is already granted
+  // Silently refresh FCM device token on login, preference change, and when returning to foreground
   useEffect(() => {
     if (!user?.emailVerified) return;
     if (notifPrefs && notifPrefs.masterEnabled === false) return;
@@ -306,14 +345,28 @@ const AppShell: React.FC = () => {
       : isRegisteredWorker
       ? 'worker'
       : 'employer';
+    const targetLang = notifPrefs?.preferredLanguage || lang;
+
     void syncPushTokenSilentlyIfGranted({
       uid: user.uid,
       role: resolvedRole,
-      language: notifPrefs?.preferredLanguage || lang,
+      language: targetLang,
     });
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        void syncPushTokenSilentlyIfGranted({
+          uid: user.uid,
+          role: resolvedRole,
+          language: targetLang,
+        });
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', onVisibilityChange);
   }, [user?.uid, user?.emailVerified, isAdmin, workers.length, notifPrefs?.masterEnabled, notifPrefs?.preferredLanguage, lang]);
 
-  // Parse deep links from URL query parameters on boot (?route=worker-dashboard&jobId=...&speak=1&lang=mr or /register?ref=CODE)
+  // Parse deep links from URL query parameters on boot (?route=worker-dashboard&jobId=...&speak=1&lang=mr&fromPush=1&notifKey=... or /register?ref=CODE)
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const params = new URLSearchParams(window.location.search);
@@ -324,9 +377,28 @@ const AppShell: React.FC = () => {
     const refParam = (params.get('ref') || params.get('referral') || '').trim().toUpperCase();
     const isRegisterPath = window.location.pathname.toLowerCase().replace(/\/+$/, '') === '/register';
     const speak = params.get('speak') === '1';
+    const fromPush = params.get('fromPush') === '1';
+    const notifKey = params.get('notifKey') || '';
+    const notifId = params.get('notifId') || '';
     const qLang = params.get('lang');
     const parsedLang: Language | undefined =
       qLang === 'mr' || qLang === 'hi' || qLang === 'en' ? qLang : undefined;
+
+    if (fromPush || notifKey || notifId) {
+      const clickKeys = buildNotificationDedupeKeys({
+        notificationId: notifId || undefined,
+        dedupeKey: notifKey || undefined,
+        jobId: jId || undefined,
+        demoJobId: djId || undefined,
+      });
+      if (clickKeys.length > 0) {
+        markBackgroundNotificationClicked(clickKeys);
+      }
+      const idsToRead = [notifId, notifKey].filter(Boolean);
+      if (idsToRead.length > 0) {
+        setPendingPushReadIds((prev) => Array.from(new Set([...prev, ...idsToRead])));
+      }
+    }
 
     if (refParam && /^[A-Z0-9_-]{4,32}$/.test(refParam)) {
       const saved = captureReferralCodeFromUrl();
@@ -336,7 +408,7 @@ const AppShell: React.FC = () => {
     if (jId) setHighlightedJobId(jId);
     if (djId) setHighlightedDemoJobId(djId);
     if (speak && jId) {
-      setBootSpeakRequest({ jobId: jId, lang: parsedLang });
+      setBootSpeakRequest({ jobId: jId, lang: parsedLang, fromPush });
     }
     if (r || jId || djId) {
       const resolvedBootRoute = resolveNotificationTargetRoute({
@@ -350,12 +422,32 @@ const AppShell: React.FC = () => {
       setRoute('register-worker');
     }
 
-    if (r || jId || djId || cat || speak || qLang || refParam || isRegisterPath) {
+    if (r || jId || djId || cat || speak || qLang || refParam || isRegisterPath || fromPush || notifKey || notifId) {
       const cleanPath = isRegisterPath ? '/' : window.location.pathname;
       const cleanUrl = cleanPath + window.location.hash;
       window.history.replaceState({}, document.title, cleanUrl);
     }
   }, [resolveNotificationTargetRoute]);
+
+  // Auto-mark Firestore notifications read when opened from a background OS push click
+  useEffect(() => {
+    if (!user?.emailVerified || pendingPushReadIds.length === 0 || notifications.length === 0) return;
+    const matched = notifications.filter(
+      (n) =>
+        !n.read &&
+        (pendingPushReadIds.includes(n.id) ||
+          (n.dedupeKey ? pendingPushReadIds.includes(n.dedupeKey) : false))
+    );
+    if (matched.length > 0) {
+      matched.forEach((n) => {
+        seenNotifIdsRef.current.add(n.id);
+        void markNotificationRead(n.id).catch(() => undefined);
+      });
+      setPendingPushReadIds((prev) =>
+        prev.filter((id) => !matched.some((n) => n.id === id || n.dedupeKey === id))
+      );
+    }
+  }, [user?.emailVerified, pendingPushReadIds, notifications]);
 
   // Auto-play TTS once matching job loads when opened via OS notification "Open & Listen"
   useEffect(() => {
@@ -376,26 +468,31 @@ const AppShell: React.FC = () => {
         distanceKm: null,
       });
 
+    const isFromBackgroundPush = Boolean(bootSpeakRequest.fromPush);
     setBootSpeakRequest(null);
-    setForegroundPush({
-      title: job?.title || 'Smart Voice Job Alert',
-      body: job?.approxLocationLabel || job?.district || 'Tap Replay Voice to hear full details.',
-      route: 'worker-dashboard',
-      jobId: job?.id || bootSpeakRequest.jobId,
-      voiceScript: script,
-      lang: spokenLang,
-      playSound: true,
-      speakVoice: true,
-      toneType: 'new_job',
-    });
+
+    // Do not show a duplicate top banner if the user literally just tapped the OS push notification
+    if (!isFromBackgroundPush) {
+      enqueueTopAlert({
+        title: job?.title || 'Smart Voice Job Alert',
+        body: job?.approxLocationLabel || job?.district || 'Tap Listen to hear full details.',
+        route: 'worker-dashboard',
+        jobId: job?.id || bootSpeakRequest.jobId,
+        voiceScript: script,
+        lang: spokenLang,
+        playSound: true,
+        speakVoice: true,
+        toneType: 'new_job',
+      });
+    }
     void triggerSmartVoicePlayback({
       voiceScript: script,
       lang: spokenLang,
-      playSound: true,
+      playSound: !isFromBackgroundPush,
       speakVoice: true,
       toneType: 'new_job',
     });
-  }, [bootSpeakRequest, jobs, notifPrefs?.preferredLanguage, lang, triggerSmartVoicePlayback]);
+  }, [bootSpeakRequest, jobs, notifPrefs?.preferredLanguage, lang, triggerSmartVoicePlayback, enqueueTopAlert]);
 
   // Handle Service Worker notification click deep-link messages when app is already open
   useEffect(() => {
@@ -403,19 +500,50 @@ const AppShell: React.FC = () => {
     const onMessage = (event: MessageEvent) => {
       const data = event.data as {
         type?: string;
+        fromPush?: boolean;
         route?: string;
         jobId?: string;
         demoJobId?: string;
+        notificationId?: string;
+        dedupeKey?: string;
+        title?: string;
+        body?: string;
         voiceScript?: string;
         lang?: Language;
         speak?: boolean;
+        eventType?: string;
       } | null;
       if (data?.type === 'ROJGAR_SETU_DEEP_LINK') {
+        const clickKeys = buildNotificationDedupeKeys({
+          notificationId: data.notificationId,
+          dedupeKey: data.dedupeKey,
+          jobId: data.jobId,
+          demoJobId: data.demoJobId,
+          eventType: data.eventType,
+          title: data.title,
+          body: data.body,
+        });
+        if (clickKeys.length > 0) {
+          markBackgroundNotificationClicked(clickKeys);
+        }
+        const idsToRead = [data.notificationId, data.dedupeKey].filter((v): v is string => Boolean(v));
+        if (idsToRead.length > 0) {
+          setPendingPushReadIds((prev) => Array.from(new Set([...prev, ...idsToRead])));
+        }
+        // Dismiss any matching currently displayed banner so the user does not see a duplicate
+        setAlertQueue((prev) =>
+          prev.filter(
+            (a) =>
+              a.notificationId !== data.notificationId &&
+              (!data.dedupeKey || a.dedupeKey !== data.dedupeKey)
+          )
+        );
+
         const nextRoute = resolveNotificationTargetRoute({
           rawRoute: data.route,
           jobId: data.jobId,
           demoJobId: data.demoJobId,
-          eventType: (data as { eventType?: string }).eventType,
+          eventType: data.eventType,
         });
         navigateToTarget(nextRoute, data.jobId, data.demoJobId);
         if (data.speak && (data.voiceScript || data.jobId)) {
@@ -423,6 +551,7 @@ const AppShell: React.FC = () => {
             jobId: data.jobId || '',
             lang: data.lang,
             voiceScript: data.voiceScript,
+            fromPush: true,
           });
         }
       }
@@ -449,7 +578,9 @@ const AppShell: React.FC = () => {
         toneType: payload.toneType,
         eventType: payload.eventType,
       });
-      setForegroundPush({
+      const shown = enqueueTopAlert({
+        notificationId: payload.notificationId,
+        dedupeKey: payload.dedupeKey,
         title: payload.title,
         body: payload.body,
         route: targetRoute,
@@ -464,14 +595,16 @@ const AppShell: React.FC = () => {
         toneType: resolvedTone,
         eventType: payload.eventType,
       });
-      void triggerSmartVoicePlayback({
-        voiceScript: payload.voiceScript,
-        lang: spokenLang,
-        playSound: payload.playSound,
-        speakVoice: payload.speakVoice,
-        toneType: resolvedTone,
-        eventType: payload.eventType,
-      });
+      if (shown) {
+        void triggerSmartVoicePlayback({
+          voiceScript: payload.voiceScript,
+          lang: spokenLang,
+          playSound: payload.playSound,
+          speakVoice: payload.speakVoice,
+          toneType: resolvedTone,
+          eventType: payload.eventType,
+        });
+      }
     }).then((fn) => {
       if (active) unsub = fn;
       else fn();
@@ -480,7 +613,7 @@ const AppShell: React.FC = () => {
       active = false;
       unsub();
     };
-  }, [user?.uid, user?.emailVerified, notifPrefs?.preferredLanguage, lang, triggerSmartVoicePlayback, resolveNotificationTargetRoute]);
+  }, [user?.uid, user?.emailVerified, notifPrefs?.preferredLanguage, lang, triggerSmartVoicePlayback, resolveNotificationTargetRoute, enqueueTopAlert]);
 
   useEffect(() => {
     const onQuota = () => setGmpQuotaExceeded(true);
@@ -521,7 +654,7 @@ const AppShell: React.FC = () => {
     return () => u();
   }, [user?.uid]);
 
-  // Global real-time in-app notification subscription + instant live toast & voice alert
+  // Global real-time in-app notification subscription + WhatsApp-style top banner & voice alert
   useEffect(() => {
     seenNotifIdsRef.current = new Set();
     initialNotifLoadRef.current = true;
@@ -536,12 +669,18 @@ const AppShell: React.FC = () => {
         initialNotifLoadRef.current = false;
         return;
       }
-      const newestUnread = list.find((n) => !n.read && !seenNotifIdsRef.current.has(n.id));
+      const freshUnreads = list.filter((n) => !n.read && !seenNotifIdsRef.current.has(n.id));
       list.forEach((n) => seenNotifIdsRef.current.add(n.id));
-      if (newestUnread) {
+      if (freshUnreads.length === 0) return;
+
+      // Queue distinct unread alerts (up to 3 newest at once) with dedupe against FCM onMessage
+      let playedAudioForBatch = false;
+      for (const newestUnread of freshUnreads.slice(0, 3)) {
         const spokenLang = newestUnread.language || notifPrefs?.preferredLanguage || lang;
         const resolvedTone = getToneTypeForEvent(newestUnread);
-        setForegroundPush({
+        const shown = enqueueTopAlert({
+          notificationId: newestUnread.id,
+          dedupeKey: newestUnread.dedupeKey,
           title: newestUnread.title,
           body: newestUnread.body,
           route: resolveNotificationTargetRoute({
@@ -562,31 +701,36 @@ const AppShell: React.FC = () => {
           speakVoice: newestUnread.speakVoice,
           toneType: resolvedTone,
           eventType: newestUnread.eventType,
+          category: newestUnread.category,
         });
-        if (
-          newestUnread.category === 'matchingJobs' ||
-          newestUnread.eventType === 'hiring_request_created' ||
-          Boolean(newestUnread.voiceScript)
-        ) {
-          void triggerSmartVoicePlayback({
-            voiceScript: newestUnread.voiceScript,
-            lang: spokenLang,
-            playSound: newestUnread.playSound,
-            speakVoice: newestUnread.speakVoice,
-            toneType: resolvedTone,
-            eventType: newestUnread.eventType,
-          });
-        } else if (
-          !voiceMuted &&
-          newestUnread.playSound !== false &&
-          isToneEnabledForUser(resolvedTone, notifPrefs)
-        ) {
-          void playNotificationTone(resolvedTone);
+
+        if (shown && !playedAudioForBatch) {
+          playedAudioForBatch = true;
+          if (
+            newestUnread.category === 'matchingJobs' ||
+            newestUnread.eventType === 'hiring_request_created' ||
+            Boolean(newestUnread.voiceScript)
+          ) {
+            void triggerSmartVoicePlayback({
+              voiceScript: newestUnread.voiceScript,
+              lang: spokenLang,
+              playSound: newestUnread.playSound,
+              speakVoice: newestUnread.speakVoice,
+              toneType: resolvedTone,
+              eventType: newestUnread.eventType,
+            });
+          } else if (
+            !voiceMuted &&
+            newestUnread.playSound !== false &&
+            isToneEnabledForUser(resolvedTone, notifPrefs)
+          ) {
+            void playNotificationTone(resolvedTone);
+          }
         }
       }
     });
     return () => unsub();
-  }, [user?.uid, user?.emailVerified, notifPrefs, lang, voiceMuted, triggerSmartVoicePlayback, resolveNotificationTargetRoute]);
+  }, [user?.uid, user?.emailVerified, notifPrefs, lang, voiceMuted, triggerSmartVoicePlayback, resolveNotificationTargetRoute, enqueueTopAlert]);
 
   const unreadNotificationsCount = useMemo(
     () => notifications.filter((n) => !n.read).length,
@@ -611,129 +755,68 @@ const AppShell: React.FC = () => {
     [navigateToTarget, resolveNotificationTargetRoute]
   );
 
+  const handleOpenTopAlert = useCallback(
+    (target: TopAlertNotificationItem) => {
+      stopVoiceAlert();
+      setAlertQueue((prev) => prev.filter((item) => item.id !== target.id));
+
+      const matchingDoc = notifications.find(
+        (n) =>
+          !n.read &&
+          ((target.notificationId && n.id === target.notificationId) ||
+            (target.dedupeKey && n.dedupeKey === target.dedupeKey))
+      );
+      if (matchingDoc) {
+        void markNotificationRead(matchingDoc.id).catch(() => undefined);
+      } else if (target.notificationId) {
+        void markNotificationRead(target.notificationId).catch(() => undefined);
+      }
+
+      navigateToTarget(
+        target.route || 'worker-dashboard',
+        target.jobId,
+        target.demoJobId
+      );
+    },
+    [navigateToTarget, notifications]
+  );
+
   return (
     <div id="top" className="min-h-screen flex flex-col bg-[#F4F6F9] text-slate-900">
-      {/* Live Foreground Push & Smart Voice Alert Toast */}
-      {foregroundPush && (() => {
-        const activeTone = getToneTypeForEvent({
-          toneType: foregroundPush.toneType,
-          eventType: foregroundPush.eventType,
-        });
-        const toneCfg = getToneChannelConfig(activeTone);
-        return (
-          <div
-            role="status"
-            className={`fixed top-16 right-4 z-50 max-w-sm w-[calc(100%-2rem)] bg-white border-2 ${toneCfg.toastBorderClass} rounded-lg shadow-xl p-4 space-y-2.5`}
-          >
-            <div className="flex items-start justify-between gap-2">
-              <div className="flex flex-wrap items-center gap-1.5">
-                <BellRing className="w-4 h-4 text-[#E06D1B] shrink-0" />
-                <span className="text-xs font-bold uppercase tracking-wider text-[#0B3B75]">
-                  ROJGAR SETU
-                </span>
-                <span
-                  className={`px-2 py-0.5 rounded border text-[10px] font-bold ${toneCfg.badgeColorClass}`}
-                >
-                  {toneCfg.label[lang]}
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  stopVoiceAlert();
-                  setForegroundPush(null);
-                }}
-                aria-label="Close notification"
-                className="p-0.5 rounded hover:bg-slate-100 text-slate-500 cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div>
-              <div className="font-display text-sm font-bold text-[#0B3B75]">{foregroundPush.title}</div>
-              <p className="text-xs text-slate-600 mt-0.5">{foregroundPush.body}</p>
-              {foregroundPush.speechBlockedHint && (
-                <p className="text-[11px] font-semibold text-[#C25E00] mt-1">
-                  Tap Replay Voice below to hear the spoken job announcement.
-                </p>
-              )}
-            </div>
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  unlockAudioOnUserGesture();
-                  void playNotificationTone(activeTone);
-                }}
-                className="min-h-[40px] inline-flex items-center gap-1 px-2.5 py-1.5 rounded border border-slate-300 text-xs font-bold text-[#0B3B75] hover:bg-slate-50 cursor-pointer"
-              >
-                <Volume2 className="w-3.5 h-3.5 text-[#E06D1B]" />
-                <span>Replay Tone</span>
-              </button>
-              {foregroundPush.voiceScript && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    unlockAudioOnUserGesture();
-                    setForegroundPush((prev) => (prev ? { ...prev, speechBlockedHint: false } : prev));
-                    void speakJobAlert({
-                      text: foregroundPush.voiceScript!,
-                      lang: foregroundPush.lang || notifPrefs?.preferredLanguage || lang,
-                      soundEnabled: false,
-                      voiceEnabled: true,
-                      toneType: activeTone,
-                    });
-                  }}
-                  className="min-h-[40px] inline-flex items-center gap-1 px-2.5 py-1.5 rounded border border-[#0B3B75] text-xs font-bold text-[#0B3B75] hover:bg-slate-50 cursor-pointer"
-                >
-                  <Volume2 className="w-3.5 h-3.5 text-[#E06D1B]" />
-                  <span>Replay Voice</span>
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={() => {
-                  setVoiceMuted((prev) => {
-                    const next = !prev;
-                    if (next) stopVoiceAlert();
-                    return next;
-                  });
-                }}
-                className="min-h-[40px] inline-flex items-center gap-1 px-2.5 py-1.5 rounded border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
-              >
-                {voiceMuted ? <VolumeX className="w-3.5 h-3.5" /> : <Volume2 className="w-3.5 h-3.5" />}
-                <span>{voiceMuted ? 'Unmute' : 'Mute'}</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  stopVoiceAlert();
-                  setForegroundPush(null);
-                }}
-                className="min-h-[40px] px-2.5 py-1.5 rounded border border-slate-300 text-xs font-semibold text-slate-700 cursor-pointer"
-              >
-                Dismiss
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  const target = foregroundPush;
-                  stopVoiceAlert();
-                  setForegroundPush(null);
-                  navigateToTarget(
-                    target.route || 'worker-dashboard',
-                    target.jobId,
-                    target.demoJobId
-                  );
-                }}
-                className="min-h-[40px] px-4 py-1.5 rounded bg-[#0B3B75] text-white text-xs font-extrabold hover:bg-slate-800 cursor-pointer"
-              >
-                OPEN
-              </button>
-            </div>
-          </div>
-        );
-      })()}
+      {/* WhatsApp-Style Top Slide-Down Alert Banner */}
+      <TopNotificationBanner
+        item={activeTopAlert}
+        queuedCount={queuedAlertsCount}
+        lang={lang}
+        voiceMuted={voiceMuted}
+        onOpen={handleOpenTopAlert}
+        onDismiss={dismissCurrentTopAlert}
+        onReplayTone={(activeTone) => {
+          unlockAudioOnUserGesture();
+          void playNotificationTone(activeTone);
+        }}
+        onReplayVoice={(item, activeTone) => {
+          if (!item.voiceScript) return;
+          unlockAudioOnUserGesture();
+          setAlertQueue((prev) =>
+            prev.map((a) => (a.id === item.id ? { ...a, speechBlockedHint: false } : a))
+          );
+          void speakJobAlert({
+            text: item.voiceScript,
+            lang: item.lang || notifPrefs?.preferredLanguage || lang,
+            soundEnabled: false,
+            voiceEnabled: true,
+            toneType: activeTone,
+          });
+        }}
+        onToggleMute={() => {
+          setVoiceMuted((prev) => {
+            const next = !prev;
+            if (next) stopVoiceAlert();
+            return next;
+          });
+        }}
+      />
       {/* Case A Demo Key Quota Exceeded Banner */}
       {gmpQuotaExceeded && (
         <div

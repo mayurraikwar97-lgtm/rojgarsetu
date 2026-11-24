@@ -17,6 +17,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
+import { isWorkerRegistrationOtpEnabled } from '../lib/otpFeatureFlags';
 import {
   DEFAULT_REFERRAL_CONFIG,
   adminRecordManualReferralPayout,
@@ -630,9 +631,13 @@ export const AdminReferralsPanel: React.FC = () => {
                             <span className="px-2 py-0.5 rounded bg-emerald-50 text-[#15803D] border border-emerald-200 text-[10px] font-bold">
                               OTP Verified
                             </span>
-                          ) : (
+                          ) : isWorkerRegistrationOtpEnabled() ? (
                             <span className="px-2 py-0.5 rounded bg-red-50 text-red-700 border border-red-200 text-[10px] font-bold">
                               OTP Missing
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 text-[10px] font-semibold">
+                              Direct Reg (No OTP)
                             </span>
                           )}
                         </div>

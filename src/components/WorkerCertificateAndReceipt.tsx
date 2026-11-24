@@ -27,6 +27,10 @@ import {
 } from 'lucide-react';
 import { useLanguage } from '../i18n/LanguageContext';
 import {
+  getOtpFraudWarningLocalized,
+  isWorkerRegistrationOtpEnabled,
+} from '../lib/otpFeatureFlags';
+import {
   SERVICE_RADIUS_STAGES,
   getLocalizedCategoryLabel,
 } from '../lib/smartVoiceJobAlert';
@@ -303,7 +307,7 @@ export const WorkerPaymentCheckoutCard: React.FC<WorkerPaymentCheckoutCardProps>
       setSubmitError('Payment order is not initialized yet. Please retry.');
       return false;
     }
-    if (!otpVerified) {
+    if (isWorkerRegistrationOtpEnabled() && !otpVerified) {
       setSubmitError(
         tr(
           lang,
@@ -629,6 +633,20 @@ export const WorkerPaymentCheckoutCard: React.FC<WorkerPaymentCheckoutCardProps>
               'सुरक्षा धोरण: कार्ड क्रमांक किंवा UPI PIN कधीही साठवला जात नाही आणि पेमेंट स्क्रीनशॉटवरून खाते कधीही सुरू केले जात नाही.'
             )}
           </p>
+          {(() => {
+            const fw = getOtpFraudWarningLocalized(lang);
+            return (
+              <div
+                role="note"
+                className="rounded-lg bg-white/90 border border-amber-300 px-3 py-2 text-amber-950 space-y-0.5"
+              >
+                <p className="font-bold leading-relaxed">{fw.primaryMr}</p>
+                {fw.secondaryLocalized && (
+                  <p className="text-[11px] font-medium text-amber-900 leading-relaxed">{fw.secondaryLocalized}</p>
+                )}
+              </div>
+            );
+          })()}
           <div className="space-y-1.5 pt-1 text-slate-800 border-t border-amber-200/70">
             <label className="flex items-start gap-2 cursor-pointer">
               <input
