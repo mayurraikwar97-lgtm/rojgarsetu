@@ -34,6 +34,7 @@ import {
   classifyRequestRuleBased,
   type StructuredWorkClassification,
 } from '../lib/aiFallbackClassifier';
+import { formatUiError } from '../lib/firebase';
 import { broadcastSmartJobAlerts, callNotificationApi, createJobPosting } from '../lib/firestoreService';
 import type {
   AiHirePrefill,
@@ -850,7 +851,17 @@ export const AIVoiceAssistantModal: React.FC<AIVoiceAssistantModalProps> = ({
         ...(batchTargetUids.length > 0 ? { targetWorkerUids: batchTargetUids } : {}),
       }).catch(() => undefined);
     } catch (err) {
-      setFormErrorMsg(err instanceof Error ? err.message : 'Unable to save work request.');
+      setFormErrorMsg(
+        formatUiError(
+          err,
+          lang === 'mr'
+            ? 'सध्या कामाची रिक्वेस्ट जतन करता आली नाही. कृपया माहिती तपासून पुन्हा प्रयत्न करा.'
+            : lang === 'hi'
+            ? 'अभी काम की रिक्वेस्ट सहेजी नहीं जा सकी। कृपया विवरण जाँचकर पुनः प्रयास करें।'
+            : 'Unable to save work request right now. Please check your details and try again.',
+          lang
+        )
+      );
     } finally {
       setPublishing(false);
     }

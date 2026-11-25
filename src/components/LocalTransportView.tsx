@@ -222,13 +222,16 @@ export const LocalTransportView: React.FC<LocalTransportViewProps> = ({
         await signInWithGoogle();
       } catch (authErr) {
         setBikeError(
-          formatUiError(authErr) ||
+          formatUiError(
+            authErr,
             tr(
               lang,
               'Please sign in with Google to submit your transport request.',
               'ट्रांसपोर्ट रिक्वेस्ट भेजने के लिए कृपया गूगल से लॉगिन करें।',
               'वाहतूक विनंती पाठवण्यासाठी कृपया गुगलने लॉगिन करा.'
-            )
+            ),
+            lang
+          )
         );
       }
       return;
@@ -389,13 +392,16 @@ export const LocalTransportView: React.FC<LocalTransportViewProps> = ({
       setGoodsPhotoUrls([]);
     } catch (err) {
       setBikeError(
-        formatUiError(err) ||
+        formatUiError(
+          err,
           tr(
             lang,
             'Unable to submit Bike Hire / Transport request. Please try again.',
             'बाइक / ट्रांसपोर्ट रिक्वेस्ट नहीं भेजी जा सकी। कृपया पुनः प्रयास करें।',
             'बाईक / वाहतूक विनंती पाठवता आली नाही. कृपया पुन्हा प्रयत्न करा.'
-          )
+          ),
+          lang
+        )
       );
     } finally {
       setBikeSubmitting(false);

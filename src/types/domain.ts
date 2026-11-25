@@ -265,6 +265,7 @@ export interface JobPosting {
   state: string;
   district: string;
   cityOrVillage: string;
+  pincode?: string;
   workLocationLabel: string;
   lat: number;
   lng: number;

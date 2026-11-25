@@ -701,13 +701,16 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
         await signInWithGoogle();
       } catch (authErr) {
         setCheckoutError(
-          formatUiError(authErr) ||
+          formatUiError(
+            authErr,
             tr(
               lang,
               'Please sign in with Google to send your instant hire request.',
               'हायर रिक्वेस्ट भेजने के लिए कृपया गूगल से लॉगिन करें।',
               'हायर रिक्वेस्ट पाठवण्यासाठी कृपया गुगलने लॉगिन करा.'
-            )
+            ),
+            lang
+          )
         );
       }
       return;
@@ -863,13 +866,16 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
       setWorkPhotoUrls([]);
     } catch (err) {
       setCheckoutError(
-        formatUiError(err) ||
+        formatUiError(
+          err,
           tr(
             lang,
             'Unable to send instant hire request. Please try again.',
             'त्वरित हायर रिक्वेस्ट नहीं भेजी जा सकी। कृपया पुनः प्रयास करें।',
             'तात्काळ हायर रिक्वेस्ट पाठवता आली नाही. कृपया पुन्हा प्रयत्न करा.'
-          )
+          ),
+          lang
+        )
       );
     } finally {
       setSubmitting(false);
@@ -911,13 +917,16 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
         await signInWithGoogle();
       } catch (authErr) {
         setQuickError(
-          formatUiError(authErr) ||
+          formatUiError(
+            authErr,
             tr(
               lang,
               'Please sign in with Google to find nearby workers.',
               'नज़दीकी कामगार खोजने के लिए कृपया गूगल से लॉगिन करें।',
               'जवळचे कामगार शोधण्यासाठी कृपया गुगलने लॉगिन करा.'
-            )
+            ),
+            lang
+          )
         );
       }
       return;
@@ -1033,13 +1042,16 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
       setWorkPhotoUrls([]);
     } catch (err) {
       setQuickError(
-        formatUiError(err) ||
+        formatUiError(
+          err,
           tr(
             lang,
             'Unable to send request right now. Please try again.',
             'अभी रिक्वेस्ट नहीं भेजी जा सकी। कृपया पुनः प्रयास करें।',
             'सध्या विनंती पाठवता आली नाही. कृपया पुन्हा प्रयत्न करा.'
-          )
+          ),
+          lang
+        )
       );
     } finally {
       setQuickSubmitting(false);

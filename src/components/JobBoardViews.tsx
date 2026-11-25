@@ -1130,7 +1130,8 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
             'Google sign-in was cancelled or blocked. Please try again.',
             'Google साइन-इन रद्द या ब्लॉक हो गया। कृपया पुनः प्रयास करें।',
             'Google साइन-इन रद्द किंवा ब्लॉक झाले. कृपया पुन्हा प्रयत्न करा.'
-          )
+          ),
+          lang
         )
       );
     } finally {
@@ -1394,6 +1395,7 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
         state: stateName,
         district: resolvedDistrict,
         cityOrVillage: cleanCity.slice(0, 100),
+        ...(cleanPin ? { pincode: cleanPin } : {}),
         workLocationLabel: approxLocationLabel.slice(0, 160),
         approxLocationLabel: approxLocationLabel.slice(0, 160),
         initialRadiusKm,
@@ -1533,7 +1535,8 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
             'Unable to publish job right now. Please check your connection and try again.',
             'अभी काम पोस्ट नहीं हो सका। कृपया इंटरनेट जांचें और पुनः प्रयास करें।',
             'सध्या कामाची जाहिरात जतन करता आली नाही. कृपया इंटरनेट तपासून पुन्हा प्रयत्न करा.'
-          )
+          ),
+          lang
         )
       );
       window.setTimeout(() => {

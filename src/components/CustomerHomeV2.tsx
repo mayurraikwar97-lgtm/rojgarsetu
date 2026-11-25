@@ -416,13 +416,16 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
         await signInWithGoogle();
       } catch (authErr) {
         setFormError(
-          formatUiError(authErr) ||
+          formatUiError(
+            authErr,
             tr(
               lang,
               'Google sign-in was cancelled or failed. Please sign in to send your request.',
               'गूगल लॉगिन रद्द या विफल हो गया। रिक्वेस्ट भेजने के लिए कृपया लॉगिन करें।',
               'गुगल लॉगिन रद्द झाले किंवा अयशस्वी झाले. रिक्वेस्ट पाठवण्यासाठी कृपया लॉगिन करा.'
-            )
+            ),
+            lang
+          )
         );
       }
       return;
@@ -542,6 +545,7 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
           state: effState,
           district: effDistrict,
           cityOrVillage: safeCity,
+          ...(resolvedPincode ? { pincode: resolvedPincode } : {}),
           workLocationLabel: approxLocationLabel,
           approxLocationLabel,
           initialRadiusKm: 2,
@@ -700,13 +704,16 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
         .catch(() => undefined);
     } catch (err) {
       setFormError(
-        formatUiError(err) ||
+        formatUiError(
+          err,
           tr(
             lang,
             'Could not send request. Please check your details and try again.',
             'रिक्वेस्ट नहीं भेजी जा सकी। कृपया विवरण जाँचें और पुनः प्रयास करें।',
             'रिक्वेस्ट पाठवता आली नाही. कृपया तपशील तपासा आणि पुन्हा प्रयत्न करा.'
-          )
+          ),
+          lang
+        )
       );
       setStep('order_form');
       setCreatedOrder(null);

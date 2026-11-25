@@ -827,10 +827,20 @@ export async function createJobPosting(
         .slice(0, 6)
     : [];
 
+  const sanitizedPincode =
+    typeof payload.pincode === 'string'
+      ? payload.pincode.replace(/[^0-9]/g, '').slice(0, 12)
+      : '';
+
+  let debugDocMeta: Record<string, unknown> = {
+    path,
+    idempotencyKey: safeKey || null,
+  };
+
   try {
     const resolvedEmployerUid = auth.currentUser?.uid || payload.employerUid;
     if (!resolvedEmployerUid) {
-      throw new Error('Please sign in with Google before posting a job.');
+      throw new Error('AUTH_REQUIRED: Please sign in with Google before posting a job.');
     }
     const safeInitialDealStatus = payload.dealStatus === 'NOTIFIED' ? ('NOTIFIED' as const) : ('REQUESTED' as const);
 
@@ -845,6 +855,7 @@ export async function createJobPosting(
       state: finalState,
       district: finalDistrict,
       cityOrVillage: finalCity,
+      ...(sanitizedPincode.length > 0 ? { pincode: sanitizedPincode } : {}),
       workLocationLabel: finalWorkLocationLabel,
       approxLocationLabel,
       lat: finalLat,
@@ -933,6 +944,21 @@ export async function createJobPosting(
         .slice(0, 100);
     }
 
+    debugDocMeta = {
+      path,
+      docId: safeKey && safeKey.length >= 8 ? safeKey : '(auto-id)',
+      authUid: auth.currentUser?.uid ?? null,
+      emailVerified: auth.currentUser?.emailVerified ?? null,
+      employerUid: baseDoc.employerUid,
+      category: baseDoc.category,
+      status: baseDoc.status,
+      dealStatus: baseDoc.dealStatus,
+      initialRadiusKm: baseDoc.initialRadiusKm,
+      currentRadiusKm: baseDoc.currentRadiusKm,
+      pincode: baseDoc.pincode ?? null,
+      payloadKeys: Object.keys(baseDoc).sort(),
+    };
+
     if (safeKey && safeKey.length >= 8) {
       const targetRef = doc(db, path, safeKey);
       const existingSnap = await getDoc(targetRef);
@@ -946,6 +972,13 @@ export async function createJobPosting(
     const ref = await addDoc(collection(db, path), baseDoc);
     return ref.id;
   } catch (err) {
+    const firebaseCode =
+      err && typeof err === 'object' && 'code' in err ? String((err as { code?: unknown }).code) : 'unknown';
+    console.error('[ROJGAR SETU][jobs.create] Failed to create job document:', {
+      ...debugDocMeta,
+      errorCode: firebaseCode,
+      errorMessage: err instanceof Error ? err.message : String(err),
+    });
     handleFirestoreError(err, OperationType.CREATE, path);
   }
 }
