@@ -344,7 +344,7 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'employerUid', 'employerName', 'customerGenderProtected', 'customerLastName', 'hasExactAddressVault',
           'title', 'category', 'description',
-          'workersRequired', 'requiredSkills', 'state', 'district', 'cityOrVillage',
+          'workersRequired', 'requiredSkills', 'state', 'district', 'cityOrVillage', 'pincode',
           'workLocationLabel', 'lat', 'lng', 'jobDate', 'startTime', 'duration',
           'workType', 'offeredWage', 'wageUnit', 'paymentTerms', 'contactPreference',
           'isWomenFriendly', 'isAccessible', 'biddingEnabled', 'photoAttachment',
@@ -359,19 +359,20 @@ service cloud.firestore {
           'applicationsCount', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.employerUid)
-        && isStr(data.employerName, 2, 160)
+        && isStr(data.employerName, 1, 160)
         && optBool(data, 'customerGenderProtected')
         && optStr(data, 'customerLastName', 60)
         && optBool(data, 'hasExactAddressVault')
-        && isStr(data.title, 3, 140)
-        && isStr(data.category, 2, 80)
-        && isStr(data.description, 10, 2000)
+        && isStr(data.title, 2, 160)
+        && isStr(data.category, 1, 100)
+        && isStr(data.description, 1, 2000)
         && isNum(data.workersRequired, 1, 5000)
         && data.requiredSkills is list && data.requiredSkills.size() >= 1 && data.requiredSkills.size() <= 15 && data.requiredSkills[0] is string
-        && isStr(data.state, 2, 80)
-        && isStr(data.district, 2, 80)
-        && isStr(data.cityOrVillage, 2, 100)
-        && isStr(data.workLocationLabel, 2, 160)
+        && isStr(data.state, 1, 80)
+        && isStr(data.district, 1, 80)
+        && isStr(data.cityOrVillage, 1, 100)
+        && optStr(data, 'pincode', 12)
+        && isStr(data.workLocationLabel, 1, 160)
         && isNum(data.lat, -90, 90)
         && isNum(data.lng, -180, 180)
         && optStr(data, 'jobDate', 30)
@@ -386,7 +387,7 @@ service cloud.firestore {
         && data.isAccessible is bool
         && data.biddingEnabled is bool
         && optStr(data, 'photoAttachment', 100000)
-        && (!('workPhotoUrls' in data) || (data.workPhotoUrls is list && data.workPhotoUrls.size() <= 6 && (data.workPhotoUrls.size() == 0 || isStr(data.workPhotoUrls[0], 0, 85000))))
+        && (!('workPhotoUrls' in data) || (data.workPhotoUrls is list && data.workPhotoUrls.size() <= 6 && (data.workPhotoUrls.size() == 0 || isStr(data.workPhotoUrls[0], 0, 120000))))
         && (!('orderKind' in data) || data.orderKind in ['work', 'bike_transport'])
         && optStr(data, 'pickupLocationLabel', 160)
         && optNum(data, 'pickupLat', -90, 90)
@@ -403,14 +404,14 @@ service cloud.firestore {
         && (!('dealStatus' in data) || isValidDealStatus(data.dealStatus))
         && optId(data, 'acceptedApplicationId')
         && optId(data, 'acceptedWorkerUid')
-        && (!('notifiedWorkerUids' in data) || (data.notifiedWorkerUids is list && data.notifiedWorkerUids.size() <= 100))
+        && (!('notifiedWorkerUids' in data) || (data.notifiedWorkerUids is list && data.notifiedWorkerUids.size() <= 100 && (data.notifiedWorkerUids.size() == 0 || data.notifiedWorkerUids[0] is string)))
         && optNum(data, 'dispatchBatchIndex', 0, 100)
         && optNum(data, 'dispatchBatchSize', 1, 50)
         && optNum(data, 'lastBatchDispatchedAtMs', 0, 9999999999999)
         && optNum(data, 'eligiblePoolCount', 0, 10000)
         && optStr(data, 'approxLocationLabel', 160)
-        && (!('initialRadiusKm' in data) || data.initialRadiusKm in [2, 5, 10, 20, 30])
-        && (!('currentRadiusKm' in data) || data.currentRadiusKm in [2, 5, 10, 20, 30])
+        && optNum(data, 'initialRadiusKm', 1, 100)
+        && optNum(data, 'currentRadiusKm', 1, 100)
         && optTs(data, 'radiusStageUpdatedAt')
         && isNum(data.applicationsCount, 0, 100000)
         && data.createdAt is timestamp
@@ -1472,7 +1473,7 @@ service cloud.firestore {
             && !(existing().status in ['completed', 'cancelled'])
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'title', 'category', 'description', 'workersRequired',
-              'requiredSkills', 'state', 'district', 'cityOrVillage',
+              'requiredSkills', 'state', 'district', 'cityOrVillage', 'pincode',
               'workLocationLabel', 'lat', 'lng', 'jobDate', 'startTime',
               'duration', 'workType', 'offeredWage', 'wageUnit',
               'paymentTerms', 'contactPreference', 'isWomenFriendly',

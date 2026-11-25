@@ -1,10 +1,27 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { BellRing, Briefcase, CheckCircle2, LocateFixed, MapPin, Plus, PlusCircle, Search, Users, Volume2, VolumeX } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  AlertCircle,
+  BellRing,
+  Briefcase,
+  CheckCircle2,
+  Loader2,
+  LocateFixed,
+  MapPin,
+  Phone,
+  Plus,
+  PlusCircle,
+  Search,
+  ShieldCheck,
+  Users,
+  Volume2,
+  VolumeX,
+} from 'lucide-react';
 import { EMPLOYMENT_CATEGORIES } from '../data/categories';
 import { SERVICE_CATALOG_V2, getServiceCategoryLabel } from '../data/serviceCatalogV2';
 import { getDistrictCoordinates, INDIA_STATES_DISTRICTS } from '../data/indiaLocations';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../i18n/LanguageContext';
+import { formatUiError } from '../lib/firebase';
 import {
   extractLastName,
   getApproximateCoordinates,
@@ -16,6 +33,7 @@ import {
   broadcastSmartJobAlerts,
   callNotificationApi,
   createJobPosting,
+  recordCustomerOrderPreference,
   saveOrderExactAddress,
   submitWorkerOffer,
 } from '../lib/firestoreService';
@@ -988,27 +1006,33 @@ const NORMAL_WORK_CATEGORIES = EMPLOYMENT_CATEGORIES.filter((c) => c.group !== '
 export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNavigate }) => {
   const { lang, t } = useLanguage();
   const { user, employerProfile, employerPrivate, signInWithGoogle } = useAuth();
+  const tr = (en: string, hi: string, mr: string) => (lang === 'mr' ? mr : lang === 'hi' ? hi : en);
+
+  const errorBannerRef = useRef<HTMLDivElement | null>(null);
+  const successCardRef = useRef<HTMLDivElement | null>(null);
 
   const [title, setTitle] = useState('');
   const [category, setCategory] = useState(NORMAL_WORK_CATEGORIES[0].en);
   const [description, setDescription] = useState('');
   const [workersRequired, setWorkersRequired] = useState(1);
-  const [skillsInput, setSkillsInput] = useState('Masonry, Site Support');
-  const [stateName, setStateName] = useState(employerProfile?.state || 'Chhattisgarh');
-  const [districtName, setDistrictName] = useState(employerProfile?.district || 'Raipur');
+  const [skillsInput, setSkillsInput] = useState('');
+  const [stateName, setStateName] = useState(employerProfile?.state || 'Maharashtra');
+  const [districtName, setDistrictName] = useState(employerProfile?.district || 'Chandrapur');
   const [cityOrVillage, setCityOrVillage] = useState('');
   const [workLocationLabel, setWorkLocationLabel] = useState('');
+  const [contactName, setContactName] = useState('');
+  const [contactMobile, setContactMobile] = useState('');
   const [pinnedCoords, setPinnedCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [gpsBusy, setGpsBusy] = useState(false);
   const [workPhotoUrls, setWorkPhotoUrls] = useState<string[]>([]);
   const [photoUploading, setPhotoUploading] = useState(false);
   const [jobDate, setJobDate] = useState('');
   const [startTime, setStartTime] = useState('09:00');
-  const [duration, setDuration] = useState('15 days');
+  const [duration, setDuration] = useState('1 day');
   const [workType, setWorkType] = useState<JobWorkType>('daily_wage');
-  const [offeredWage, setOfferedWage] = useState(650);
+  const [offeredWage, setOfferedWage] = useState(600);
   const [wageUnit, setWageUnit] = useState<WageUnit>('daily');
-  const [paymentTerms, setPaymentTerms] = useState('Weekly bank/UPI settlement');
+  const [paymentTerms, setPaymentTerms] = useState('Direct UPI / Cash after work');
   const [contactPreference, setContactPreference] = useState<'platform_message' | 'phone_after_confirm'>('phone_after_confirm');
   const [isWomenFriendly, setIsWomenFriendly] = useState(false);
   const [isAccessible, setIsAccessible] = useState(false);
@@ -1016,8 +1040,18 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
   const [initialRadiusKm, setInitialRadiusKm] = useState<ServiceRadiusKm>(5);
 
   const [saving, setSaving] = useState(false);
+  const [signingIn, setSigningIn] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [createdJobId, setCreatedJobId] = useState('');
+  const [createdJobSummary, setCreatedJobSummary] = useState<{
+    id: string;
+    title: string;
+    category: string;
+    location: string;
+    notifiedCount: number;
+    radiusKm: ServiceRadiusKm;
+  } | null>(null);
   const [pushDispatchNotice, setPushDispatchNotice] = useState('');
   const [approvedProfessions, setApprovedProfessions] = useState<CustomProfessionRecord[]>([]);
   const [showAddProfessionModal, setShowAddProfessionModal] = useState(false);
@@ -1027,7 +1061,82 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
     return subscribeApprovedProfessions(setApprovedProfessions);
   }, []);
 
-  const stateObj = INDIA_STATES_DISTRICTS.find((s) => s.name === stateName);
+  // Sync defaults cleanly when auth / employerProfile loads asynchronously
+  useEffect(() => {
+    if (employerProfile?.state && INDIA_STATES_DISTRICTS.some((s) => s.name === employerProfile.state)) {
+      setStateName((prev) => (prev === 'Maharashtra' ? employerProfile.state : prev));
+      const matchedSt = INDIA_STATES_DISTRICTS.find((s) => s.name === employerProfile.state);
+      if (employerProfile.district && matchedSt?.districts.some((d) => d.name === employerProfile.district)) {
+        setDistrictName((prev) => (prev === 'Chandrapur' ? employerProfile.district : prev));
+      }
+    }
+    const defaultName =
+      employerPrivate?.contactPerson ||
+      employerProfile?.businessName ||
+      user?.displayName ||
+      '';
+    if (defaultName) {
+      setContactName((prev) => (prev.trim() ? prev : defaultName));
+    }
+    if (employerPrivate?.mobile) {
+      const cleanMob = employerPrivate.mobile.replace(/\D/g, '').slice(-10);
+      if (cleanMob.length === 10) {
+        setContactMobile((prev) => (prev.trim() ? prev : cleanMob));
+      }
+    }
+  }, [employerProfile, employerPrivate, user]);
+
+  const stateObj = INDIA_STATES_DISTRICTS.find((s) => s.name === stateName) || INDIA_STATES_DISTRICTS[0];
+
+  // Ensure every catalog category (including AC Repair, Appliance Repair, Drivers) & custom "+" category is selectable in <select>
+  const extraCatalogCategories = useMemo(() => {
+    const existing = new Set([
+      ...NORMAL_WORK_CATEGORIES.map((c) => c.en.toLowerCase()),
+      ...approvedProfessions.map((p) => p.nameEn.toLowerCase()),
+    ]);
+    return SERVICE_CATALOG_V2.filter(
+      (s) => !s.isTransport && !existing.has(s.canonicalCategory.toLowerCase())
+    );
+  }, [approvedProfessions]);
+
+  const isCustomSelectedCategoryMissingFromLists = useMemo(() => {
+    const clean = category.trim().toLowerCase();
+    if (!clean) return false;
+    const inStandard = NORMAL_WORK_CATEGORIES.some((c) => c.en.toLowerCase() === clean);
+    const inExtra = extraCatalogCategories.some((s) => s.canonicalCategory.toLowerCase() === clean);
+    const inApproved = approvedProfessions.some((p) => p.nameEn.toLowerCase() === clean);
+    return !inStandard && !inExtra && !inApproved;
+  }, [category, extraCatalogCategories, approvedProfessions]);
+
+  const clearFieldError = (key: string) => {
+    setFieldErrors((prev) => {
+      if (!prev[key]) return prev;
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+  };
+
+  const handleGoogleSignIn = async () => {
+    setSigningIn(true);
+    setErrorMsg('');
+    try {
+      await signInWithGoogle();
+    } catch (err) {
+      setErrorMsg(
+        formatUiError(
+          err,
+          tr(
+            'Google sign-in was cancelled or blocked. Please try again.',
+            'Google साइन-इन रद्द या ब्लॉक हो गया। कृपया पुनः प्रयास करें।',
+            'Google साइन-इन रद्द किंवा ब्लॉक झाले. कृपया पुन्हा प्रयत्न करा.'
+          )
+        )
+      );
+    } finally {
+      setSigningIn(false);
+    }
+  };
 
   const handleShareJobGps = async () => {
     setGpsBusy(true);
@@ -1037,12 +1146,38 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
       setPinnedCoords({ lat: geo.lat, lng: geo.lng });
       if (geo.state && INDIA_STATES_DISTRICTS.some((s) => s.name === geo.state)) {
         setStateName(geo.state);
+        const st = INDIA_STATES_DISTRICTS.find((s) => s.name === geo.state);
+        if (geo.district && st?.districts.some((d) => d.name === geo.district)) {
+          setDistrictName(geo.district);
+        } else if (st?.districts[0]?.name) {
+          setDistrictName(st.districts[0].name);
+        }
+      } else if (geo.district) {
+        setDistrictName(geo.district);
       }
-      if (geo.district) setDistrictName(geo.district);
-      if (geo.cityOrVillage) setCityOrVillage(geo.cityOrVillage);
-      if (geo.formattedAddress) setWorkLocationLabel(geo.formattedAddress.slice(0, 160));
+      if (geo.cityOrVillage) {
+        setCityOrVillage(geo.cityOrVillage);
+        clearFieldError('cityOrVillage');
+      }
+      if (geo.formattedAddress) {
+        setWorkLocationLabel(geo.formattedAddress.slice(0, 160));
+        clearFieldError('workLocationLabel');
+      }
+      if (geo.postalCode) {
+        const cleanPin = geo.postalCode.replace(/\D/g, '').slice(0, 6);
+        if (cleanPin.length === 6) {
+          setPincode(cleanPin);
+          clearFieldError('pincode');
+        }
+      }
     } catch {
-      setErrorMsg('Unable to detect GPS location. Please enter city/village manually.');
+      setErrorMsg(
+        tr(
+          'Unable to detect GPS location. Please enter your city/village, area, and 6-digit pincode manually.',
+          'GPS लोकेशन नहीं मिल सकी। कृपया शहर/गाँव, इलाका और 6 अंकों का पिनकोड मैन्युअल रूप से भरें।',
+          'GPS लोकेशन मिळू शकले नाही. कृपया गाव/शहर, परिसर आणि ६ अंकी पिनकोड स्वतः भरा.'
+        )
+      );
     } finally {
       setGpsBusy(false);
     }
@@ -1052,51 +1187,195 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
     e.preventDefault();
     setErrorMsg('');
     setPushDispatchNotice('');
-    if (!user || !employerProfile) return;
 
-    const coords = pinnedCoords || getDistrictCoordinates(stateName, districtName);
+    if (!user) {
+      setErrorMsg(
+        tr(
+          'Please sign in with Google first to publish your job.',
+          'काम पोस्ट करने के लिए कृपया पहले Google से साइन-इन करें।',
+          'कामाची जाहिरात टाकण्यासाठी कृपया आधी Google ने साइन-इन करा.'
+        )
+      );
+      window.setTimeout(() => errorBannerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 20);
+      return;
+    }
+
+    if (!user.emailVerified) {
+      setErrorMsg(
+        tr(
+          'Your Google account email is not verified. Please sign in with a verified Google account to publish a job.',
+          'आपका Google ईमेल सत्यापित नहीं है। कृपया सत्यापित Google खाते से साइन-इन करें।',
+          'तुमचे Google ईमेल पडताळलेले नाही. कृपया पडताळलेल्या Google खात्याने साइन-इन करा.'
+        )
+      );
+      window.setTimeout(() => errorBannerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 20);
+      return;
+    }
+
+    if (photoUploading) {
+      setErrorMsg(
+        tr(
+          'Please wait until your work photos finish uploading.',
+          'कृपया काम की फ़ोटो अपलोड होने तक प्रतीक्षा करें।',
+          'कृपया कामाचे फोटो अपलोड पूर्ण होईपर्यंत थोडे थांबा.'
+        )
+      );
+      return;
+    }
+
+    // Explicit localized validation for every required field so Submit never stalls silently
+    const nextErrors: Record<string, string> = {};
+    const cleanTitle = title.trim();
+    const cleanCategory = category.trim();
+    const cleanDesc = description.trim();
+    const cleanCity = cityOrVillage.trim();
+    const cleanArea = workLocationLabel.trim();
+    const cleanPin = pincode.replace(/\D/g, '').slice(0, 6);
+    const cleanContactName = contactName.trim();
+    const cleanContactMobile = contactMobile.replace(/\D/g, '').slice(-10);
+    const resolvedDistrict = districtName.trim() || stateObj?.districts[0]?.name || stateName;
+
+    if (cleanTitle.length < 3) {
+      nextErrors.title = tr(
+        'Please enter a job title (at least 3 characters).',
+        'कृपया काम का शीर्षक लिखें (कम से कम 3 अक्षर)।',
+        'कृपया कामाचे शीर्षक लिहा (किमान ३ अक्षरे).'
+      );
+    }
+
+    if (cleanCategory.length < 2) {
+      nextErrors.category = tr(
+        'Please select a profession/category or add a custom one using "+".',
+        'कृपया काम की श्रेणी चुनें या "+" से नई श्रेणी जोड़ें।',
+        'कृपया कामाचा व्यवसाय निवडा किंवा "+" बटणाने नवीन व्यवसाय जोडा.'
+      );
+    }
+
+    if (cleanDesc.length < 10) {
+      nextErrors.description = tr(
+        'Please describe the work in at least 10 characters so workers understand your need.',
+        'कृपया काम का विवरण कम से कम 10 अक्षरों में लिखें ताकि कामगार सही जानकारी समझ सकें।',
+        'कृपया कामाचे वर्णन किमान १० अक्षरांत लिहा जेणेकरून कामगाराला काम स्पष्ट समजेल.'
+      );
+    }
+
+    if (cleanCity.length < 2) {
+      nextErrors.cityOrVillage = tr(
+        'Please enter your city, town, or village name (at least 2 characters).',
+        'कृपया अपने शहर, कस्बे या गाँव का नाम लिखें (कम से कम 2 अक्षर)।',
+        'कृपया तुमच्या गाव किंवा शहराचे नाव लिहा (किमान २ अक्षरे).'
+      );
+    }
+
+    if (!/^[1-9]\d{5}$/.test(cleanPin)) {
+      nextErrors.pincode = tr(
+        'Please enter a valid 6-digit pincode (e.g. 442401).',
+        'कृपया सही 6 अंकों का पिनकोड दर्ज करें (जैसे 442401)।',
+        'कृपया वैध ६ अंकी पिनकोड टाका (उदा. 442401).'
+      );
+    }
+
+    if (cleanArea.length < 2) {
+      nextErrors.workLocationLabel = tr(
+        'Please enter the work area, colony, or landmark.',
+        'कृपया कार्य क्षेत्र, कॉलोनी या पास की पहचान लिखें।',
+        'कृपया कामाचा परिसर, कॉलनी किंवा जवळची खूण लिहा.'
+      );
+    }
+
+    if (cleanContactName.length < 2) {
+      nextErrors.contactName = tr(
+        'Please enter your name (at least 2 characters).',
+        'कृपया अपना नाम लिखें (कम से कम 2 अक्षर)।',
+        'कृपया तुमचे नाव लिहा (किमान २ अक्षरे).'
+      );
+    }
+
+    if (!/^[6-9]\d{9}$/.test(cleanContactMobile)) {
+      nextErrors.contactMobile = tr(
+        'Please enter a valid 10-digit Indian mobile number (starting with 6–9).',
+        'कृपया सही 10 अंकों का मोबाइल नंबर लिखें (6–9 से शुरू)।',
+        'कृपया वैध १० अंकी मोबाईल नंबर टाका (६ ते ९ ने सुरू होणारा).'
+      );
+    }
+
+    const numericWorkers = Number(workersRequired);
+    if (!Number.isFinite(numericWorkers) || numericWorkers < 1 || numericWorkers > 5000) {
+      nextErrors.workersRequired = tr(
+        'Workers required must be between 1 and 5000.',
+        'कामगारों की संख्या 1 से 5000 के बीच होनी चाहिए।',
+        'लागणाऱ्या कामगारांची संख्या १ ते ५००० च्या दरम्यान असावी.'
+      );
+    }
+
+    const numericWage = Number(offeredWage);
+    if (!Number.isFinite(numericWage) || numericWage < 0 || numericWage > 500000) {
+      nextErrors.offeredWage = tr(
+        'Offered wage must be between ₹0 and ₹5,00,000.',
+        'प्रस्तावित वेतन ₹0 से ₹5,00,000 के बीच होना चाहिए।',
+        'प्रस्तावित मजुरी ₹0 ते ₹5,00,000 च्या दरम्यान असावी.'
+      );
+    }
+
+    if (Object.keys(nextErrors).length > 0) {
+      setFieldErrors(nextErrors);
+      const firstErrorText = Object.values(nextErrors)[0];
+      setErrorMsg(
+        tr(
+          `Please fix the highlighted fields before publishing: ${firstErrorText}`,
+          `पोस्ट करने से पहले चिह्नित फ़ील्ड ठीक करें: ${firstErrorText}`,
+          `जाहिरात प्रकाशित करण्यापूर्वी खालील माहिती तपासा: ${firstErrorText}`
+        )
+      );
+      window.setTimeout(() => {
+        errorBannerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 20);
+      return;
+    }
+
+    setFieldErrors({});
+    const coords = pinnedCoords || getDistrictCoordinates(stateName, resolvedDistrict);
     const reqSkills = skillsInput
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean)
       .slice(0, 15);
-    if (reqSkills.length === 0) reqSkills.push(category);
+    if (reqSkills.length === 0) reqSkills.push(cleanCategory);
 
     setSaving(true);
     try {
-      const cleanPin = pincode.replace(/\D/g, '').slice(0, 6);
       const baseApprox = buildApproxLocationLabel({
-        cityOrVillage: cityOrVillage.trim(),
-        district: districtName,
+        cityOrVillage: cleanCity,
+        district: resolvedDistrict,
         state: stateName,
       });
-      const approxLocationLabel =
-        cleanPin.length === 6 && !baseApprox.includes(cleanPin)
-          ? `${baseApprox} (${cleanPin})`
-          : baseApprox;
-      const finalWorkLocationLabel =
-        cleanPin.length === 6 && !workLocationLabel.includes(cleanPin)
-          ? `${workLocationLabel.trim()} · PIN ${cleanPin}`.slice(0, 160)
-          : workLocationLabel.trim();
+      const approxLocationLabel = !baseApprox.includes(cleanPin)
+        ? `${baseApprox} (${cleanPin})`.slice(0, 160)
+        : baseApprox.slice(0, 160);
+      const finalWorkLocationLabel = !cleanArea.includes(cleanPin)
+        ? `${cleanArea} · PIN ${cleanPin}`.slice(0, 160)
+        : cleanArea.slice(0, 160);
       const approxCoords = getApproximateCoordinates(coords.lat, coords.lng);
       const genderProtected = isFemaleCustomerProtected({
-        gender: employerProfile.gender || employerPrivate?.gender,
+        gender: employerProfile?.gender || employerPrivate?.gender,
       });
       const resolvedLastName =
-        employerProfile.lastName ||
+        employerProfile?.lastName ||
         employerPrivate?.lastName ||
-        extractLastName(employerPrivate?.contactPerson || user.displayName || '');
-      const workerVisibleName = getWorkerVisibleCustomerName({
+        extractLastName(cleanContactName || employerPrivate?.contactPerson || user.displayName || '');
+      const rawWorkerVisibleName = getWorkerVisibleCustomerName({
         employerProfile,
         employerPrivate,
-        fallbackName: user.displayName || 'Customer',
+        fullName: cleanContactName,
+        fallbackName: cleanContactName || user.displayName || 'Customer',
         viewerRole: 'worker',
-      });
+      }).trim();
+      const workerVisibleName = rawWorkerVisibleName.length >= 2 ? rawWorkerVisibleName : 'Customer';
       const trimmedExactAddress = (
         finalWorkLocationLabel ||
         employerPrivate?.businessAddress?.trim() ||
-        ''
-      ).slice(0, 320);
+        `${cleanCity}, ${resolvedDistrict} ${cleanPin}`
+      ).slice(0, 300);
       const hasExactVault = trimmedExactAddress.length >= 4;
 
       const jobPayload = {
@@ -1107,14 +1386,14 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
           ? { customerLastName: resolvedLastName.slice(0, 60) }
           : {}),
         hasExactAddressVault: hasExactVault,
-        title: title.trim().slice(0, 140),
-        category,
-        description: description.trim().slice(0, 2000),
-        workersRequired: Number(workersRequired) || 1,
+        title: cleanTitle.slice(0, 140),
+        category: cleanCategory.slice(0, 80),
+        description: cleanDesc.slice(0, 2000),
+        workersRequired: Math.max(1, Math.min(5000, Math.round(numericWorkers))),
         requiredSkills: reqSkills,
         state: stateName,
-        district: districtName,
-        cityOrVillage: cityOrVillage.trim().slice(0, 100),
+        district: resolvedDistrict,
+        cityOrVillage: cleanCity.slice(0, 100),
         workLocationLabel: approxLocationLabel.slice(0, 160),
         approxLocationLabel: approxLocationLabel.slice(0, 160),
         initialRadiusKm,
@@ -1125,7 +1404,7 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
         startTime,
         duration: duration.trim().slice(0, 60),
         workType,
-        offeredWage: Number(offeredWage) || 0,
+        offeredWage: Math.max(0, Math.min(500000, Math.round(numericWage))),
         wageUnit,
         paymentTerms: paymentTerms.trim().slice(0, 200),
         contactPreference,
@@ -1135,72 +1414,139 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
         orderKind: 'work' as const,
         ...(workPhotoUrls.length > 0 ? { workPhotoUrls: workPhotoUrls.slice(0, MAX_WORK_PHOTOS) } : {}),
       };
-      const id = await createJobPosting(jobPayload);
-      if (hasExactVault) {
-        await saveOrderExactAddress({
-          jobId: id,
-          employerUid: user.uid,
-          exactAddress: trimmedExactAddress,
-          exactLat: coords.lat,
-          exactLng: coords.lng,
-        }).catch(() => undefined);
-      }
-      setCreatedJobId(id);
-      setWorkPhotoUrls([]);
-      setPincode('');
 
+      const id = await createJobPosting(jobPayload);
+
+      // Save private exact address & customer preference in parallel without blocking job creation
+      await Promise.allSettled([
+        hasExactVault
+          ? saveOrderExactAddress({
+              jobId: id,
+              employerUid: user.uid,
+              exactAddress: trimmedExactAddress,
+              exactLat: coords.lat,
+              exactLng: coords.lng,
+            })
+          : Promise.resolve(),
+        recordCustomerOrderPreference(user.uid, {
+          kind: 'hire',
+          categoryOrVehicleType: cleanCategory,
+          orderTitle: cleanTitle,
+          state: stateName,
+          district: resolvedDistrict,
+          cityOrVillage: cleanCity,
+          lat: coords.lat,
+          lng: coords.lng,
+        }),
+      ]);
+
+      // Fair-rotation Batch 1 in-app alert dispatch (non-fatal if no workers match yet)
       let inAppNotified = 0;
       let batchTargetUids: string[] = [];
       let batchFinalRadius = initialRadiusKm;
       if (workers.length > 0) {
-        const broadcastRes = await broadcastSmartJobAlerts({
-          jobId: id,
-          job: jobPayload,
-          workers,
-          stageRadiusKm: initialRadiusKm,
-          autoExpandIfEmpty: true,
-        });
-        inAppNotified = broadcastRes.notifiedCount;
-        batchTargetUids = broadcastRes.newlyNotifiedUids;
-        batchFinalRadius = broadcastRes.finalRadiusKm;
+        try {
+          const broadcastRes = await broadcastSmartJobAlerts({
+            jobId: id,
+            job: jobPayload,
+            workers,
+            stageRadiusKm: initialRadiusKm,
+            autoExpandIfEmpty: true,
+          });
+          inAppNotified = broadcastRes.notifiedCount;
+          batchTargetUids = broadcastRes.newlyNotifiedUids;
+          batchFinalRadius = broadcastRes.finalRadiusKm;
+        } catch (dispatchErr) {
+          console.warn('Fair-rotation alert dispatch notice:', dispatchErr);
+        }
       }
 
-      try {
-        const res = await callNotificationApi<{
-          ok?: boolean;
-          matchedWorkersCount?: number;
-          sentCount?: number;
-          inAppOnlyCount?: number;
-          message?: string;
-        }>('/api/notifications/send-matching-job', {
-          jobId: id,
-          stageRadiusKm: batchFinalRadius,
-          ...(batchTargetUids.length > 0 ? { targetWorkerUids: batchTargetUids } : {}),
-        });
-        if ((res.data.sentCount || 0) > 0) {
-          setPushDispatchNotice(
-            `Batch 1 notified ${Math.max(inAppNotified, res.data.matchedWorkersCount || 0)} priority worker(s) via fair rotation (${res.data.sentCount} push delivery).`
-          );
-        } else if (inAppNotified > 0 || (res.data.matchedWorkersCount || 0) > 0) {
-          setPushDispatchNotice(
-            `Batch 1 notified ${Math.max(inAppNotified, res.data.matchedWorkersCount || 0)} priority worker(s) immediately in-app (fair rotation).`
-          );
-        }
-      } catch {
-        if (inAppNotified > 0) {
-          setPushDispatchNotice(`Batch 1 notified ${inAppNotified} priority worker(s) immediately in-app (fair rotation).`);
-        }
+      setCreatedJobId(id);
+      setCreatedJobSummary({
+        id,
+        title: cleanTitle,
+        category: cleanCategory,
+        location: approxLocationLabel,
+        notifiedCount: inAppNotified,
+        radiusKm: batchFinalRadius,
+      });
+
+      if (inAppNotified > 0) {
+        setPushDispatchNotice(
+          tr(
+            `Batch 1 notified ${inAppNotified} priority worker(s) within ${batchFinalRadius} km via fair rotation.`,
+            `बैच 1: समान बारी प्रणाली से ${batchFinalRadius} किमी में ${inAppNotified} प्राथमिकता वाले कामगारों को अलर्ट भेजा गया।`,
+            `बॅच १: समान संधी रोटेशनद्वारे ${batchFinalRadius} किमी मधील ${inAppNotified} कामगारांना तात्काळ अलर्ट पाठवला आहे.`
+          )
+        );
+      } else {
+        setPushDispatchNotice(
+          tr(
+            'Your job is now live on the Find Work board. Nearby workers matching this skill can apply immediately.',
+            'आपकी काम की पोस्ट अब "काम खोजें" बोर्ड पर लाइव है। आसपास के योग्य कामगार तुरंत आवेदन कर सकते हैं।',
+            'तुमची कामाची जाहिरात "काम शोधा" बोर्डवर थेट सुरू झाली आहे. जवळचे योग्य कामगार लगेच संपर्क करू शकतील.'
+          )
+        );
       }
+
+      // Reset task fields for clean next post & scroll smoothly to confirmation card
+      setTitle('');
+      setDescription('');
+      setSkillsInput('');
+      setWorkPhotoUrls([]);
+      window.setTimeout(() => {
+        successCardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      }, 60);
+
+      // Fire background FCM push notification non-blockingly (with 10s timeout) so UI never stalls
+      void callNotificationApi<{
+        ok?: boolean;
+        matchedWorkersCount?: number;
+        sentCount?: number;
+        inAppOnlyCount?: number;
+        message?: string;
+      }>('/api/notifications/send-matching-job', {
+        jobId: id,
+        stageRadiusKm: batchFinalRadius,
+        ...(batchTargetUids.length > 0 ? { targetWorkerUids: batchTargetUids } : {}),
+      })
+        .then((res) => {
+          const totalMatched = Math.max(inAppNotified, res.data?.matchedWorkersCount || 0);
+          if ((res.data?.sentCount || 0) > 0) {
+            setPushDispatchNotice(
+              tr(
+                `Batch 1 notified ${totalMatched} priority worker(s) via fair rotation (${res.data.sentCount} push delivery).`,
+                `बैच 1: समान बारी प्रणाली से ${totalMatched} कामगारों को सूचना भेजी गई (${res.data.sentCount} पुश अलर्ट)।`,
+                `बॅच १: समान संधी रोटेशनने ${totalMatched} कामगारांना अलर्ट पाठवला (${res.data.sentCount} पुश नोटिफिकेशन).`
+              )
+            );
+          }
+        })
+        .catch(() => {
+          // Non-blocking: job is already saved and in-app alerts already dispatched
+        });
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Unable to publish job.');
+      setErrorMsg(
+        formatUiError(
+          err,
+          tr(
+            'Unable to publish job right now. Please check your connection and try again.',
+            'अभी काम पोस्ट नहीं हो सका। कृपया इंटरनेट जांचें और पुनः प्रयास करें।',
+            'सध्या कामाची जाहिरात जतन करता आली नाही. कृपया इंटरनेट तपासून पुन्हा प्रयत्न करा.'
+          )
+        )
+      );
+      window.setTimeout(() => {
+        errorBannerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }, 20);
     } finally {
       setSaving(false);
     }
   };
 
   return (
-    <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
-      <div className="mb-8">
+    <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 py-10 sm:py-12">
+      <div className="mb-7">
         <h1 className="font-display text-2xl sm:text-3xl font-bold text-[#0B3B75]">
           {t.jobs.postTitle}
         </h1>
@@ -1208,69 +1554,119 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
       </div>
 
       {!user ? (
-        <div className="bg-slate-50 border border-slate-200 rounded-lg p-6 flex items-center justify-between gap-4">
-          <p className="text-sm text-slate-700">{t.common.signInRequired}</p>
+        <div className="bg-slate-50 border border-slate-200 rounded-xl p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <p className="text-sm font-bold text-[#0B3B75]">{t.common.signInRequired}</p>
+            <p className="text-xs text-slate-600">
+              {tr(
+                'Sign in once with Google to publish your job and alert verified local workers directly.',
+                'काम पोस्ट करने और नज़दीकी कामगारों को तुरंत अलर्ट भेजने के लिए Google से साइन-इन करें।',
+                'कामाची जाहिरात टाकण्यासाठी आणि जवळच्या कामगारांना थेट अलर्ट पाठवण्यासाठी एकदा Google ने साइन-इन करा.'
+              )}
+            </p>
+          </div>
           <button
             type="button"
-            onClick={signInWithGoogle}
-            className="px-4 py-2 rounded-md bg-[#0B3B75] text-white text-xs font-semibold cursor-pointer"
+            disabled={signingIn}
+            onClick={handleGoogleSignIn}
+            className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-lg bg-[#0B3B75] hover:bg-[#072A54] text-white text-xs sm:text-sm font-bold cursor-pointer disabled:opacity-60 shrink-0"
           >
-            {t.nav.signIn}
-          </button>
-        </div>
-      ) : !employerProfile ? (
-        <div className="bg-amber-50 border border-amber-200 rounded-lg p-6 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-          <p className="text-sm text-amber-950">
-            Please complete Employer Registration before publishing a job requirement.
-          </p>
-          <button
-            type="button"
-            onClick={() => onNavigate('register-employer')}
-            className="px-4 py-2 rounded-md bg-[#0B3B75] text-white text-xs font-semibold whitespace-nowrap cursor-pointer"
-          >
-            {t.nav.employerReg}
+            {signingIn && <Loader2 className="w-4 h-4 animate-spin" />}
+            <span>{t.nav.signIn}</span>
           </button>
         </div>
       ) : (
         <>
-          {createdJobId && (
-            <div className="mb-6 bg-green-50 border border-green-200 rounded-lg p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-              <div>
-                <p className="text-sm font-semibold text-green-950">
-                  Job published successfully (ID: <span className="font-mono-tabular">{createdJobId}</span>).
-                </p>
-                {pushDispatchNotice && (
-                  <p className="text-xs text-emerald-800 mt-1">{pushDispatchNotice}</p>
-                )}
+          {createdJobId && createdJobSummary && (
+            <div
+              ref={successCardRef}
+              className="mb-6 bg-emerald-50 border-2 border-[#15803D]/40 rounded-xl p-5 shadow-xs space-y-3"
+            >
+              <div className="flex items-start gap-3">
+                <CheckCircle2 className="w-6 h-6 text-[#15803D] shrink-0 mt-0.5" />
+                <div className="min-w-0 flex-1">
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded bg-emerald-100 text-[#15803D] text-[11px] font-extrabold uppercase tracking-wide">
+                    {tr('Job Published Successfully', 'काम सफलतापूर्वक पोस्ट हो गया', 'कामाची जाहिरात यशस्वीरीत्या प्रकाशित झाली')}
+                  </div>
+                  <h2 className="font-display text-lg font-extrabold text-[#0B3B75] mt-1">
+                    {createdJobSummary.title}
+                  </h2>
+                  <p className="text-xs text-slate-700 mt-1">
+                    <strong>{tr('Category:', 'श्रेणी:', 'व्यवसाय:')}</strong> {createdJobSummary.category} ·{' '}
+                    <strong>{tr('Location:', 'स्थान:', 'ठिकाण:')}</strong> {createdJobSummary.location} ·{' '}
+                    <span className="font-mono-tabular text-slate-500">ID: {createdJobSummary.id}</span>
+                  </p>
+                  {pushDispatchNotice && (
+                    <p className="text-xs font-semibold text-emerald-900 mt-2 bg-white/80 border border-emerald-200 rounded-lg px-3 py-2">
+                      {pushDispatchNotice}
+                    </p>
+                  )}
+                </div>
               </div>
-              <button
-                type="button"
-                onClick={() => onNavigate('employer-dashboard')}
-                className="px-4 py-2 rounded-md bg-[#15803D] text-white text-xs font-semibold cursor-pointer shrink-0"
-              >
-                {t.nav.employerDashboard}
-              </button>
+              <div className="flex flex-wrap items-center gap-2.5 pt-1">
+                <button
+                  type="button"
+                  onClick={() => onNavigate('employer-dashboard')}
+                  className="px-4 py-2 rounded-lg bg-[#15803D] hover:bg-emerald-800 text-white text-xs font-bold cursor-pointer"
+                >
+                  {tr('Track Responses in Dashboard', 'डैशबोर्ड में प्रतिक्रिया देखें', 'डॅशबोर्डवर प्रतिसाद पहा')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('find-workers')}
+                  className="px-4 py-2 rounded-lg border border-[#0B3B75] bg-white hover:bg-blue-50 text-[#0B3B75] text-xs font-bold cursor-pointer"
+                >
+                  {tr('Browse Matching Workers', 'योग्य कामगार देखें', 'कामगार शोधा')}
+                </button>
+              </div>
             </div>
           )}
 
-          <form onSubmit={handleSubmit} className="bg-white border border-slate-200 rounded-lg p-6 sm:p-8 space-y-5">
+          {errorMsg && (
+            <div
+              ref={errorBannerRef}
+              role="alert"
+              className="mb-5 p-3.5 rounded-xl bg-red-50 border border-red-300 text-xs sm:text-sm font-semibold text-red-800 flex items-start gap-2.5"
+            >
+              <AlertCircle className="w-5 h-5 text-red-600 shrink-0 mt-0.5" />
+              <span>{errorMsg}</span>
+            </div>
+          )}
+
+          <form
+            noValidate
+            onSubmit={handleSubmit}
+            className="bg-white border border-slate-200 rounded-xl p-5 sm:p-8 space-y-5 shadow-xs"
+          >
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                <label className="block text-xs font-bold text-slate-700 mb-1">
                   {t.jobs.jobTitle} *
                 </label>
                 <input
                   type="text"
-                  required
-                  minLength={3}
+                  maxLength={140}
                   value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
+                  onChange={(e) => {
+                    setTitle(e.target.value);
+                    clearFieldError('title');
+                  }}
+                  placeholder={tr(
+                    'e.g., Electrician needed for house wiring',
+                    'जैसे: घर की वायरिंग के लिए इलेक्ट्रीशियन चाहिए',
+                    'उदा. घरगुती वायरिंगसाठी इलेक्ट्रिशियन हवा आहे'
+                  )}
+                  className={`w-full px-3 py-2.5 border rounded-lg text-sm ${
+                    fieldErrors.title ? 'border-red-400 bg-red-50/40' : 'border-slate-300'
+                  }`}
                 />
+                {fieldErrors.title && (
+                  <p className="mt-1 text-xs font-semibold text-red-700">{fieldErrors.title}</p>
+                )}
               </div>
 
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                <label className="block text-xs font-bold text-slate-700 mb-1">
                   {t.jobs.category} *
                 </label>
                 <div className="flex items-center gap-2">
@@ -1281,33 +1677,31 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
                   />
                   <select
                     value={category}
-                    onChange={(e) => setCategory(e.target.value)}
-                    className="flex-1 min-w-0 h-10 px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
+                    onChange={(e) => {
+                      setCategory(e.target.value);
+                      clearFieldError('category');
+                    }}
+                    className={`flex-1 min-w-0 h-10 px-3 py-2 border rounded-lg text-sm bg-white ${
+                      fieldErrors.category ? 'border-red-400 bg-red-50/40' : 'border-slate-300'
+                    }`}
                   >
                     <optgroup
-                      label={
-                        lang === 'mr'
-                          ? 'प्रमुख रोजगार श्रेणी'
-                          : lang === 'hi'
-                          ? 'प्रमुख रोजगार श्रेणियाँ'
-                          : 'Standard Categories'
-                      }
+                      label={tr('Standard Categories', 'प्रमुख रोजगार श्रेणियाँ', 'प्रमुख रोजगार श्रेणी')}
                     >
                       {NORMAL_WORK_CATEGORIES.map((c) => (
                         <option key={c.id} value={c.en}>
                           {lang === 'hi' ? c.hi : lang === 'mr' ? c.mr : c.en}
                         </option>
                       ))}
+                      {extraCatalogCategories.map((svc) => (
+                        <option key={svc.id} value={svc.canonicalCategory}>
+                          {getServiceCategoryLabel(svc, lang)}
+                        </option>
+                      ))}
                     </optgroup>
                     {approvedProfessions.length > 0 && (
                       <optgroup
-                        label={
-                          lang === 'mr'
-                            ? 'मंजूर विशेष व्यवसाय'
-                            : lang === 'hi'
-                            ? 'स्वीकृत विशेष व्यवसाय'
-                            : 'Approved Specialized Professions'
-                        }
+                        label={tr('Approved Specialized Professions', 'स्वीकृत विशेष व्यवसाय', 'मंजूर विशेष व्यवसाय')}
                       >
                         {approvedProfessions.map((p) => (
                           <option key={p.slug} value={p.nameEn}>
@@ -1316,23 +1710,23 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
                         ))}
                       </optgroup>
                     )}
+                    {isCustomSelectedCategoryMissingFromLists && (
+                      <option value={category}>{category}</option>
+                    )}
                   </select>
                   <button
                     type="button"
                     onClick={() => setShowAddProfessionModal(true)}
-                    title={
-                      lang === 'mr'
-                        ? 'नवीन काम / व्यवसाय जोडा'
-                        : lang === 'hi'
-                        ? 'नया काम / श्रेणी जोड़ें'
-                        : 'Add New Skill / Category'
-                    }
-                    className="h-10 inline-flex items-center gap-1 px-3 py-2 rounded-md bg-[#E06D1B] hover:bg-[#C65B12] text-white text-xs font-extrabold shrink-0 shadow-xs cursor-pointer"
+                    title={tr('Add New Skill / Category', 'नया काम / श्रेणी जोड़ें', 'नवीन काम / व्यवसाय जोडा')}
+                    className="h-10 inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-[#E06D1B] hover:bg-[#C65B12] text-white text-xs font-extrabold shrink-0 shadow-xs cursor-pointer"
                   >
                     <Plus className="w-4 h-4" />
-                    <span>{lang === 'mr' ? 'जोडा' : lang === 'hi' ? 'जोड़ें' : 'Add'}</span>
+                    <span>{tr('Add', 'जोड़ें', 'जोडा')}</span>
                   </button>
                 </div>
+                {fieldErrors.category && (
+                  <p className="mt-1 text-xs font-semibold text-red-700">{fieldErrors.category}</p>
+                )}
               </div>
             </div>
 
@@ -1345,7 +1739,10 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
                   <button
                     key={svc.id}
                     type="button"
-                    onClick={() => setCategory(svc.canonicalCategory)}
+                    onClick={() => {
+                      setCategory(svc.canonicalCategory);
+                      clearFieldError('category');
+                    }}
                     className={`shrink-0 inline-flex items-center gap-1.5 pl-1 pr-2.5 py-1 rounded-lg border text-xs font-bold transition-colors cursor-pointer ${
                       isSelected
                         ? 'bg-blue-50 border-[#0B3B75] text-[#0B3B75]'
@@ -1372,7 +1769,10 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
                   <button
                     key={prof.slug}
                     type="button"
-                    onClick={() => setCategory(prof.nameEn)}
+                    onClick={() => {
+                      setCategory(prof.nameEn);
+                      clearFieldError('category');
+                    }}
                     className={`shrink-0 inline-flex items-center gap-1.5 pl-1 pr-2.5 py-1 rounded-lg border text-xs font-bold transition-colors cursor-pointer ${
                       isSelected
                         ? 'bg-blue-50 border-[#0B3B75] text-[#0B3B75]'
@@ -1392,25 +1792,123 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
                   </button>
                 );
               })}
+              <button
+                type="button"
+                onClick={() => setShowAddProfessionModal(true)}
+                className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-dashed border-[#E06D1B] bg-orange-50/70 hover:bg-orange-100 text-[#C25E00] text-xs font-extrabold cursor-pointer"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>{tr('Add Custom', 'नया जोड़ें', 'नवीन जोडा')}</span>
+              </button>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                {t.jobs.description} *
-              </label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-bold text-slate-700">
+                  {t.jobs.description} *
+                </label>
+                <span
+                  className={`text-[11px] font-mono-tabular ${
+                    description.trim().length < 10 ? 'text-amber-700 font-semibold' : 'text-emerald-700 font-semibold'
+                  }`}
+                >
+                  {description.trim().length}/10+ {tr('chars', 'अक्षर', 'अक्षरे')}
+                </span>
+              </div>
               <textarea
-                required
-                minLength={10}
                 rows={3}
+                maxLength={2000}
                 value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
+                onChange={(e) => {
+                  setDescription(e.target.value);
+                  clearFieldError('description');
+                }}
+                placeholder={tr(
+                  'Describe the work details, tools needed, or timing clearly (minimum 10 characters)...',
+                  'काम की जानकारी, आवश्यक औज़ार या समय विस्तार से लिखें (कम से कम 10 अक्षर)...',
+                  'कामाची माहिती, लागणारे साहित्य किंवा वेळेचा तपशील लिहा (किमान १० अक्षरे)...'
+                )}
+                className={`w-full px-3 py-2.5 border rounded-lg text-sm ${
+                  fieldErrors.description ? 'border-red-400 bg-red-50/40' : 'border-slate-300'
+                }`}
               />
+              {fieldErrors.description && (
+                <p className="mt-1 text-xs font-semibold text-red-700">{fieldErrors.description}</p>
+              )}
+            </div>
+
+            {/* Customer Contact Details (Privacy Protected — No OTP Fraud) */}
+            <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-4 space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-1.5 text-xs font-extrabold text-[#0B3B75]">
+                  <Phone className="w-3.5 h-3.5 text-[#E06D1B]" />
+                  <span>
+                    {tr(
+                      'Contact Details (Private & Protected)',
+                      'संपर्क विवरण (गोपनीय और सुरक्षित)',
+                      'संपर्क माहिती (खाजगी व सुरक्षित)'
+                    )}
+                  </span>
+                </div>
+                <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-[#15803D]">
+                  <ShieldCheck className="w-3.5 h-3.5" />
+                  {tr(
+                    'No OTP call required · Number hidden on public job card',
+                    'OTP कॉल नहीं · नंबर पब्लिक कार्ड पर नहीं दिखता',
+                    'कॉल OTP नाही · नंबर जाहीर कार्डवर दिसत नाही'
+                  )}
+                </span>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    {tr('Your Name / Business Name *', 'आपका नाम / व्यवसाय का नाम *', 'तुमचे नाव / व्यवसायाचे नाव *')}
+                  </label>
+                  <input
+                    type="text"
+                    maxLength={120}
+                    value={contactName}
+                    onChange={(e) => {
+                      setContactName(e.target.value);
+                      clearFieldError('contactName');
+                    }}
+                    placeholder={tr('e.g., Rajesh Patil', 'जैसे: राजेश पाटिल', 'उदा. राजेश पाटील')}
+                    className={`w-full px-3 py-2 border rounded-lg text-sm bg-white ${
+                      fieldErrors.contactName ? 'border-red-400 bg-red-50/40' : 'border-slate-300'
+                    }`}
+                  />
+                  {fieldErrors.contactName && (
+                    <p className="mt-1 text-xs font-semibold text-red-700">{fieldErrors.contactName}</p>
+                  )}
+                </div>
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    {tr('10-Digit Mobile Number *', '10 अंकों का मोबाइल नंबर *', '१० अंकी मोबाईल नंबर *')}
+                  </label>
+                  <input
+                    type="tel"
+                    inputMode="numeric"
+                    maxLength={10}
+                    value={contactMobile}
+                    onChange={(e) => {
+                      setContactMobile(e.target.value.replace(/\D/g, '').slice(0, 10));
+                      clearFieldError('contactMobile');
+                    }}
+                    placeholder={tr('e.g., 9876543210', 'जैसे: 9876543210', 'उदा. 9876543210')}
+                    className={`w-full px-3 py-2 border rounded-lg text-sm font-mono-tabular bg-white ${
+                      fieldErrors.contactMobile ? 'border-red-400 bg-red-50/40' : 'border-slate-300'
+                    }`}
+                  />
+                  {fieldErrors.contactMobile && (
+                    <p className="mt-1 text-xs font-semibold text-red-700">{fieldErrors.contactMobile}</p>
+                  )}
+                </div>
+              </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                <label className="block text-xs font-bold text-slate-700 mb-1">
                   {t.jobs.workersRequired} *
                 </label>
                 <input
@@ -1418,27 +1916,42 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
                   min={1}
                   max={5000}
                   value={workersRequired}
-                  onChange={(e) => setWorkersRequired(Number(e.target.value))}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm font-mono-tabular"
+                  onChange={(e) => {
+                    setWorkersRequired(Number(e.target.value));
+                    clearFieldError('workersRequired');
+                  }}
+                  className={`w-full px-3 py-2 border rounded-lg text-sm font-mono-tabular ${
+                    fieldErrors.workersRequired ? 'border-red-400 bg-red-50/40' : 'border-slate-300'
+                  }`}
                 />
+                {fieldErrors.workersRequired && (
+                  <p className="mt-1 text-xs font-semibold text-red-700">{fieldErrors.workersRequired}</p>
+                )}
               </div>
               <div className="sm:col-span-2">
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  {t.jobs.requiredSkills} *
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  {t.jobs.requiredSkills}{' '}
+                  <span className="font-normal text-slate-500">
+                    ({tr('optional — defaults to selected category', 'वैकल्पिक', 'ऐच्छिक')})
+                  </span>
                 </label>
                 <input
                   type="text"
-                  required
                   value={skillsInput}
                   onChange={(e) => setSkillsInput(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
+                  placeholder={tr(
+                    `e.g., ${category}, Repair, Installation`,
+                    `जैसे: ${category}, रिपेयर, फिटिंग`,
+                    `उदा. ${category}, दुरुस्ती, फिटिंग`
+                  )}
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
                 />
               </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                <label className="block text-xs font-bold text-slate-700 mb-1">
                   {t.workerForm.state} *
                 </label>
                 <select
@@ -1447,9 +1960,9 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
                     const val = e.target.value;
                     setStateName(val);
                     const st = INDIA_STATES_DISTRICTS.find((s) => s.name === val);
-                    setDistrictName(st?.districts[0]?.name || '');
+                    setDistrictName(st?.districts[0]?.name || val);
                   }}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white"
                 >
                   {INDIA_STATES_DISTRICTS.map((st) => (
                     <option key={st.name} value={st.name}>
@@ -1459,13 +1972,13 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                <label className="block text-xs font-bold text-slate-700 mb-1">
                   {t.workerForm.district} *
                 </label>
                 <select
                   value={districtName}
                   onChange={(e) => setDistrictName(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white"
                 >
                   {stateObj?.districts.map((d) => (
                     <option key={d.name} value={d.name}>
@@ -1475,43 +1988,68 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                <label className="block text-xs font-bold text-slate-700 mb-1">
                   {t.workerForm.cityVillage} *
                 </label>
                 <input
                   type="text"
-                  required
+                  maxLength={100}
                   value={cityOrVillage}
-                  onChange={(e) => setCityOrVillage(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
+                  onChange={(e) => {
+                    setCityOrVillage(e.target.value);
+                    clearFieldError('cityOrVillage');
+                  }}
+                  placeholder={tr('City / Village', 'शहर / गाँव', 'शहर / गाव')}
+                  className={`w-full px-3 py-2 border rounded-lg text-sm ${
+                    fieldErrors.cityOrVillage ? 'border-red-400 bg-red-50/40' : 'border-slate-300'
+                  }`}
                 />
+                {fieldErrors.cityOrVillage && (
+                  <p className="mt-1 text-xs font-semibold text-red-700">{fieldErrors.cityOrVillage}</p>
+                )}
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  {lang === 'mr' ? 'पिनकोड (६ अंकी)' : lang === 'hi' ? 'पिनकोड (6 अंक)' : 'Pincode (6-digit)'}
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  {tr('Pincode (6-digit) *', 'पिनकोड (6 अंक) *', 'पिनकोड (६ अंकी) *')}
                 </label>
                 <input
                   type="text"
                   inputMode="numeric"
                   maxLength={6}
                   value={pincode}
-                  onChange={(e) => setPincode(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                  placeholder="e.g. 442401"
-                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm font-mono-tabular"
+                  onChange={(e) => {
+                    setPincode(e.target.value.replace(/\D/g, '').slice(0, 6));
+                    clearFieldError('pincode');
+                  }}
+                  placeholder="442401"
+                  className={`w-full px-3 py-2 border rounded-lg text-sm font-mono-tabular ${
+                    fieldErrors.pincode ? 'border-red-400 bg-red-50/40' : 'border-slate-300'
+                  }`}
                 />
+                {fieldErrors.pincode && (
+                  <p className="mt-1 text-xs font-semibold text-red-700">{fieldErrors.pincode}</p>
+                )}
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                <label className="block text-xs font-bold text-slate-700 mb-1">
                   {t.jobs.workLocationLabel} *
                 </label>
                 <input
                   type="text"
-                  required
+                  maxLength={160}
                   value={workLocationLabel}
-                  onChange={(e) => setWorkLocationLabel(e.target.value)}
-                  placeholder={lang === 'mr' ? 'परिसर / कॉलनी' : lang === 'hi' ? 'इलाका / कॉलोनी' : 'Area / Colony'}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
+                  onChange={(e) => {
+                    setWorkLocationLabel(e.target.value);
+                    clearFieldError('workLocationLabel');
+                  }}
+                  placeholder={tr('Area / Colony', 'इलाका / कॉलोनी', 'परिसर / कॉलनी')}
+                  className={`w-full px-3 py-2 border rounded-lg text-sm ${
+                    fieldErrors.workLocationLabel ? 'border-red-400 bg-red-50/40' : 'border-slate-300'
+                  }`}
                 />
+                {fieldErrors.workLocationLabel && (
+                  <p className="mt-1 text-xs font-semibold text-red-700">{fieldErrors.workLocationLabel}</p>
+                )}
               </div>
             </div>
 
@@ -1528,142 +2066,173 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
             {/* Approximate Work Area GPS Helper (Exact Location shared only AFTER offer acceptance) */}
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-3.5 flex flex-wrap items-center justify-between gap-2">
               <div className="text-xs text-slate-600">
-                <strong className="text-[#0B3B75]">Approximate Work Area (GPS):</strong>{' '}
+                <strong className="text-[#0B3B75]">
+                  {tr('Approximate Work Area (GPS):', 'अनुमानित कार्य क्षेत्र (GPS):', 'अंदाजे कामाचा परिसर (GPS):')}
+                </strong>{' '}
                 {pinnedCoords
-                  ? `Pinned (${pinnedCoords.lat.toFixed(4)}, ${pinnedCoords.lng.toFixed(4)}) — workers see approximate distance before quoting. Exact location is shared only after you accept an offer.`
-                  : 'Optional: pin your area so nearby workers see approximate distance. Exact location stays hidden until offer acceptance.'}
+                  ? tr(
+                      `Pinned (${pinnedCoords.lat.toFixed(4)}, ${pinnedCoords.lng.toFixed(4)}) — exact address stays hidden until you confirm a worker.`,
+                      `पिन किया गया (${pinnedCoords.lat.toFixed(4)}, ${pinnedCoords.lng.toFixed(4)}) — सटीक पता कन्फर्म होने के बाद ही साझा होगा।`,
+                      `पिन केलेले (${pinnedCoords.lat.toFixed(4)}, ${pinnedCoords.lng.toFixed(4)}) — कामगार निश्चित केल्यानंतरच अचूक पत्ता शेअर होतो.`
+                    )
+                  : tr(
+                      'Optional: auto-fill city, pincode & approximate distance for nearby workers.',
+                      'वैकल्पिक: शहर, पिनकोड व दूरी अपने-आप भरने के लिए GPS उपयोग करें।',
+                      'ऐच्छिक: गाव, पिनकोड व अंदाजे अंतर आपोआप भरण्यासाठी GPS वापरा.'
+                    )}
               </div>
               <button
                 type="button"
                 disabled={gpsBusy}
                 onClick={handleShareJobGps}
-                className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md border border-[#0B3B75] bg-white text-[#0B3B75] text-xs font-bold hover:bg-blue-50 cursor-pointer disabled:opacity-60"
+                className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-[#0B3B75] bg-white text-[#0B3B75] text-xs font-bold hover:bg-blue-50 cursor-pointer disabled:opacity-60"
               >
                 <LocateFixed className="w-4 h-4 text-[#E06D1B]" />
-                <span>{gpsBusy ? 'Detecting GPS...' : 'Pin Work Area (GPS)'}</span>
+                <span>
+                  {gpsBusy
+                    ? tr('Detecting GPS...', 'GPS खोज रहे हैं...', 'GPS शोधत आहे...')
+                    : tr('Pin Work Area (GPS)', 'GPS से स्थान भरें', 'GPS ने ठिकाण भरा')}
+                </span>
               </button>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-5">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                <label className="block text-xs font-bold text-slate-700 mb-1">
                   {t.jobs.jobDate}
                 </label>
                 <input
                   type="date"
                   value={jobDate}
                   onChange={(e) => setJobDate(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
                 />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                <label className="block text-xs font-bold text-slate-700 mb-1">
                   {t.jobs.startTime}
                 </label>
                 <input
                   type="time"
                   value={startTime}
                   onChange={(e) => setStartTime(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
                 />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                <label className="block text-xs font-bold text-slate-700 mb-1">
                   {t.jobs.duration}
                 </label>
                 <input
                   type="text"
                   value={duration}
                   onChange={(e) => setDuration(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
                 />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                <label className="block text-xs font-bold text-slate-700 mb-1">
                   {t.jobs.workType}
                 </label>
                 <select
                   value={workType}
                   onChange={(e) => setWorkType(e.target.value as JobWorkType)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white"
                 >
-                  <option value="daily_wage">Daily Wage</option>
-                  <option value="full_time">Full-time</option>
-                  <option value="part_time">Part-time</option>
-                  <option value="contract">Contract</option>
-                  <option value="temporary">Temporary</option>
-                  <option value="urgent">Urgent Requirement</option>
-                  <option value="bulk">Bulk Workforce</option>
+                  <option value="daily_wage">{tr('Daily Wage', 'दैनिक वेतन', 'रोजंदारी')}</option>
+                  <option value="urgent">{tr('Urgent Requirement', 'तुरंत आवश्यक', 'तातडीचे काम')}</option>
+                  <option value="contract">{tr('Contract', 'ठेका / कॉन्ट्रैक्ट', 'कंत्राट')}</option>
+                  <option value="full_time">{tr('Full-time', 'फुल-टाइम', 'पूर्ण वेळ')}</option>
+                  <option value="part_time">{tr('Part-time', 'पार्ट-टाइम', 'अर्धवेळ')}</option>
+                  <option value="temporary">{tr('Temporary', 'अस्थायी', 'तात्पुरते')}</option>
+                  <option value="bulk">{tr('Bulk Workforce', 'बल्क कामगार', 'मोठ्या संख्येने कामगार')}</option>
                 </select>
               </div>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-4 gap-5">
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                <label className="block text-xs font-bold text-slate-700 mb-1">
                   {t.jobs.offeredWage} *
                 </label>
                 <input
                   type="number"
                   min={0}
+                  max={500000}
                   value={offeredWage}
-                  onChange={(e) => setOfferedWage(Number(e.target.value))}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm font-mono-tabular"
+                  onChange={(e) => {
+                    setOfferedWage(Number(e.target.value));
+                    clearFieldError('offeredWage');
+                  }}
+                  className={`w-full px-3 py-2 border rounded-lg text-sm font-mono-tabular ${
+                    fieldErrors.offeredWage ? 'border-red-400 bg-red-50/40' : 'border-slate-300'
+                  }`}
                 />
+                {fieldErrors.offeredWage && (
+                  <p className="mt-1 text-xs font-semibold text-red-700">{fieldErrors.offeredWage}</p>
+                )}
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                <label className="block text-xs font-bold text-slate-700 mb-1">
                   {t.workerForm.wageUnit}
                 </label>
                 <select
                   value={wageUnit}
                   onChange={(e) => setWageUnit(e.target.value as WageUnit)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white"
                 >
-                  <option value="daily">Daily</option>
-                  <option value="monthly">Monthly</option>
-                  <option value="hourly">Hourly</option>
-                  <option value="contract">Contract</option>
+                  <option value="daily">{tr('Daily', 'प्रति दिन', 'प्रति दिन')}</option>
+                  <option value="monthly">{tr('Monthly', 'प्रति माह', 'प्रति महिना')}</option>
+                  <option value="hourly">{tr('Hourly', 'प्रति घंटा', 'प्रति तास')}</option>
+                  <option value="contract">{tr('Contract', 'ठेका / फिक्स्ड', 'कंत्राट')}</option>
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                <label className="block text-xs font-bold text-slate-700 mb-1">
                   {t.jobs.paymentTerms}
                 </label>
                 <input
                   type="text"
                   value={paymentTerms}
                   onChange={(e) => setPaymentTerms(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
                 />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                <label className="block text-xs font-bold text-slate-700 mb-1">
                   {t.jobs.contactPref}
                 </label>
                 <select
                   value={contactPreference}
                   onChange={(e) => setContactPreference(e.target.value as typeof contactPreference)}
-                  className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm bg-white"
+                  className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white"
                 >
-                  <option value="phone_after_confirm">Phone after confirmation</option>
-                  <option value="platform_message">Platform updates only</option>
+                  <option value="phone_after_confirm">
+                    {tr('Phone after confirmation', 'कन्फर्म होने के बाद फ़ोन', 'निश्चित झाल्यावर फोन')}
+                  </option>
+                  <option value="platform_message">
+                    {tr('Platform updates only', 'केवल ऐप अपडेट', 'फक्त अ‍ॅप अपडेट्स')}
+                  </option>
                 </select>
               </div>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Initial Notification Radius Stage (Staged: 5 → 10 → 20 → 30 km)
+              <label className="block text-xs font-bold text-slate-700 mb-1">
+                {tr(
+                  'Initial Notification Radius Stage (Staged: 2 → 5 → 10 → 20 → 30 km)',
+                  'प्रारंभिक अलर्ट दायरा (2 → 5 → 10 → 20 → 30 किमी)',
+                  'सुरुवातीचा अलर्ट परिसर (2 → 5 → 10 → 20 → 30 किमी)'
+                )}
               </label>
               <select
                 value={initialRadiusKm}
                 onChange={(e) => setInitialRadiusKm(Number(e.target.value) as ServiceRadiusKm)}
-                className="w-full sm:w-64 px-3 py-2 border border-slate-300 rounded-md text-sm bg-white font-mono-tabular"
+                className="w-full sm:w-64 px-3 py-2 border border-slate-300 rounded-lg text-sm bg-white font-mono-tabular"
               >
                 {SERVICE_RADIUS_STAGES.map((km) => (
                   <option key={km} value={km}>
-                    {km} km initial broadcast radius
+                    {km} km {tr('initial broadcast radius', 'प्रारंभिक दायरा', 'सुरुवातीचा परिसर')}
                   </option>
                 ))}
               </select>
@@ -1697,22 +2266,39 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
             </div>
 
             {errorMsg && (
-              <div className="p-3 rounded-md bg-red-50 border border-red-200 text-sm text-red-800">
-                {errorMsg}
+              <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-xs sm:text-sm font-semibold text-red-800 flex items-start gap-2">
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                <span>{errorMsg}</span>
               </div>
             )}
 
-            <div className="flex justify-end">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
+              {!employerProfile && (
+                <button
+                  type="button"
+                  onClick={() => onNavigate('register-employer')}
+                  className="text-xs font-semibold text-[#0B3B75] hover:underline text-left cursor-pointer"
+                >
+                  {tr(
+                    'Optional: Save a permanent Employer / Business Profile →',
+                    'वैकल्पिक: स्थायी नियोक्ता / व्यवसाय प्रोफ़ाइल बनाएं →',
+                    'ऐच्छिक: कायमस्वरूपी व्यवसाय / ग्राहक प्रोफाईल तयार करा →'
+                  )}
+                </button>
+              )}
               <button
                 type="submit"
                 disabled={saving || photoUploading}
-                className="px-6 py-3 rounded-md bg-[#0B3B75] text-white text-sm font-bold hover:bg-slate-800 disabled:opacity-60 cursor-pointer"
+                className="sm:ml-auto inline-flex items-center justify-center gap-2 px-6 py-3 rounded-lg bg-[#E06D1B] hover:bg-[#c55b10] text-white text-sm font-extrabold shadow-xs disabled:opacity-60 cursor-pointer transition-colors"
               >
-                {photoUploading
-                  ? 'Uploading Work Photos...'
-                  : saving
-                  ? t.common.loading
-                  : t.jobs.publishBtn}
+                {(saving || photoUploading) && <Loader2 className="w-4 h-4 animate-spin" />}
+                <span>
+                  {photoUploading
+                    ? tr('Uploading Work Photos...', 'फ़ोटो अपलोड हो रही हैं...', 'कामाचे फोटो अपलोड होत आहेत...')
+                    : saving
+                    ? tr('Publishing Job & Alerting Workers...', 'काम पोस्ट हो रहा है और अलर्ट भेजा जा रहा है...', 'कामाची जाहिरात जतन होत आहे...')
+                    : t.jobs.publishBtn}
+                </span>
               </button>
             </div>
           </form>
@@ -1726,6 +2312,7 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
         existingProfessions={approvedProfessions}
         onAdded={(res) => {
           setCategory(res.canonicalName);
+          clearFieldError('category');
           setSkillsInput((prev) =>
             prev.trim()
               ? prev.toLowerCase().includes(res.canonicalName.toLowerCase())

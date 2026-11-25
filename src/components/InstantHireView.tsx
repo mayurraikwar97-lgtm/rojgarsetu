@@ -41,6 +41,7 @@ import {
   INDIA_STATES_DISTRICTS,
 } from '../data/indiaLocations';
 import { useLanguage } from '../i18n/LanguageContext';
+import { formatUiError } from '../lib/firebase';
 import {
   callNotificationApi,
   createInstantHireRequest,
@@ -620,7 +621,109 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
   const handleConfirmBooking = async (e: React.FormEvent) => {
     e.preventDefault();
     setCheckoutError('');
-    if (!user) return;
+
+    if (photoUploading) {
+      setCheckoutError(
+        tr(
+          lang,
+          'Please wait until your work photos finish uploading.',
+          'कृपया काम की फ़ोटो अपलोड होने तक प्रतीक्षा करें।',
+          'कृपया कामाचे फोटो अपलोड होईपर्यंत थांबा.'
+        )
+      );
+      return;
+    }
+
+    if (workTitle.trim().length < 3) {
+      setCheckoutError(
+        tr(
+          lang,
+          'Please enter a clear work / task title (at least 3 characters).',
+          'कृपया काम का स्पष्ट शीर्षक लिखें (कम से कम 3 अक्षर)।',
+          'कृपया कामाचे स्पष्ट नाव लिहा (किमान ३ अक्षरे).'
+        )
+      );
+      return;
+    }
+
+    if (locality.trim().length < 2) {
+      setCheckoutError(
+        tr(
+          lang,
+          'Please enter the work location / area (village, colony or pincode).',
+          'कृपया कार्य स्थान / क्षेत्र (गाँव, कॉलोनी या पिनकोड) दर्ज करें।',
+          'कृपया कामाचे ठिकाण / परिसर (गाव, कॉलनी किंवा पिनकोड) भरा.'
+        )
+      );
+      return;
+    }
+
+    if (timingMode === 'scheduled' && !jobDate.trim()) {
+      setCheckoutError(
+        tr(
+          lang,
+          'Please select a date for your scheduled booking.',
+          'कृपया शेड्यूल बुकिंग के लिए तारीख चुनें।',
+          'कृपया शेड्यूल बुकिंगसाठी तारीख निवडा.'
+        )
+      );
+      return;
+    }
+
+    const parsedWorkers = Number(workersRequired);
+    if (!Number.isFinite(parsedWorkers) || parsedWorkers < 1 || parsedWorkers > 500) {
+      setCheckoutError(
+        tr(
+          lang,
+          'Workers needed must be between 1 and 500.',
+          'कामगारों की संख्या 1 से 500 के बीच होनी चाहिए।',
+          'कामगारांची संख्या १ ते ५०० दरम्यान असावी.'
+        )
+      );
+      return;
+    }
+
+    const parsedWage = Number(offeredWage);
+    if (!Number.isFinite(parsedWage) || parsedWage < 0 || parsedWage > 500000) {
+      setCheckoutError(
+        tr(
+          lang,
+          'Offered rate must be between ₹0 and ₹5,00,000.',
+          'प्रस्तावित दर ₹0 से ₹5,00,000 के बीच होनी चाहिए।',
+          'प्रस्तावित दर ₹० ते ₹५,००,००० दरम्यान असावा.'
+        )
+      );
+      return;
+    }
+
+    if (!user) {
+      try {
+        await signInWithGoogle();
+      } catch (authErr) {
+        setCheckoutError(
+          formatUiError(authErr) ||
+            tr(
+              lang,
+              'Please sign in with Google to send your instant hire request.',
+              'हायर रिक्वेस्ट भेजने के लिए कृपया गूगल से लॉगिन करें।',
+              'हायर रिक्वेस्ट पाठवण्यासाठी कृपया गुगलने लॉगिन करा.'
+            )
+        );
+      }
+      return;
+    }
+
+    if (!user.emailVerified) {
+      setCheckoutError(
+        tr(
+          lang,
+          'Please sign in with a verified Google account to confirm booking.',
+          'बुकिंग कन्फर्म करने के लिए कृपया सत्यापित गूगल खाते से लॉगिन करें।',
+          'बुकिंग निश्चित करण्यासाठी कृपया सत्यापित गुगल खात्याने लॉगिन करा.'
+        )
+      );
+      return;
+    }
 
     const checkoutWorkers = checkoutMode === 'workers' ? selectedWorkers : [];
     const effState =
@@ -737,7 +840,7 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
         cityOrVillage: safeLocality.slice(0, 100),
         lat: coords.lat,
         lng: coords.lng,
-      });
+      }).catch(() => undefined);
 
       void callNotificationApi('/api/notifications/send-matching-job', {
         jobId: result.jobId,
@@ -759,7 +862,15 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
       setPrefillPhotoAnalyzed(false);
       setWorkPhotoUrls([]);
     } catch (err) {
-      setCheckoutError(err instanceof Error ? err.message : 'Unable to send instant hire request.');
+      setCheckoutError(
+        formatUiError(err) ||
+          tr(
+            lang,
+            'Unable to send instant hire request. Please try again.',
+            'त्वरित हायर रिक्वेस्ट नहीं भेजी जा सकी। कृपया पुनः प्रयास करें।',
+            'तात्काळ हायर रिक्वेस्ट पाठवता आली नाही. कृपया पुन्हा प्रयत्न करा.'
+          )
+      );
     } finally {
       setSubmitting(false);
     }
@@ -770,8 +881,57 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
     setQuickError('');
     setQuickSuccess(null);
 
-    if (!user?.emailVerified) {
-      await signInWithGoogle();
+    if (photoUploading) {
+      setQuickError(
+        tr(
+          lang,
+          'Please wait until your work photos finish uploading.',
+          'कृपया काम की फ़ोटो अपलोड होने तक प्रतीक्षा करें।',
+          'कृपया कामाचे फोटो अपलोड होईपर्यंत थांबा.'
+        )
+      );
+      return;
+    }
+
+    const parsedQuickBudget = Number(quickBudget);
+    if (!Number.isFinite(parsedQuickBudget) || parsedQuickBudget < 0 || parsedQuickBudget > 500000) {
+      setQuickError(
+        tr(
+          lang,
+          'Budget must be between ₹0 and ₹5,00,000.',
+          'बजट ₹0 से ₹5,00,000 के बीच होना चाहिए।',
+          'अंदाजे दर ₹० ते ₹५,००,००० दरम्यान असावा.'
+        )
+      );
+      return;
+    }
+
+    if (!user) {
+      try {
+        await signInWithGoogle();
+      } catch (authErr) {
+        setQuickError(
+          formatUiError(authErr) ||
+            tr(
+              lang,
+              'Please sign in with Google to find nearby workers.',
+              'नज़दीकी कामगार खोजने के लिए कृपया गूगल से लॉगिन करें।',
+              'जवळचे कामगार शोधण्यासाठी कृपया गुगलने लॉगिन करा.'
+            )
+        );
+      }
+      return;
+    }
+
+    if (!user.emailVerified) {
+      setQuickError(
+        tr(
+          lang,
+          'Please sign in with a verified Google account to send requests.',
+          'रिक्वेस्ट भेजने के लिए कृपया सत्यापित गूगल खाते से लॉगिन करें।',
+          'विनंती पाठवण्यासाठी कृपया सत्यापित गुगल खात्याने लॉगिन करा.'
+        )
+      );
       return;
     }
 
@@ -854,7 +1014,7 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
         cityOrVillage: safeLocality,
         lat: coords.lat,
         lng: coords.lng,
-      });
+      }).catch(() => undefined);
 
       void callNotificationApi('/api/notifications/send-matching-job', {
         jobId: result.jobId,
@@ -873,7 +1033,13 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
       setWorkPhotoUrls([]);
     } catch (err) {
       setQuickError(
-        err instanceof Error ? err.message : 'Unable to send request right now. Please try again.'
+        formatUiError(err) ||
+          tr(
+            lang,
+            'Unable to send request right now. Please try again.',
+            'अभी रिक्वेस्ट नहीं भेजी जा सकी। कृपया पुनः प्रयास करें।',
+            'सध्या विनंती पाठवता आली नाही. कृपया पुन्हा प्रयत्न करा.'
+          )
       );
     } finally {
       setQuickSubmitting(false);
@@ -1774,7 +1940,7 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
                 </div>
               </div>
             ) : (
-              <form onSubmit={handleConfirmBooking} className="p-5 space-y-4">
+              <form onSubmit={handleConfirmBooking} noValidate className="p-5 space-y-4">
                 {checkoutMode === 'workers' && selectedWorkers.length > 0 && (
                   <div className="bg-[#F4F6F9] border border-slate-200 rounded p-3 space-y-2">
                     <div className="text-xs font-bold text-[#0B3B75]">

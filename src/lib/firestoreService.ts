@@ -731,29 +731,207 @@ export async function createJobPosting(
 ): Promise<string> {
   const path = 'jobs';
   const safeKey = idempotencyKey ? idempotencyKey.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 120) : '';
-  const approxLocationLabel =
+
+  const safeState = (payload.state || '').trim().slice(0, 80);
+  const finalState = safeState.length >= 2 ? safeState : 'Maharashtra';
+  const safeDistrict = (payload.district || '').trim().slice(0, 80);
+  const finalDistrict = safeDistrict.length >= 2 ? safeDistrict : finalState;
+  const safeCity = (payload.cityOrVillage || '').trim().slice(0, 100);
+  const finalCity = safeCity.length >= 2 ? safeCity : finalDistrict;
+
+  const rawApprox = (
     payload.approxLocationLabel ||
     buildApproxLocationLabel({
-      cityOrVillage: payload.cityOrVillage,
-      district: payload.district,
-      state: payload.state,
-    });
+      cityOrVillage: finalCity,
+      district: finalDistrict,
+      state: finalState,
+    })
+  )
+    .trim()
+    .slice(0, 160);
+  const approxLocationLabel = rawApprox.length >= 2 ? rawApprox : `${finalCity}, ${finalDistrict}`.slice(0, 160);
+
+  const rawWorkLoc = (payload.workLocationLabel || approxLocationLabel).trim().slice(0, 160);
+  const finalWorkLocationLabel = rawWorkLoc.length >= 2 ? rawWorkLoc : approxLocationLabel;
+
+  const rawEmployerName = (payload.employerName || '').trim().slice(0, 160);
+  const finalEmployerName = rawEmployerName.length >= 2 ? rawEmployerName : 'Customer';
+
+  const rawCategory = (payload.category || '').trim().slice(0, 80);
+  const finalCategory = rawCategory.length >= 2 ? rawCategory : 'General Service';
+
+  const rawTitle = (payload.title || '').trim().slice(0, 140);
+  const finalTitle =
+    rawTitle.length >= 3
+      ? rawTitle
+      : `${finalCategory} Work`.slice(0, 140);
+
+  const rawDesc = (payload.description || '').trim().slice(0, 2000);
+  const finalDescription =
+    rawDesc.length >= 10
+      ? rawDesc
+      : `${rawDesc ? `${rawDesc} — ` : ''}${finalTitle} in ${finalCity}, ${finalDistrict}`.slice(0, 2000);
+
+  const rawSkills = Array.isArray(payload.requiredSkills)
+    ? payload.requiredSkills
+        .map((s) => (typeof s === 'string' ? s.trim().slice(0, 80) : ''))
+        .filter((s) => s.length >= 1)
+        .slice(0, 15)
+    : [];
+  const finalRequiredSkills = rawSkills.length > 0 ? rawSkills : [finalCategory];
+
+  const validWorkTypes = new Set<JobPosting['workType']>([
+    'full_time',
+    'part_time',
+    'daily_wage',
+    'contract',
+    'temporary',
+    'urgent',
+    'bulk',
+  ]);
+  const finalWorkType: JobPosting['workType'] = validWorkTypes.has(payload.workType)
+    ? payload.workType
+    : 'daily_wage';
+
+  const validWageUnits = new Set<JobPosting['wageUnit']>(['daily', 'monthly', 'hourly', 'contract']);
+  const finalWageUnit: JobPosting['wageUnit'] = validWageUnits.has(payload.wageUnit)
+    ? payload.wageUnit
+    : 'daily';
+
+  const finalContactPref: JobPosting['contactPreference'] =
+    payload.contactPreference === 'platform_message' ? 'platform_message' : 'phone_after_confirm';
+
+  const rawLat = Number(payload.lat);
+  const rawLng = Number(payload.lng);
+  const finalLat = Number.isFinite(rawLat) && rawLat >= -90 && rawLat <= 90 ? rawLat : 20.59;
+  const finalLng = Number.isFinite(rawLng) && rawLng >= -180 && rawLng <= 180 ? rawLng : 78.96;
+
+  const rawWorkersReq = Number(payload.workersRequired);
+  const finalWorkersRequired =
+    Number.isFinite(rawWorkersReq) && rawWorkersReq >= 1
+      ? Math.min(5000, Math.round(rawWorkersReq))
+      : 1;
+
+  const rawOfferedWage = Number(payload.offeredWage);
+  const finalOfferedWage =
+    Number.isFinite(rawOfferedWage) && rawOfferedWage >= 0
+      ? Math.min(500000, Math.round(rawOfferedWage))
+      : 0;
+
   const initialRadiusKm = normalizeRadiusKm(payload.initialRadiusKm ?? 2, 2);
   const currentRadiusKm = normalizeRadiusKm(payload.currentRadiusKm ?? initialRadiusKm, initialRadiusKm);
 
+  const sanitizedPhotos = Array.isArray(payload.workPhotoUrls)
+    ? payload.workPhotoUrls
+        .filter((u): u is string => typeof u === 'string' && u.length > 0 && u.length <= 85000)
+        .slice(0, 6)
+    : [];
+
   try {
-    const baseDoc = {
-      ...payload,
-      approxLocationLabel: approxLocationLabel.slice(0, 160),
+    const resolvedEmployerUid = auth.currentUser?.uid || payload.employerUid;
+    if (!resolvedEmployerUid) {
+      throw new Error('Please sign in with Google before posting a job.');
+    }
+    const safeInitialDealStatus = payload.dealStatus === 'NOTIFIED' ? ('NOTIFIED' as const) : ('REQUESTED' as const);
+
+    const baseDoc: Record<string, unknown> = {
+      employerUid: resolvedEmployerUid,
+      employerName: finalEmployerName,
+      title: finalTitle,
+      category: finalCategory,
+      description: finalDescription,
+      workersRequired: finalWorkersRequired,
+      requiredSkills: finalRequiredSkills,
+      state: finalState,
+      district: finalDistrict,
+      cityOrVillage: finalCity,
+      workLocationLabel: finalWorkLocationLabel,
+      approxLocationLabel,
+      lat: finalLat,
+      lng: finalLng,
+      workType: finalWorkType,
+      offeredWage: finalOfferedWage,
+      wageUnit: finalWageUnit,
+      paymentTerms: (payload.paymentTerms || '').trim().slice(0, 200),
+      contactPreference: finalContactPref,
+      isWomenFriendly: Boolean(payload.isWomenFriendly),
+      isAccessible: Boolean(payload.isAccessible),
+      biddingEnabled: Boolean(payload.biddingEnabled),
       initialRadiusKm,
       currentRadiusKm,
       radiusStageUpdatedAt: serverTimestamp(),
       status: 'open' as const,
-      dealStatus: payload.dealStatus || ('REQUESTED' as const),
+      dealStatus: safeInitialDealStatus,
       applicationsCount: 0,
       createdAt: serverTimestamp(),
       updatedAt: serverTimestamp(),
     };
+
+    if (typeof payload.customerGenderProtected === 'boolean') {
+      baseDoc.customerGenderProtected = payload.customerGenderProtected;
+    }
+    if (typeof payload.customerLastName === 'string' && payload.customerLastName.trim()) {
+      baseDoc.customerLastName = payload.customerLastName.trim().slice(0, 60);
+    }
+    if (typeof payload.hasExactAddressVault === 'boolean') {
+      baseDoc.hasExactAddressVault = payload.hasExactAddressVault;
+    }
+    if (typeof payload.jobDate === 'string') {
+      baseDoc.jobDate = payload.jobDate.trim().slice(0, 30);
+    }
+    if (typeof payload.startTime === 'string') {
+      baseDoc.startTime = payload.startTime.trim().slice(0, 30);
+    }
+    if (typeof payload.duration === 'string') {
+      baseDoc.duration = payload.duration.trim().slice(0, 60);
+    }
+    if (typeof payload.photoAttachment === 'string' && payload.photoAttachment.length <= 100000) {
+      baseDoc.photoAttachment = payload.photoAttachment;
+    }
+    if (sanitizedPhotos.length > 0) {
+      baseDoc.workPhotoUrls = sanitizedPhotos;
+    }
+    if (payload.orderKind === 'work' || payload.orderKind === 'bike_transport') {
+      baseDoc.orderKind = payload.orderKind;
+    }
+    if (typeof payload.pickupLocationLabel === 'string' && payload.pickupLocationLabel.trim()) {
+      baseDoc.pickupLocationLabel = payload.pickupLocationLabel.trim().slice(0, 160);
+    }
+    if (typeof payload.pickupLat === 'number' && Number.isFinite(payload.pickupLat) && payload.pickupLat >= -90 && payload.pickupLat <= 90) {
+      baseDoc.pickupLat = payload.pickupLat;
+    }
+    if (typeof payload.pickupLng === 'number' && Number.isFinite(payload.pickupLng) && payload.pickupLng >= -180 && payload.pickupLng <= 180) {
+      baseDoc.pickupLng = payload.pickupLng;
+    }
+    if (typeof payload.destinationLocationLabel === 'string' && payload.destinationLocationLabel.trim()) {
+      baseDoc.destinationLocationLabel = payload.destinationLocationLabel.trim().slice(0, 160);
+    }
+    if (typeof payload.destinationLat === 'number' && Number.isFinite(payload.destinationLat) && payload.destinationLat >= -90 && payload.destinationLat <= 90) {
+      baseDoc.destinationLat = payload.destinationLat;
+    }
+    if (typeof payload.destinationLng === 'number' && Number.isFinite(payload.destinationLng) && payload.destinationLng >= -180 && payload.destinationLng <= 180) {
+      baseDoc.destinationLng = payload.destinationLng;
+    }
+    if (payload.transportItemType === 'person' || payload.transportItemType === 'goods') {
+      baseDoc.transportItemType = payload.transportItemType;
+    }
+    if (typeof payload.photoAnalyzed === 'boolean') {
+      baseDoc.photoAnalyzed = payload.photoAnalyzed;
+    }
+    if (typeof payload.subService === 'string' && payload.subService.trim()) {
+      baseDoc.subService = payload.subService.trim().slice(0, 100);
+    }
+    if (payload.preferredTimeType === 'now' || payload.preferredTimeType === 'later') {
+      baseDoc.preferredTimeType = payload.preferredTimeType;
+    }
+    if (typeof payload.startingPrice === 'number' && Number.isFinite(payload.startingPrice) && payload.startingPrice >= 0) {
+      baseDoc.startingPrice = Math.min(500000, Math.round(payload.startingPrice));
+    }
+    if (Array.isArray(payload.notifiedWorkerUids)) {
+      baseDoc.notifiedWorkerUids = payload.notifiedWorkerUids
+        .filter((u): u is string => typeof u === 'string' && u.trim().length > 0)
+        .slice(0, 100);
+    }
 
     if (safeKey && safeKey.length >= 8) {
       const targetRef = doc(db, path, safeKey);
@@ -1013,6 +1191,7 @@ export async function broadcastSmartJobAlerts(params: {
   const newlyNotifiedUids: string[] = [];
   let dispatchedCount = 0;
 
+  const dispatchPromises: Promise<void>[] = [];
   for (const { worker: w, evalRes } of batchSelection.batch) {
     notifiedUids.push(w.ownerUid);
     newlyNotifiedUids.push(w.ownerUid);
@@ -1032,30 +1211,36 @@ export async function broadcastSmartJobAlerts(params: {
       wageUnit: job.wageUnit,
     });
 
-    await dispatchTwoWayDealNotification({
-      recipientUid: w.ownerUid,
-      recipientRole: 'worker',
-      senderUid: job.employerUid,
-      senderName: job.employerName,
-      category: 'matchingJobs',
-      eventType: 'hiring_request_created',
-      toneType: 'new_job',
-      dealStatus: 'NOTIFIED',
-      title: msg.title,
-      body: msg.body,
-      language: workerLang,
-      voiceScript: msg.voiceScript,
-      approxLocationLabel: approxLocLabel,
-      distanceKm: evalRes.distanceKm,
-      customerName: job.employerName,
-      jobCategory: job.category,
-      playSound: true,
-      speakVoice,
-      metadataLabel: `${job.category} · ${approxLocLabel}${evalRes.distanceKm !== null ? ` (~${evalRes.distanceKm} km)` : ''}${wageSummary ? ` · ${wageSummary}` : ''}`,
-      targetRoute: 'worker-dashboard',
-      targetJobId: jobId,
-      dedupeKey: sanitizeSafeId(`job_${jobId}_${w.ownerUid}${dedupeSuffix ? `_${dedupeSuffix}` : ''}`),
-    });
+    dispatchPromises.push(
+      dispatchTwoWayDealNotification({
+        recipientUid: w.ownerUid,
+        recipientRole: 'worker',
+        senderUid: job.employerUid,
+        senderName: job.employerName,
+        category: 'matchingJobs',
+        eventType: 'hiring_request_created',
+        toneType: 'new_job',
+        dealStatus: 'NOTIFIED',
+        title: msg.title,
+        body: msg.body,
+        language: workerLang,
+        voiceScript: msg.voiceScript,
+        approxLocationLabel: approxLocLabel,
+        distanceKm: evalRes.distanceKm,
+        customerName: job.employerName,
+        jobCategory: job.category,
+        playSound: true,
+        speakVoice,
+        metadataLabel: `${job.category} · ${approxLocLabel}${evalRes.distanceKm !== null ? ` (~${evalRes.distanceKm} km)` : ''}${wageSummary ? ` · ${wageSummary}` : ''}`,
+        targetRoute: 'worker-dashboard',
+        targetJobId: jobId,
+        dedupeKey: sanitizeSafeId(`job_${jobId}_${w.ownerUid}${dedupeSuffix ? `_${dedupeSuffix}` : ''}`),
+      })
+    );
+  }
+
+  if (dispatchPromises.length > 0) {
+    await Promise.allSettled(dispatchPromises);
   }
 
   const mergedNotified = Array.from(new Set(notifiedUids)).slice(0, 100);
@@ -1529,7 +1714,8 @@ export async function createInstantHireRequest(
     return { jobId, invitedCount: selectedWorkers.length, notifiedCount: 0, finalRadiusKm: initialStageKm };
   }
 
-  const safeTitle = sanitizeNotificationTextForPrivacy(jobPayload.title.trim()).slice(0, 140) || 'Instant Hire Request';
+  const rawSafeTitle = sanitizeNotificationTextForPrivacy(jobPayload.title.trim()).slice(0, 140);
+  const safeTitle = rawSafeTitle.length >= 2 ? rawSafeTitle : 'Instant Hire Request';
   const safeNote = sanitizeNotificationTextForPrivacy((inviteNote ?? '').trim()).slice(0, 600);
   const createdAppIds: Array<{ worker: PublicWorkerProfile; appId: string }> = [];
 
@@ -1539,26 +1725,40 @@ export async function createInstantHireRequest(
       const appId = sanitizeSafeId(`app_${jobId}_${worker.ownerUid}`);
       const appRef = doc(db, 'applications', appId);
       createdAppIds.push({ worker, appId });
+      const rawCustomerName = (jobPayload.employerName || '').trim().slice(0, 160);
+      const rawWorkerRegId = (worker.registrationId || '').trim().slice(0, 40);
+      const rawWorkerName = (worker.displayName || '').trim().slice(0, 120);
+      const rawWorkerSkill = (worker.primarySkill || '').trim().slice(0, 80);
+      const rawProposedWage =
+        Number.isFinite(jobPayload.offeredWage) && jobPayload.offeredWage > 0
+          ? jobPayload.offeredWage
+          : Number.isFinite(worker.expectedWage) && worker.expectedWage >= 0
+          ? worker.expectedWage
+          : 0;
       batch.set(appRef, {
         jobId,
         jobTitle: safeTitle,
         employerUid: jobPayload.employerUid,
-        customerName: (jobPayload.employerName.trim() || 'Customer').slice(0, 160),
+        customerName: rawCustomerName.length >= 2 ? rawCustomerName : 'Customer',
         ...(typeof jobPayload.customerGenderProtected === 'boolean'
           ? { customerGenderProtected: jobPayload.customerGenderProtected }
           : {}),
-        ...(jobPayload.customerLastName ? { customerLastName: jobPayload.customerLastName.slice(0, 60) } : {}),
+        ...(jobPayload.customerLastName?.trim()
+          ? { customerLastName: jobPayload.customerLastName.trim().slice(0, 60) }
+          : {}),
         jobCategory: (jobPayload.category.trim() || 'General').slice(0, 80),
         jobDistrict: (jobPayload.district.trim() || 'India').slice(0, 80),
         jobLocationLabel: approxLocLabel.slice(0, 160),
         ...(jobPayload.jobDate ? { jobDate: jobPayload.jobDate.slice(0, 30) } : {}),
         ...(jobPayload.startTime ? { startTime: jobPayload.startTime.slice(0, 30) } : {}),
         workerUid: worker.ownerUid,
-        workerRegistrationId: worker.registrationId,
-        workerName: worker.displayName,
-        workerPrimarySkill: worker.primarySkill,
-        ...(worker.photoDocId ? { workerPhotoDocId: worker.photoDocId } : {}),
-        proposedWage: jobPayload.offeredWage > 0 ? jobPayload.offeredWage : worker.expectedWage,
+        workerRegistrationId: rawWorkerRegId.length >= 5 ? rawWorkerRegId : `RS-W-${worker.ownerUid.slice(0, 8)}`,
+        workerName: rawWorkerName.length >= 2 ? rawWorkerName : 'Worker',
+        workerPrimarySkill: rawWorkerSkill.length >= 2 ? rawWorkerSkill : 'General Service',
+        ...(worker.photoDocId && /^[a-zA-Z0-9_-]{1,128}$/.test(worker.photoDocId)
+          ? { workerPhotoDocId: worker.photoDocId }
+          : {}),
+        proposedWage: Math.max(0, Math.min(500000, Math.round(rawProposedWage))),
         ...(safeNote ? { note: safeNote } : {}),
         status: 'invited',
         dealStatus: 'NOTIFIED',
@@ -1576,54 +1776,56 @@ export async function createInstantHireRequest(
     }
 
     // Dispatch guaranteed in-app + optional push notifications for each invited worker AFTER commit
-    for (const entry of createdAppIds) {
-      const w = entry.worker;
-      const distKm = calculateValidDistanceKm(jobPayload.lat, jobPayload.lng, w.approxLat, w.approxLng);
-      const workerLang: Language = w.preferredLanguage || 'en';
-      const msg = buildSmartJobNotificationContent({
-        lang: workerLang,
-        customerName: jobPayload.employerName,
-        title: safeTitle,
-        category: jobPayload.category,
-        description: safeNote || jobPayload.description || safeTitle,
-        approxLocationLabel: approxLocLabel,
-        distanceKm: distKm,
-        offeredWage: jobPayload.offeredWage,
-        wageUnit: jobPayload.wageUnit,
-      });
+    await Promise.allSettled(
+      createdAppIds.map((entry) => {
+        const w = entry.worker;
+        const distKm = calculateValidDistanceKm(jobPayload.lat, jobPayload.lng, w.approxLat, w.approxLng);
+        const workerLang: Language = w.preferredLanguage || 'en';
+        const msg = buildSmartJobNotificationContent({
+          lang: workerLang,
+          customerName: jobPayload.employerName,
+          title: safeTitle,
+          category: jobPayload.category,
+          description: safeNote || jobPayload.description || safeTitle,
+          approxLocationLabel: approxLocLabel,
+          distanceKm: distKm,
+          offeredWage: jobPayload.offeredWage,
+          wageUnit: jobPayload.wageUnit,
+        });
 
-      await dispatchTwoWayDealNotification({
-        recipientUid: w.ownerUid,
-        recipientRole: 'worker',
-        senderUid: jobPayload.employerUid,
-        senderName: jobPayload.employerName,
-        category: 'matchingJobs',
-        eventType: 'hiring_request_created',
-        toneType: 'new_job',
-        dealStatus: 'NOTIFIED',
-        title: msg.title,
-        body: msg.body,
-        language: workerLang,
-        voiceScript: msg.voiceScript,
-        approxLocationLabel: approxLocLabel,
-        distanceKm: distKm,
-        customerName: jobPayload.employerName,
-        jobCategory: jobPayload.category,
-        playSound: true,
-        speakVoice: w.voiceAlertsEnabled !== false,
-        metadataLabel: `${jobPayload.category} · ${approxLocLabel}${distKm !== null ? ` (~${distKm} km)` : ''}`,
-        targetRoute: 'worker-dashboard',
-        targetJobId: jobId,
-        targetApplicationId: entry.appId,
-        dedupeKey: sanitizeSafeId(`job_${jobId}_${w.ownerUid}`),
-        pushPayload: {
-          workerName: jobPayload.employerName,
-          jobTitle: safeTitle,
-          proposedWage: jobPayload.offeredWage,
-          locationLabel: approxLocLabel,
-        },
-      });
-    }
+        return dispatchTwoWayDealNotification({
+          recipientUid: w.ownerUid,
+          recipientRole: 'worker',
+          senderUid: jobPayload.employerUid,
+          senderName: jobPayload.employerName,
+          category: 'matchingJobs',
+          eventType: 'hiring_request_created',
+          toneType: 'new_job',
+          dealStatus: 'NOTIFIED',
+          title: msg.title,
+          body: msg.body,
+          language: workerLang,
+          voiceScript: msg.voiceScript,
+          approxLocationLabel: approxLocLabel,
+          distanceKm: distKm,
+          customerName: jobPayload.employerName,
+          jobCategory: jobPayload.category,
+          playSound: true,
+          speakVoice: w.voiceAlertsEnabled !== false,
+          metadataLabel: `${jobPayload.category} · ${approxLocLabel}${distKm !== null ? ` (~${distKm} km)` : ''}`,
+          targetRoute: 'worker-dashboard',
+          targetJobId: jobId,
+          targetApplicationId: entry.appId,
+          dedupeKey: sanitizeSafeId(`job_${jobId}_${w.ownerUid}`),
+          pushPayload: {
+            workerName: jobPayload.employerName,
+            jobTitle: safeTitle,
+            proposedWage: jobPayload.offeredWage,
+            locationLabel: approxLocLabel,
+          },
+        });
+      })
+    );
   }
 
   // Broadcast fair-rotation small-batch voice job alerts when broadcasting to eligible workers
@@ -1635,24 +1837,29 @@ export async function createInstantHireRequest(
   let hasNextBatch = false;
 
   if (allMatchingWorkersPool && allMatchingWorkersPool.length > 0 && selectedWorkers.length === 0) {
-    const broadcastRes = await broadcastSmartJobAlerts({
-      jobId,
-      job: {
-        ...jobPayload,
-        approxLocationLabel: approxLocLabel,
-        initialRadiusKm: initialStageKm,
-      },
-      workers: allMatchingWorkersPool,
-      alreadyNotifiedUids: selectedWorkers.map((w) => w.ownerUid),
-      stageRadiusKm: initialStageKm,
-      autoExpandIfEmpty: true,
-    });
-    extraNotified = broadcastRes.notifiedCount;
-    finalRadiusKm = broadcastRes.finalRadiusKm;
-    newlyNotifiedUids = broadcastRes.newlyNotifiedUids;
-    batchIndex = broadcastRes.batchIndex;
-    remainingEligibleCount = broadcastRes.remainingEligibleCount;
-    hasNextBatch = broadcastRes.hasNextBatch;
+    try {
+      const broadcastRes = await broadcastSmartJobAlerts({
+        jobId,
+        job: {
+          ...jobPayload,
+          approxLocationLabel: approxLocLabel,
+          initialRadiusKm: initialStageKm,
+        },
+        workers: allMatchingWorkersPool,
+        alreadyNotifiedUids: selectedWorkers.map((w) => w.ownerUid),
+        stageRadiusKm: initialStageKm,
+        autoExpandIfEmpty: true,
+      });
+      extraNotified = broadcastRes.notifiedCount;
+      finalRadiusKm = broadcastRes.finalRadiusKm;
+      newlyNotifiedUids = broadcastRes.newlyNotifiedUids;
+      batchIndex = broadcastRes.batchIndex;
+      remainingEligibleCount = broadcastRes.remainingEligibleCount;
+      hasNextBatch = broadcastRes.hasNextBatch;
+    } catch (err) {
+      // Non-blocking: job is already created in Firestore
+      console.warn('Smart job alert broadcast skipped after job creation:', err);
+    }
   }
 
   return {
@@ -3905,7 +4112,8 @@ export async function submitDemoJobApplication(
 
 export async function callNotificationApi<T = Record<string, unknown>>(
   endpoint: string,
-  body?: Record<string, unknown>
+  body?: Record<string, unknown>,
+  timeoutMs = 10000
 ): Promise<{ status: number; data: T }> {
   const idToken = auth.currentUser ? await auth.currentUser.getIdToken() : '';
   const headers: Record<string, string> = {
@@ -3914,13 +4122,25 @@ export async function callNotificationApi<T = Record<string, unknown>>(
   if (idToken) {
     headers.Authorization = `Bearer ${idToken}`;
   }
-  const response = await fetch(endpoint, {
-    method: body ? 'POST' : 'GET',
-    headers,
-    ...(body ? { body: JSON.stringify(body) } : {}),
-  });
-  const data = (await response.json().catch(() => ({}))) as T;
-  return { status: response.status, data };
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timer =
+    controller && timeoutMs > 0
+      ? globalThis.setTimeout(() => controller.abort(), timeoutMs)
+      : null;
+  try {
+    const response = await fetch(endpoint, {
+      method: body ? 'POST' : 'GET',
+      headers,
+      ...(body ? { body: JSON.stringify(body) } : {}),
+      ...(controller ? { signal: controller.signal } : {}),
+    });
+    const data = (await response.json().catch(() => ({}))) as T;
+    return { status: response.status, data };
+  } finally {
+    if (timer !== null) {
+      globalThis.clearTimeout(timer);
+    }
+  }
 }
 
 // ============================================================

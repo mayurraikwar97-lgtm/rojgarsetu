@@ -27,6 +27,7 @@ import {
 } from '../data/indiaLocations';
 import { getVehicleTypeLabel, VEHICLE_TYPE_CATALOG } from '../data/vehicleTypes';
 import { useLanguage } from '../i18n/LanguageContext';
+import { formatUiError } from '../lib/firebase';
 import {
   callNotificationApi,
   createInstantHireRequest,
@@ -216,8 +217,32 @@ export const LocalTransportView: React.FC<LocalTransportViewProps> = ({
     setBikeError('');
     setBikeSuccess(null);
 
-    if (!user?.emailVerified) {
-      await signInWithGoogle();
+    if (!user) {
+      try {
+        await signInWithGoogle();
+      } catch (authErr) {
+        setBikeError(
+          formatUiError(authErr) ||
+            tr(
+              lang,
+              'Please sign in with Google to submit your transport request.',
+              'ट्रांसपोर्ट रिक्वेस्ट भेजने के लिए कृपया गूगल से लॉगिन करें।',
+              'वाहतूक विनंती पाठवण्यासाठी कृपया गुगलने लॉगिन करा.'
+            )
+        );
+      }
+      return;
+    }
+
+    if (!user.emailVerified) {
+      setBikeError(
+        tr(
+          lang,
+          'Please sign in with a verified Google account to submit your request.',
+          'रिक्वेस्ट भेजने के लिए कृपया सत्यापित गूगल खाते से लॉगिन करें।',
+          'विनंती पाठवण्यासाठी कृपया सत्यापित गुगल खात्याने लॉगिन करा.'
+        )
+      );
       return;
     }
 
@@ -346,7 +371,7 @@ export const LocalTransportView: React.FC<LocalTransportViewProps> = ({
         cityOrVillage: safeLocality,
         lat: pLat,
         lng: pLng,
-      });
+      }).catch(() => undefined);
 
       void callNotificationApi('/api/notifications/send-matching-job', {
         jobId: result.jobId,
@@ -363,7 +388,15 @@ export const LocalTransportView: React.FC<LocalTransportViewProps> = ({
       setBikeNotes('');
       setGoodsPhotoUrls([]);
     } catch (err) {
-      setBikeError(err instanceof Error ? err.message : 'Unable to submit Bike Hire / Transport request.');
+      setBikeError(
+        formatUiError(err) ||
+          tr(
+            lang,
+            'Unable to submit Bike Hire / Transport request. Please try again.',
+            'बाइक / ट्रांसपोर्ट रिक्वेस्ट नहीं भेजी जा सकी। कृपया पुनः प्रयास करें।',
+            'बाईक / वाहतूक विनंती पाठवता आली नाही. कृपया पुन्हा प्रयत्न करा.'
+          )
+      );
     } finally {
       setBikeSubmitting(false);
     }

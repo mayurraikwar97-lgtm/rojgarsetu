@@ -139,7 +139,10 @@ export function formatUiError(err: unknown, fallback = 'Something went wrong. Pl
     if (errorPath.includes('profilePhotos')) {
       return 'Unable to save profile photo due to security/size checks. Please try a JPG/PNG/WebP image under 5 MB or submit without a photo.';
     }
-    return 'Registration could not be saved due to account permission or field validation rules. Verify that you are signed in with a verified Google account and all required fields are complete.';
+    if (errorPath.includes('jobs') || errorPath.includes('applications')) {
+      return 'Could not publish the job right now due to account permission or field validation checks. Please ensure you are signed in with a verified Google account and all required fields are filled properly.';
+    }
+    return 'Request could not be saved due to account permission or field validation rules. Verify that you are signed in with a verified Google account and all required fields are complete.';
   }
 
   if (lower.includes('client is offline') || lower.includes('unavailable') || lower.includes('network')) {

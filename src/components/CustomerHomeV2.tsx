@@ -56,6 +56,7 @@ import {
   isFemaleCustomerProtected,
 } from '../lib/customerPrivacy';
 import { getSixStepLabel, toSixStepDealStage } from '../lib/dealWorkflow';
+import { formatUiError } from '../lib/firebase';
 import {
   callNotificationApi,
   createInstantHireRequest,
@@ -173,7 +174,9 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
   const [workDescription, setWorkDescription] = useState('');
   const [exactServiceAddress, setExactServiceAddress] = useState('');
   const [addressLandmark, setAddressLandmark] = useState('');
+  const [orderPincode, setOrderPincode] = useState('');
   const [workPhotoUrls, setWorkPhotoUrls] = useState<string[]>([]);
+  const [photoUploading, setPhotoUploading] = useState(false);
   const [preferredTimeType, setPreferredTimeType] = useState<'now' | 'later'>('now');
   const [scheduledDate, setScheduledDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [scheduledTime, setScheduledTime] = useState('10:00');
@@ -302,6 +305,7 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
     setGpsLoading(true);
     try {
       const geo = await detectBestGpsLocation(lang);
+      const detectedPin = geo.postalCode || extractSixDigitPincode(geo.formattedAddress);
       const nextLoc: ActiveLocationState = {
         lat: geo.lat,
         lng: geo.lng,
@@ -309,8 +313,10 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
         state: geo.state || location.state,
         district: geo.district || location.district,
         cityOrVillage: geo.cityOrVillage || geo.district || location.cityOrVillage,
+        pincode: detectedPin || location.pincode,
       };
       setLocation(nextLoc);
+      if (detectedPin) setOrderPincode(detectedPin);
       if (user?.emailVerified) {
         void saveCustomerDefaultLocation(user.uid, {
           state: nextLoc.state,
@@ -344,6 +350,10 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
     setSelectedCategory(cat);
     setSelectedSubService(sub);
     setFormError('');
+    const detectedPin = location.pincode || extractSixDigitPincode(location.label);
+    if (detectedPin && !orderPincode) {
+      setOrderPincode(detectedPin);
+    }
     setStep('order_form');
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -352,10 +362,81 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
     e.preventDefault();
     setFormError('');
 
-    if (!selectedCategory || !selectedSubService) return;
+    if (!selectedCategory || !selectedSubService) {
+      setFormError(
+        tr(
+          lang,
+          'Please choose a service category and work type first.',
+          'कृपया पहले सेवा श्रेणी और काम का प्रकार चुनें।',
+          'कृपया आधी कामाची श्रेणी आणि कामाचा प्रकार निवडा.'
+        )
+      );
+      return;
+    }
 
-    if (!user?.emailVerified) {
-      await signInWithGoogle();
+    if (photoUploading) {
+      setFormError(
+        tr(
+          lang,
+          'Please wait until the selected work photos finish uploading.',
+          'कृपया चुनी गई काम की फ़ोटो अपलोड होने तक प्रतीक्षा करें।',
+          'कृपया निवडलेले कामाचे फोटो अपलोड होईपर्यंत थोडे थांबा.'
+        )
+      );
+      return;
+    }
+
+    const cleanPin = orderPincode.replace(/\D/g, '').slice(0, 6);
+    if (cleanPin.length > 0 && !/^[1-9]\d{5}$/.test(cleanPin)) {
+      setFormError(
+        tr(
+          lang,
+          'Please enter a valid 6-digit Indian pincode (or leave it blank to use your GPS location).',
+          'कृपया सही 6 अंकों का भारतीय पिनकोड दर्ज करें (या GPS लोकेशन के लिए खाली छोड़ें)।',
+          'कृपया वैध ६ अंकी पिनकोड भरा (किंवा GPS लोकेशन वापरण्यासाठी रिकामा ठेवा).'
+        )
+      );
+      return;
+    }
+
+    if (preferredTimeType === 'later' && !scheduledDate.trim()) {
+      setFormError(
+        tr(
+          lang,
+          'Please select a preferred date for your scheduled booking.',
+          'कृपया शेड्यूल किए गए काम के लिए तारीख चुनें।',
+          'कृपया नंतरच्या वेळेसाठी तारीख निवडा.'
+        )
+      );
+      return;
+    }
+
+    if (!user) {
+      try {
+        await signInWithGoogle();
+      } catch (authErr) {
+        setFormError(
+          formatUiError(authErr) ||
+            tr(
+              lang,
+              'Google sign-in was cancelled or failed. Please sign in to send your request.',
+              'गूगल लॉगिन रद्द या विफल हो गया। रिक्वेस्ट भेजने के लिए कृपया लॉगिन करें।',
+              'गुगल लॉगिन रद्द झाले किंवा अयशस्वी झाले. रिक्वेस्ट पाठवण्यासाठी कृपया लॉगिन करा.'
+            )
+        );
+      }
+      return;
+    }
+
+    if (!user.emailVerified) {
+      setFormError(
+        tr(
+          lang,
+          'Please sign in with a verified Google account to submit your request.',
+          'रिक्वेस्ट भेजने के लिए कृपया सत्यापित गूगल खाते से लॉगिन करें।',
+          'रिक्वेस्ट पाठवण्यासाठी कृपया सत्यापित गुगल खात्याने लॉगिन करा.'
+        )
+      );
       return;
     }
 
@@ -388,11 +469,16 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
       INDIA_STATES_DISTRICTS.find((s) => s.name === effState)?.districts[0]?.name ||
       'Chandrapur';
     const safeCity = (location.cityOrVillage || effDistrict).slice(0, 100);
-    const approxLocationLabel = buildApproxLocationLabel({
+    const resolvedPincode = cleanPin || location.pincode || extractSixDigitPincode(location.label);
+    const baseApproxLabel = buildApproxLocationLabel({
       cityOrVillage: safeCity,
       district: effDistrict,
       state: effState,
     });
+    const approxLocationLabel =
+      resolvedPincode && !baseApproxLabel.includes(resolvedPincode)
+        ? `${baseApproxLabel} (${resolvedPincode})`.slice(0, 160)
+        : baseApproxLabel.slice(0, 160);
 
     const jobDate =
       preferredTimeType === 'now'
@@ -456,8 +542,8 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
           state: effState,
           district: effDistrict,
           cityOrVillage: safeCity,
-          workLocationLabel: approxLocationLabel.slice(0, 160),
-          approxLocationLabel: approxLocationLabel.slice(0, 160),
+          workLocationLabel: approxLocationLabel,
+          approxLocationLabel,
           initialRadiusKm: 2,
           currentRadiusKm: 2,
           lat: location.lat,
@@ -483,7 +569,7 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
       );
 
       if (hasExactVault && res.jobId) {
-        await saveOrderExactAddress({
+        void saveOrderExactAddress({
           jobId: res.jobId,
           employerUid: user.uid,
           exactAddress: trimmedExactAddress,
@@ -493,7 +579,7 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
         }).catch(() => undefined);
       }
 
-      await recordCustomerOrderPreference(user.uid, {
+      void recordCustomerOrderPreference(user.uid, {
         kind: 'hire',
         categoryOrVehicleType: selectedCategory.canonicalCategory,
         orderTitle: title,
@@ -504,57 +590,23 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
         lng: location.lng,
       }).catch(() => undefined);
 
-      // Trigger real FCM push broadcast synchronized to the exact fair-rotation Batch 1 workers
-      let fcmMatched = res.notifiedCount;
-      let finalRadius: ServiceRadiusKm = res.finalRadiusKm ?? 2;
-      let batchIndex = res.batchIndex ?? (res.notifiedCount > 0 ? 1 : 0);
-      let remainingEligibleCount = res.remainingEligibleCount ?? 0;
-      let hasNextBatch = res.hasNextBatch ?? getNextRadiusStage(finalRadius) !== null;
-      try {
-        const pushRes = await callNotificationApi('/api/notifications/send-matching-job', {
-          jobId: res.jobId,
-          stageRadiusKm: finalRadius,
-          autoExpandIfEmpty: true,
-          ...(res.newlyNotifiedUids && res.newlyNotifiedUids.length > 0
-            ? { targetWorkerUids: res.newlyNotifiedUids }
-            : {}),
-        });
-        const pushData = pushRes.data || {};
-        if (typeof pushData.totalNotifiedCount === 'number' && pushData.totalNotifiedCount > fcmMatched) {
-          fcmMatched = pushData.totalNotifiedCount;
-        }
-        if (typeof pushData.batchIndex === 'number' && pushData.batchIndex > batchIndex) {
-          batchIndex = pushData.batchIndex;
-        }
-        if (typeof pushData.remainingEligibleCount === 'number') {
-          remainingEligibleCount = pushData.remainingEligibleCount;
-        }
-        if (typeof pushData.hasNextBatch === 'boolean') {
-          hasNextBatch = pushData.hasNextBatch;
-        }
-        if (
-          pushData.currentRadiusKm === 2 ||
-          pushData.currentRadiusKm === 5 ||
-          pushData.currentRadiusKm === 10 ||
-          pushData.currentRadiusKm === 20 ||
-          pushData.currentRadiusKm === 30
-        ) {
-          finalRadius = pushData.currentRadiusKm;
-        }
-      } catch {
-        // Non-blocking: in-app Firestore notification already succeeded
-      }
+      const initialMatched = res.notifiedCount;
+      const initialRadius: ServiceRadiusKm = res.finalRadiusKm ?? 2;
+      const initialBatchIndex = res.batchIndex ?? (res.notifiedCount > 0 ? 1 : 0);
+      const initialRemaining = res.remainingEligibleCount ?? 0;
+      const initialHasNext = res.hasNextBatch ?? getNextRadiusStage(initialRadius) !== null;
+      const noWorkersAnywhere = initialMatched === 0 && !initialHasNext;
 
-      const noWorkersAnywhere = fcmMatched === 0 && !hasNextBatch;
+      // Immediately confirm job creation & Batch 1 status so the UI never stalls on background FCM push
       setCreatedOrder({
         jobId: res.jobId,
         title,
         category: selectedCategory.canonicalCategory,
-        notifiedCount: fcmMatched,
-        currentRadiusKm: finalRadius,
-        batchIndex: Math.max(1, batchIndex),
-        remainingEligibleCount,
-        hasNextBatch,
+        notifiedCount: initialMatched,
+        currentRadiusKm: initialRadius,
+        batchIndex: Math.max(1, initialBatchIndex),
+        remainingEligibleCount: initialRemaining,
+        hasNextBatch: initialHasNext,
         confirmed: false,
         expanding: false,
         autoEscalating: false,
@@ -562,18 +614,18 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
         batchDispatchedAtMs: Date.now(),
         retrying: false,
         statusMessage:
-          fcmMatched > 0
+          initialMatched > 0
             ? tr(
                 lang,
-                `Batch ${Math.max(1, batchIndex)} sent to ${fcmMatched} priority worker(s) within ${finalRadius} km (fair rotation).`,
-                `बैच ${Math.max(1, batchIndex)}: ${finalRadius} किमी के दायरे में ${fcmMatched} कामगारों को रिक्वेस्ट भेज दी गई है (समान बारी प्रणाली)।`,
-                `बॅच ${Math.max(1, batchIndex)}: ${finalRadius} किमी मध्ये ${fcmMatched} कामगारांना प्राधान्याने रिक्वेस्ट पाठवली आहे.`
+                `Batch ${Math.max(1, initialBatchIndex)} sent to ${initialMatched} priority worker(s) within ${initialRadius} km (fair rotation).`,
+                `बैच ${Math.max(1, initialBatchIndex)}: ${initialRadius} किमी के दायरे में ${initialMatched} कामगारों को रिक्वेस्ट भेज दी गई है (समान बारी प्रणाली)।`,
+                `बॅच ${Math.max(1, initialBatchIndex)}: ${initialRadius} किमी मध्ये ${initialMatched} कामगारांना प्राधान्याने रिक्वेस्ट पाठवली आहे.`
               )
             : tr(
                 lang,
-                'No matching workers were immediately available nearby. You can browse matching workers directly or retry sending alerts.',
-                'अभी नज़दीक में कोई उपलब्ध कामगार नहीं मिला। आप सीधे कामगारों की सूची देख सकते हैं या अलर्ट दोबारा भेज सकते हैं।',
-                'सध्या जवळपास उपलब्ध कामगार आढळले नाहीत. तुम्ही थेट कामगार पाहू शकता किंवा पुन्हा अलर्ट पाठवू शकता.'
+                'Your request is live! No matching workers were immediately available nearby—you can browse matching workers directly or retry sending alerts.',
+                'आपकी रिक्वेस्ट लाइव हो गई है! अभी नज़दीक में कोई उपलब्ध कामगार नहीं मिला—आप सीधे कामगार देख सकते हैं या अलर्ट दोबारा भेज सकते हैं।',
+                'तुमची रिक्वेस्ट पोस्ट झाली आहे! सध्या जवळपास उपलब्ध कामगार आढळले नाहीत—तुम्ही थेट कामगार पाहू शकता किंवा पुन्हा अलर्ट पाठवू शकता.'
               ),
       });
 
@@ -581,16 +633,80 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
       setExactServiceAddress('');
       setAddressLandmark('');
       setWorkPhotoUrls([]);
+
+      // Trigger real FCM push broadcast in the background synchronized to Batch 1 workers
+      void callNotificationApi('/api/notifications/send-matching-job', {
+        jobId: res.jobId,
+        stageRadiusKm: initialRadius,
+        autoExpandIfEmpty: true,
+        ...(res.newlyNotifiedUids && res.newlyNotifiedUids.length > 0
+          ? { targetWorkerUids: res.newlyNotifiedUids }
+          : {}),
+      })
+        .then((pushRes) => {
+          const pushData = pushRes.data || {};
+          setCreatedOrder((prev) => {
+            if (!prev || prev.jobId !== res.jobId || prev.confirmed) return prev;
+            const nextMatched =
+              typeof pushData.totalNotifiedCount === 'number' && pushData.totalNotifiedCount > prev.notifiedCount
+                ? pushData.totalNotifiedCount
+                : prev.notifiedCount;
+            const nextBatch =
+              typeof pushData.batchIndex === 'number' && pushData.batchIndex > prev.batchIndex
+                ? pushData.batchIndex
+                : prev.batchIndex;
+            const nextRemaining =
+              typeof pushData.remainingEligibleCount === 'number'
+                ? pushData.remainingEligibleCount
+                : prev.remainingEligibleCount;
+            const nextHasBatch =
+              typeof pushData.hasNextBatch === 'boolean' ? pushData.hasNextBatch : prev.hasNextBatch;
+            const nextRadius: ServiceRadiusKm =
+              pushData.currentRadiusKm === 2 ||
+              pushData.currentRadiusKm === 5 ||
+              pushData.currentRadiusKm === 10 ||
+              pushData.currentRadiusKm === 20 ||
+              pushData.currentRadiusKm === 30
+                ? pushData.currentRadiusKm
+                : prev.currentRadiusKm;
+            if (
+              nextMatched === prev.notifiedCount &&
+              nextRadius === prev.currentRadiusKm &&
+              nextBatch === prev.batchIndex &&
+              nextHasBatch === prev.hasNextBatch
+            ) {
+              return prev;
+            }
+            return {
+              ...prev,
+              notifiedCount: nextMatched,
+              currentRadiusKm: nextRadius,
+              batchIndex: Math.max(1, nextBatch),
+              remainingEligibleCount: nextRemaining,
+              hasNextBatch: nextHasBatch,
+              allBatchesExhausted: nextMatched === 0 && !nextHasBatch,
+              statusMessage:
+                nextMatched > 0
+                  ? tr(
+                      lang,
+                      `Batch ${Math.max(1, nextBatch)} sent to ${nextMatched} priority worker(s) within ${nextRadius} km (fair rotation).`,
+                      `बैच ${Math.max(1, nextBatch)}: ${nextRadius} किमी के दायरे में ${nextMatched} कामगारों को रिक्वेस्ट भेज दी गई है (समान बारी प्रणाली)।`,
+                      `बॅच ${Math.max(1, nextBatch)}: ${nextRadius} किमी मध्ये ${nextMatched} कामगारांना प्राधान्याने रिक्वेस्ट पाठवली आहे.`
+                    )
+                  : prev.statusMessage,
+            };
+          });
+        })
+        .catch(() => undefined);
     } catch (err) {
       setFormError(
-        err instanceof Error
-          ? err.message
-          : tr(
-              lang,
-              'Could not send request. Please try again.',
-              'रिक्वेस्ट नहीं भेजी जा सकी। कृपया पुनः प्रयास करें।',
-              'रिक्वेस्ट पाठवता आली नाही. कृपया पुन्हा प्रयत्न करा.'
-            )
+        formatUiError(err) ||
+          tr(
+            lang,
+            'Could not send request. Please check your details and try again.',
+            'रिक्वेस्ट नहीं भेजी जा सकी। कृपया विवरण जाँचें और पुनः प्रयास करें।',
+            'रिक्वेस्ट पाठवता आली नाही. कृपया तपशील तपासा आणि पुन्हा प्रयत्न करा.'
+          )
       );
       setStep('order_form');
       setCreatedOrder(null);
@@ -1635,6 +1751,7 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
 
             <form
               onSubmit={handleSubmitOrder}
+              noValidate
               className="bg-white border border-slate-200 rounded-2xl p-5 sm:p-6 shadow-xs space-y-5"
             >
               {/* Selected Service Summary */}
@@ -1707,6 +1824,8 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
                   folder="work"
                   photos={workPhotoUrls}
                   onChange={setWorkPhotoUrls}
+                  disabled={submitting}
+                  onUploadingChange={setPhotoUploading}
                 />
               </div>
 
@@ -1752,8 +1871,8 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
                   </div>
                 </div>
 
-                {/* Exact Service Address (Stored in Private Vault — Revealed ONLY after Order Confirmation to Assigned Worker) */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-1">
+                {/* Exact Service Address & Pincode (Address Locked Until Confirmed) */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1">
                       {tr(
@@ -1793,6 +1912,23 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
                         'उदा. हनुमान मंदिराजवळ / बस स्टँडजवळ'
                       )}
                       className="w-full h-10 px-3 rounded-xl border border-slate-300 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B3B75]/25 focus:border-[#0B3B75]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      {tr(lang, 'Pincode (6 digits)', 'पिनकोड (6 अंक)', 'पिनकोड (६ अंक)')}
+                    </label>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={6}
+                      value={orderPincode}
+                      onChange={(e) => {
+                        setOrderPincode(e.target.value.replace(/\D/g, '').slice(0, 6));
+                        if (formError) setFormError('');
+                      }}
+                      placeholder="442401"
+                      className="w-full h-10 px-3 rounded-xl border border-slate-300 text-sm font-mono-tabular text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B3B75]/25 focus:border-[#0B3B75]"
                     />
                   </div>
                 </div>
@@ -1850,21 +1986,30 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
               </div>
 
               {formError && (
-                <div className="rounded-xl bg-red-50 border border-red-200 px-3.5 py-2.5 text-xs font-semibold text-red-700">
-                  {formError}
+                <div
+                  role="alert"
+                  className="rounded-xl bg-red-50 border border-red-200 px-3.5 py-2.5 text-xs font-semibold text-red-700 flex items-start gap-2"
+                >
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-600" />
+                  <span>{formError}</span>
                 </div>
               )}
 
               {/* Primary CTA: SEND REQUEST */}
               <button
                 type="submit"
-                disabled={submitting}
+                disabled={submitting || photoUploading}
                 className="w-full h-14 rounded-xl bg-[#E06D1B] hover:bg-[#c55b10] disabled:opacity-60 text-white font-display text-base font-extrabold tracking-wide shadow-sm transition-colors flex items-center justify-center gap-2 cursor-pointer"
               >
                 {submitting ? (
                   <>
                     <Loader2 className="w-5 h-5 animate-spin" />
                     <span>{tr(lang, 'Sending Request...', 'रिक्वेस्ट भेजी जा रही है...', 'रिक्वेस्ट पाठवत आहोत...')}</span>
+                  </>
+                ) : photoUploading ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    <span>{tr(lang, 'Uploading Photos...', 'फ़ोटो अपलोड हो रही हैं...', 'फोटो अपलोड होत आहेत...')}</span>
                   </>
                 ) : (
                   <>

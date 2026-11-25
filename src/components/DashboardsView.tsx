@@ -3573,11 +3573,11 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
           </button>
           <button
             type="button"
-            onClick={() => onNavigate(employerProfile ? 'post-job' : 'register-employer')}
+            onClick={() => onNavigate('post-job')}
             className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-md bg-[#0B3B75] text-white text-sm font-semibold hover:bg-slate-800 cursor-pointer"
           >
             <PlusCircle className="w-4 h-4" />
-            {employerProfile ? t.jobs.postTitle : t.nav.employerReg}
+            {t.jobs.postTitle}
           </button>
           {employerProfile && (
             <button
