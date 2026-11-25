@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, X } from 'lucide-react';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { LanguageProvider, useLanguage } from './i18n/LanguageContext';
+import { isAuthenticatedUser } from './lib/firebase';
 import {
   subscribeForegroundPush,
   syncPushTokenSilentlyIfGranted,
@@ -349,18 +350,18 @@ const AppShell: React.FC = () => {
 
   // Subscribe to notification & voice preferences
   useEffect(() => {
-    if (!user?.emailVerified) {
+    if (!isAuthenticatedUser(user)) {
       setNotifPrefs(null);
       return;
     }
-    return subscribeNotificationPreferences(user.uid, setNotifPrefs);
-  }, [user?.uid, user?.emailVerified]);
+    return subscribeNotificationPreferences(user!.uid, setNotifPrefs);
+  }, [user]);
 
   // Silently refresh FCM device token on login, preference change, and when returning to foreground
   useEffect(() => {
-    if (!user?.emailVerified) return;
+    if (!isAuthenticatedUser(user)) return;
     if (notifPrefs && notifPrefs.masterEnabled === false) return;
-    const isRegisteredWorker = workers.some((w) => w.ownerUid === user.uid);
+    const isRegisteredWorker = workers.some((w) => w.ownerUid === user!.uid);
     const resolvedRole: 'worker' | 'employer' | 'admin' = isAdmin
       ? 'admin'
       : isRegisteredWorker
@@ -369,7 +370,7 @@ const AppShell: React.FC = () => {
     const targetLang = notifPrefs?.preferredLanguage || lang;
 
     void syncPushTokenSilentlyIfGranted({
-      uid: user.uid,
+      uid: user!.uid,
       role: resolvedRole,
       language: targetLang,
     });
@@ -377,7 +378,7 @@ const AppShell: React.FC = () => {
     const onVisibilityChange = () => {
       if (document.visibilityState === 'visible') {
         void syncPushTokenSilentlyIfGranted({
-          uid: user.uid,
+          uid: user!.uid,
           role: resolvedRole,
           language: targetLang,
         });
@@ -385,7 +386,7 @@ const AppShell: React.FC = () => {
     };
     document.addEventListener('visibilitychange', onVisibilityChange);
     return () => document.removeEventListener('visibilitychange', onVisibilityChange);
-  }, [user?.uid, user?.emailVerified, isAdmin, workers.length, notifPrefs?.masterEnabled, notifPrefs?.preferredLanguage, lang]);
+  }, [user, isAdmin, workers.length, notifPrefs?.masterEnabled, notifPrefs?.preferredLanguage, lang]);
 
   // Parse deep links from URL query parameters on boot (?route=worker-dashboard&jobId=...&speak=1&lang=mr&fromPush=1&notifKey=... or /register?ref=CODE)
   useEffect(() => {
@@ -452,7 +453,7 @@ const AppShell: React.FC = () => {
 
   // Auto-mark Firestore notifications read when opened from a background OS push click
   useEffect(() => {
-    if (!user?.emailVerified || pendingPushReadIds.length === 0 || notifications.length === 0) return;
+    if (!isAuthenticatedUser(user) || pendingPushReadIds.length === 0 || notifications.length === 0) return;
     const matched = notifications.filter(
       (n) =>
         !n.read &&
@@ -468,7 +469,7 @@ const AppShell: React.FC = () => {
         prev.filter((id) => !matched.some((n) => n.id === id || n.dedupeKey === id))
       );
     }
-  }, [user?.emailVerified, pendingPushReadIds, notifications]);
+  }, [user, pendingPushReadIds, notifications]);
 
   // Auto-play TTS once matching job loads when opened via OS notification "Open & Listen"
   useEffect(() => {
@@ -583,7 +584,7 @@ const AppShell: React.FC = () => {
 
   // Listen to foreground FCM messages while user has app open
   useEffect(() => {
-    if (!user?.emailVerified) return;
+    if (!isAuthenticatedUser(user)) return;
     let unsub: () => void = () => undefined;
     let active = true;
     void subscribeForegroundPush((payload) => {
@@ -636,7 +637,7 @@ const AppShell: React.FC = () => {
       active = false;
       unsub();
     };
-  }, [user?.uid, user?.emailVerified, notifPrefs?.preferredLanguage, lang, triggerSmartVoicePlayback, resolveNotificationTargetRoute, enqueueTopAlert]);
+  }, [user, notifPrefs?.preferredLanguage, lang, triggerSmartVoicePlayback, resolveNotificationTargetRoute, enqueueTopAlert]);
 
   useEffect(() => {
     const onQuota = () => setGmpQuotaExceeded(true);
@@ -683,11 +684,11 @@ const AppShell: React.FC = () => {
   useEffect(() => {
     seenNotifIdsRef.current = new Set();
     initialNotifLoadRef.current = true;
-    if (!user?.emailVerified) {
+    if (!isAuthenticatedUser(user)) {
       setNotifications([]);
       return;
     }
-    const unsub = subscribeUserNotifications(user.uid, (list) => {
+    const unsub = subscribeUserNotifications(user!.uid, (list) => {
       setNotifications(list);
       if (initialNotifLoadRef.current) {
         list.forEach((n) => seenNotifIdsRef.current.add(n.id));
@@ -745,7 +746,7 @@ const AppShell: React.FC = () => {
       }
     });
     return () => unsub();
-  }, [user?.uid, user?.emailVerified, notifPrefs, lang, voiceMuted, triggerSmartVoicePlayback, resolveNotificationTargetRoute, enqueueTopAlert]);
+  }, [user, notifPrefs, lang, voiceMuted, triggerSmartVoicePlayback, resolveNotificationTargetRoute, enqueueTopAlert]);
 
   const unreadNotificationsCount = useMemo(
     () => notifications.filter((n) => !n.read).length,

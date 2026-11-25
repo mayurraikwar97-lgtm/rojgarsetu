@@ -21,7 +21,7 @@ import { SERVICE_CATALOG_V2, getServiceCategoryLabel } from '../data/serviceCata
 import { getDistrictCoordinates, INDIA_STATES_DISTRICTS } from '../data/indiaLocations';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../i18n/LanguageContext';
-import { formatUiError } from '../lib/firebase';
+import { formatUiError, isAuthenticatedUser } from '../lib/firebase';
 import {
   extractLastName,
   getApproximateCoordinates,
@@ -37,7 +37,11 @@ import {
   saveOrderExactAddress,
   submitWorkerOffer,
 } from '../lib/firestoreService';
-import { detectBestGpsLocation } from '../lib/locationService';
+import {
+  detectBestGpsLocation,
+  formatCoordinatesLabel,
+  formatGeolocationError,
+} from '../lib/locationService';
 import {
   buildApproxLocationLabel,
   buildSmartJobVoiceScript,
@@ -1171,14 +1175,9 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
           clearFieldError('pincode');
         }
       }
-    } catch {
-      setErrorMsg(
-        tr(
-          'Unable to detect GPS location. Please enter your city/village, area, and 6-digit pincode manually.',
-          'GPS लोकेशन नहीं मिल सकी। कृपया शहर/गाँव, इलाका और 6 अंकों का पिनकोड मैन्युअल रूप से भरें।',
-          'GPS लोकेशन मिळू शकले नाही. कृपया गाव/शहर, परिसर आणि ६ अंकी पिनकोड स्वतः भरा.'
-        )
-      );
+    } catch (err) {
+      setErrorMsg(formatGeolocationError(err, lang).message);
+      window.setTimeout(() => errorBannerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 20);
     } finally {
       setGpsBusy(false);
     }
@@ -1201,12 +1200,12 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
       return;
     }
 
-    if (!user.emailVerified) {
+    if (!isAuthenticatedUser(user)) {
       setErrorMsg(
         tr(
-          'Your Google account email is not verified. Please sign in with a verified Google account to publish a job.',
-          'आपका Google ईमेल सत्यापित नहीं है। कृपया सत्यापित Google खाते से साइन-इन करें।',
-          'तुमचे Google ईमेल पडताळलेले नाही. कृपया पडताळलेल्या Google खात्याने साइन-इन करा.'
+          'Your Google sign-in session could not be verified. Please sign in with Google again to publish a job.',
+          'आपका Google सत्र सत्यापित नहीं हो सका। कृपया Google से पुनः साइन-इन करें।',
+          'तुमचे Google लॉगिन सत्र पडताळता आले नाही. कृपया Google ने पुन्हा साइन-इन करा.'
         )
       );
       window.setTimeout(() => errorBannerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 20);
@@ -2074,27 +2073,31 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
                 </strong>{' '}
                 {pinnedCoords
                   ? tr(
-                      `Pinned (${pinnedCoords.lat.toFixed(4)}, ${pinnedCoords.lng.toFixed(4)}) — exact address stays hidden until you confirm a worker.`,
-                      `पिन किया गया (${pinnedCoords.lat.toFixed(4)}, ${pinnedCoords.lng.toFixed(4)}) — सटीक पता कन्फर्म होने के बाद ही साझा होगा।`,
-                      `पिन केलेले (${pinnedCoords.lat.toFixed(4)}, ${pinnedCoords.lng.toFixed(4)}) — कामगार निश्चित केल्यानंतरच अचूक पत्ता शेअर होतो.`
+                      `Detected ${formatCoordinatesLabel(pinnedCoords.lat, pinnedCoords.lng)} — exact address stays hidden until you confirm a worker.`,
+                      `लोकेशन प्राप्त ${formatCoordinatesLabel(pinnedCoords.lat, pinnedCoords.lng)} — सटीक पता कन्फर्म होने के बाद ही साझा होगा।`,
+                      `लोकेशन सापडले ${formatCoordinatesLabel(pinnedCoords.lat, pinnedCoords.lng)} — कामगार निश्चित केल्यानंतरच अचूक पत्ता शेअर होतो.`
                     )
                   : tr(
-                      'Optional: auto-fill city, pincode & approximate distance for nearby workers.',
-                      'वैकल्पिक: शहर, पिनकोड व दूरी अपने-आप भरने के लिए GPS उपयोग करें।',
-                      'ऐच्छिक: गाव, पिनकोड व अंदाजे अंतर आपोआप भरण्यासाठी GPS वापरा.'
+                      'Optional: auto-fill city, pincode & coordinates for nearby workers, or type manually above.',
+                      'वैकल्पिक: शहर, पिनकोड व निर्देशांक अपने-आप भरने के लिए GPS उपयोग करें या ऊपर मैन्युअल भरें।',
+                      'ऐच्छिक: गाव, पिनकोड व अचूक लोकेशन आपोआप भरण्यासाठी GPS वापरा किंवा वर स्वतः भरा.'
                     )}
               </div>
               <button
                 type="button"
                 disabled={gpsBusy}
                 onClick={handleShareJobGps}
-                className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg border border-[#0B3B75] bg-white text-[#0B3B75] text-xs font-bold hover:bg-blue-50 cursor-pointer disabled:opacity-60"
+                className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-[#0B3B75] text-white text-xs font-bold hover:bg-[#072A54] cursor-pointer disabled:opacity-60"
               >
-                <LocateFixed className="w-4 h-4 text-[#E06D1B]" />
+                <LocateFixed className={`w-4 h-4 text-amber-300 ${gpsBusy ? 'animate-spin' : ''}`} />
                 <span>
                   {gpsBusy
                     ? tr('Detecting GPS...', 'GPS खोज रहे हैं...', 'GPS शोधत आहे...')
-                    : tr('Pin Work Area (GPS)', 'GPS से स्थान भरें', 'GPS ने ठिकाण भरा')}
+                    : tr(
+                        'Get My Current Location',
+                        'मेरा वर्तमान स्थान प्राप्त करें',
+                        'माझे सध्याचे लोकेशन मिळवा'
+                      )}
                 </span>
               </button>
             </div>

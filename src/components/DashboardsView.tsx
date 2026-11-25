@@ -52,8 +52,12 @@ import { useAuth } from '../contexts/AuthContext';
 import { getVehicleTypeLabel } from '../data/vehicleTypes';
 import { SERVICE_CATALOG_V2 } from '../data/serviceCatalogV2';
 import { useLanguage } from '../i18n/LanguageContext';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
-import { detectBestGpsLocation } from '../lib/locationService';
+import { db, handleFirestoreError, isAuthenticatedUser, OperationType } from '../lib/firebase';
+import {
+  detectBestGpsLocation,
+  formatCoordinatesLabel,
+  formatGeolocationError,
+} from '../lib/locationService';
 import {
   buildAcceptedApplicationGrantId,
   buildCustomerPhotoDocId,
@@ -254,21 +258,21 @@ export const WorkerDashboardView: React.FC<WorkerDashboardProps> = ({
   const newRequestSectionRef = useRef<HTMLElement | null>(null);
 
   useEffect(() => {
-    if (!user?.emailVerified) {
+    if (!isAuthenticatedUser(user)) {
       setApplications([]);
       setOwnerVehicles([]);
       setOwnerVehicleBookings([]);
       return;
     }
-    const u1 = subscribeWorkerApplications(user.uid, setApplications);
-    const u2 = subscribeOwnerVehicles(user.uid, setOwnerVehicles);
-    const u3 = subscribeOwnerVehicleBookings(user.uid, setOwnerVehicleBookings);
+    const u1 = subscribeWorkerApplications(user!.uid, setApplications);
+    const u2 = subscribeOwnerVehicles(user!.uid, setOwnerVehicles);
+    const u3 = subscribeOwnerVehicleBookings(user!.uid, setOwnerVehicleBookings);
     return () => {
       u1();
       u2();
       u3();
     };
-  }, [user?.uid, user?.emailVerified]);
+  }, [user]);
 
   const jobsById = useMemo(() => {
     const record: Record<string, JobPosting> = {};
@@ -2236,22 +2240,24 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
   const customerOrdersRef = useRef<HTMLElement | null>(null);
   const syncedPhotoGrantsRef = useRef<Set<string>>(new Set());
 
+  const [locNoticeIsError, setLocNoticeIsError] = useState(false);
+
   useEffect(() => {
-    if (!user?.emailVerified) {
+    if (!isAuthenticatedUser(user)) {
       setApplications([]);
       setOrderMessages([]);
       setCustomerVehicleBookings([]);
       return;
     }
-    const u1 = subscribeEmployerApplications(user.uid, setApplications);
-    const u2 = subscribeCustomerVehicleBookings(user.uid, setCustomerVehicleBookings);
-    const u3 = subscribeAllCustomerOrderMessages(user.uid, setOrderMessages);
+    const u1 = subscribeEmployerApplications(user!.uid, setApplications);
+    const u2 = subscribeCustomerVehicleBookings(user!.uid, setCustomerVehicleBookings);
+    const u3 = subscribeAllCustomerOrderMessages(user!.uid, setOrderMessages);
     return () => {
       u1();
       u2();
       u3();
     };
-  }, [user?.uid, user?.emailVerified]);
+  }, [user]);
 
   const jobsById = useMemo(() => {
     const mapObj: Record<string, JobPosting> = {};
@@ -2272,7 +2278,7 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
 
   // Idempotently grant accepted workers access to customer's private photo (including worker-accepted invites)
   useEffect(() => {
-    if (!user?.emailVerified || !employerPrivate?.photoDocId) return;
+    if (!isAuthenticatedUser(user) || !employerPrivate?.photoDocId) return;
     const customerPhotoDocId = employerPrivate.photoDocId;
     for (const app of applications) {
       if (isCustomerPhotoVisibleForJobStatus(app.status)) {
@@ -2280,7 +2286,7 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
         if (syncedPhotoGrantsRef.current.has(key)) continue;
         syncedPhotoGrantsRef.current.add(key);
         void grantAcceptedCustomerPhoto({
-          customerUid: user.uid,
+          customerUid: user!.uid,
           workerUid: app.workerUid,
           sourceType: 'job_application',
           sourceId: app.id,
@@ -2290,7 +2296,7 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
         });
       }
     }
-  }, [user?.uid, user?.emailVerified, employerPrivate?.photoDocId, applications]);
+  }, [user, employerPrivate?.photoDocId, applications]);
 
   const myJobs = useMemo(
     () => (user ? jobs.filter((j) => j.employerUid === user.uid) : []),
@@ -2457,44 +2463,34 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
     employerProfile?.businessName || user?.displayName || user?.email?.split('@')[0] || 'Customer';
 
   const handleUpdateSavedGps = async () => {
-    if (!user?.emailVerified) return;
+    if (!isAuthenticatedUser(user)) return;
     setGpsUpdating(true);
     setLocNotice('');
+    setLocNoticeIsError(false);
     try {
       const geo = await detectBestGpsLocation(lang);
       const label = [geo.cityOrVillage, geo.district, geo.state].filter(Boolean).join(', ');
-      await saveCustomerDefaultLocation(user.uid, {
+      await saveCustomerDefaultLocation(user!.uid, {
         state: geo.state,
         district: geo.district,
         cityOrVillage: geo.cityOrVillage || geo.district,
+        pincode: geo.postalCode || undefined,
         lat: geo.lat,
         lng: geo.lng,
         savedAddressLabel: geo.formattedAddress || label,
       });
-      setLocNotice(
-        geo.isApproximate
-          ? tr(
-              lang,
-              `Approximate IP/Wi-Fi location saved (${label}). Refine inside Hire Now -> Map Pin if needed.`,
-              `अनुमानित लोकेशन सहेजी गई (${label})। आवश्यकता हो तो मानचित्र पिन से सुधारें।`,
-              `अंदाजे लोकेशन जतन केले (${label}). गरज असल्यास मॅप पिनने अचूक करा.`
-            )
-          : tr(
-              lang,
-              `Accurate GPS location pinned to your profile (${label}).`,
-              `सटीक GPS लोकेशन प्रोफ़ाइल में सहेजी गई (${label})।`,
-              `तुमच्या प्रोफाईलवर अचूक GPS पत्ता जतन केला (${label}).`
-            )
-      );
-    } catch {
+      const coordsText = formatCoordinatesLabel(geo.lat, geo.lng);
       setLocNotice(
         tr(
           lang,
-          'Could not read device GPS. Allow location permission or set pin in Hire Now.',
-          'GPS प्राप्त नहीं हो सका। लोकेशन अनुमति दें या मानचित्र पिन सेट करें।',
-          'GPS मिळू शकले नाही. लोकेशन परवानगी द्या किंवा हायर पेजवर पिन निवडा.'
+          `GPS location saved: ${geo.formattedAddress || label} · ${coordsText}`,
+          `GPS स्थान सहेजा गया: ${geo.formattedAddress || label} · ${coordsText}`,
+          `GPS लोकेशन जतन केले: ${geo.formattedAddress || label} · ${coordsText}`
         )
       );
+    } catch (err) {
+      setLocNoticeIsError(true);
+      setLocNotice(formatGeolocationError(err, lang).message);
     } finally {
       setGpsUpdating(false);
     }
@@ -3663,6 +3659,13 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
                     )}
                 </span>
               </div>
+              {typeof customerPreference?.defaultLat === 'number' &&
+                typeof customerPreference?.defaultLng === 'number' && (
+                  <p className="text-[11px] font-mono-tabular text-slate-500">
+                    {formatCoordinatesLabel(customerPreference.defaultLat, customerPreference.defaultLng)}
+                    {customerPreference.defaultPincode ? ` · PIN ${customerPreference.defaultPincode}` : ''}
+                  </p>
+                )}
               {frequentStats.latestOrderTitle && (
                 <p className="text-xs text-slate-600">
                   {tr(lang, 'Last Order:', 'पिछला ऑर्डर:', 'शेवटची ऑर्डर:')}{' '}
@@ -3676,12 +3679,17 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
                 type="button"
                 disabled={gpsUpdating}
                 onClick={handleUpdateSavedGps}
-                className="inline-flex items-center gap-1.5 px-3 py-2 rounded border border-slate-300 bg-slate-50 text-xs font-bold text-[#0B3B75] hover:bg-slate-100 cursor-pointer disabled:opacity-60"
+                className="inline-flex items-center gap-1.5 px-3 py-2 rounded border border-[#0B3B75] bg-[#0B3B75] text-xs font-bold text-white hover:bg-[#072A54] cursor-pointer disabled:opacity-60"
               >
-                <Crosshair className="w-3.5 h-3.5 text-[#15803D]" />
+                <Crosshair className={`w-3.5 h-3.5 text-amber-300 ${gpsUpdating ? 'animate-spin' : ''}`} />
                 {gpsUpdating
                   ? tr(lang, 'Detecting GPS...', 'GPS खोज रहे हैं...', 'GPS शोधत आहे...')
-                  : tr(lang, 'Update GPS Pin', 'GPS लोकेशन अपडेट करें', 'GPS पत्ता अपडेट करा')}
+                  : tr(
+                      lang,
+                      'Get My Current Location',
+                      'मेरा वर्तमान स्थान प्राप्त करें',
+                      'माझे सध्याचे लोकेशन मिळवा'
+                    )}
               </button>
               <button
                 type="button"
@@ -3695,7 +3703,14 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
           </div>
 
           {locNotice && (
-            <div className="px-3 py-2 rounded bg-blue-50 border border-blue-200 text-xs font-medium text-[#0B3B75]">
+            <div
+              role={locNoticeIsError ? 'alert' : 'status'}
+              className={`px-3 py-2 rounded border text-xs font-medium ${
+                locNoticeIsError
+                  ? 'bg-red-50 border-red-200 text-red-800'
+                  : 'bg-emerald-50 border-emerald-200 text-emerald-900'
+              }`}
+            >
               {locNotice}
             </div>
           )}
@@ -4340,7 +4355,18 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
                         </div>
                       </td>
                       <td className="py-3 pr-4 text-slate-600">{w.primarySkill}</td>
-                      <td className="py-3 pr-4 text-slate-600">{w.district}, {w.state}</td>
+                      <td className="py-3 pr-4 text-slate-600">
+                        <div>
+                          {w.cityOrVillage ? `${w.cityOrVillage}, ` : ''}
+                          {w.district}, {w.state}
+                          {w.pincode ? ` · PIN ${w.pincode}` : ''}
+                        </div>
+                        {typeof w.approxLat === 'number' && typeof w.approxLng === 'number' && (
+                          <div className="font-mono-tabular text-[10px] text-slate-500">
+                            {formatCoordinatesLabel(w.approxLat, w.approxLng)}
+                          </div>
+                        )}
+                      </td>
                       <td className="py-3 pr-4">
                         <div className="flex flex-col items-start gap-1">
                           <PaymentStatusBadge status={effectivePayStatus} />
@@ -4658,15 +4684,18 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
               onClick={() =>
                 downloadCsv(
                   'rojgar-setu-jobs.csv',
-                  ['Job ID', 'Title', 'Employer', 'Category', 'State', 'District', 'Pincode', 'Wage', 'Status', 'Request Status'],
+                  ['Job ID', 'Title', 'Employer', 'Category', 'City', 'District', 'State', 'Pincode', 'Lat', 'Lng', 'Wage', 'Status', 'Request Status'],
                   jobs.map((j) => [
                     j.id,
                     j.title,
                     j.employerName,
                     j.category,
-                    j.state,
+                    j.cityOrVillage || '',
                     j.district,
+                    j.state,
                     j.pincode || '',
+                    typeof j.lat === 'number' ? j.lat.toFixed(5) : '',
+                    typeof j.lng === 'number' ? j.lng.toFixed(5) : '',
                     j.offeredWage,
                     j.status,
                     j.requestStatus || 'PENDING',
@@ -4690,7 +4719,11 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
                   <div className="space-y-0.5">
                     <p className="text-xs font-mono-tabular text-slate-500">
                       {job.category} · {job.cityOrVillage ? `${job.cityOrVillage}, ` : ''}{job.district}, {job.state}
-                      {job.pincode ? ` · PIN: ${job.pincode}` : ''} · Status: <strong className="uppercase">{job.status}</strong>{' '}
+                      {job.pincode ? ` · PIN: ${job.pincode}` : ''}
+                      {typeof job.lat === 'number' && typeof job.lng === 'number'
+                        ? ` · ${formatCoordinatesLabel(job.lat, job.lng)}`
+                        : ''}{' '}
+                      · Status: <strong className="uppercase">{job.status}</strong>{' '}
                       · Request: <strong className="uppercase text-[#0B3B75]">{reqStatus}</strong>
                     </p>
                     <h3 className="font-display text-sm font-bold text-[#0B3B75]">{job.title}</h3>

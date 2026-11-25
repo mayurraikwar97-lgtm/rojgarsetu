@@ -41,7 +41,7 @@ import {
   INDIA_STATES_DISTRICTS,
 } from '../data/indiaLocations';
 import { useLanguage } from '../i18n/LanguageContext';
-import { formatUiError } from '../lib/firebase';
+import { formatUiError, isAuthenticatedUser } from '../lib/firebase';
 import {
   callNotificationApi,
   createInstantHireRequest,
@@ -50,6 +50,8 @@ import {
 } from '../lib/firestoreService';
 import {
   detectBestGpsLocation,
+  formatCoordinatesLabel,
+  formatGeolocationError,
   searchLocations,
   type GeoSearchCandidate,
 } from '../lib/locationService';
@@ -404,41 +406,35 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
       setLocationSearchInput(pin.cityOrVillage || pin.district);
       if (radiusKm === 0) setRadiusKm(50);
 
+      const coordsText = formatCoordinatesLabel(res.lat, res.lng);
       if (res.isApproximate) {
         setGpsWarningMsg(
           tr(
             lang,
-            `Browser network/IP GPS (~${res.accuracyMeters ? Math.round(res.accuracyMeters / 1000) : '?'} km accuracy): ${pin.label}. Tap "Pin on Map" or search your town/pincode if inaccurate.`,
-            `ब्राउज़र नेटवर्क लोकेशन (~${res.accuracyMeters ? Math.round(res.accuracyMeters / 1000) : '?'} किमी दूर): ${pin.label}। गलत हो तो "Pin on Map" दबाएँ या पिनकोड लिखें।`,
-            `ब्राउझर नेटवर्क GPS अंदाजे (${res.accuracyMeters ? `~${Math.round(res.accuracyMeters / 1000)} किमी` : 'अंदाजे'}): ${pin.label}. चुकीचे वाटल्यास "नकाशावर पिन करा" दाबा किंवा शहर/पिनकोड टाका.`
+            `Browser network/IP GPS (~${res.accuracyMeters ? Math.round(res.accuracyMeters / 1000) : '?'} km accuracy): ${pin.label} (${coordsText}). Tap "Pin on Map" or search your town/PIN code if inaccurate.`,
+            `ब्राउज़र नेटवर्क लोकेशन (~${res.accuracyMeters ? Math.round(res.accuracyMeters / 1000) : '?'} किमी दूर): ${pin.label} (${coordsText})। गलत हो तो "Pin on Map" दबाएँ या पिनकोड लिखें।`,
+            `ब्राउझर नेटवर्क GPS अंदाजे (${res.accuracyMeters ? `~${Math.round(res.accuracyMeters / 1000)} किमी` : 'अंदाजे'}): ${pin.label} (${coordsText}). चुकीचे वाटल्यास "नकाशावर पिन करा" दाबा किंवा शहर/पिनकोड टाका.`
           )
         );
       } else {
         setGpsStatusMsg(
           tr(
             lang,
-            `Exact GPS active: ${pin.label}`,
-            `सटीक GPS लोकेशन सक्रिय: ${pin.label}`,
-            `अचूक GPS लोकेशन सक्रिय: ${pin.label}`
+            `Exact GPS active: ${pin.label} · ${coordsText}`,
+            `सटीक GPS लोकेशन सक्रिय: ${pin.label} · ${coordsText}`,
+            `अचूक GPS लोकेशन सक्रिय: ${pin.label} · ${coordsText}`
           )
         );
       }
-    } catch {
-      setGpsWarningMsg(
-        tr(
-          lang,
-          'GPS permission declined or unavailable. Type your town/pincode or tap "Pin on Map".',
-          'लोकेशन अनुमति अस्वीकृत। कृपया शहर/पिनकोड लिखें या "Pin on Map" दबाएँ।',
-          'GPS उपलब्ध नाही. कृपया शहराचे नाव/पिनकोड टाका किंवा "नकाशावर पिन करा" दाबा.'
-        )
-      );
+    } catch (err) {
+      setGpsWarningMsg(formatGeolocationError(err, lang).message);
     } finally {
       setGpsLoading(false);
     }
   };
 
   const handleSaveDefaultLocation = async () => {
-    if (!user?.emailVerified) {
+    if (!isAuthenticatedUser(user)) {
       await signInWithGoogle();
       return;
     }
@@ -716,13 +712,13 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
       return;
     }
 
-    if (!user.emailVerified) {
+    if (!isAuthenticatedUser(user)) {
       setCheckoutError(
         tr(
           lang,
-          'Please sign in with a verified Google account to confirm booking.',
-          'बुकिंग कन्फर्म करने के लिए कृपया सत्यापित गूगल खाते से लॉगिन करें।',
-          'बुकिंग निश्चित करण्यासाठी कृपया सत्यापित गुगल खात्याने लॉगिन करा.'
+          'Please sign in with Google to confirm booking.',
+          'बुकिंग कन्फर्म करने के लिए कृपया गूगल खाते से लॉगिन करें।',
+          'बुकिंग निश्चित करण्यासाठी कृपया गुगल खात्याने लॉगिन करा.'
         )
       );
       return;
@@ -932,13 +928,13 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
       return;
     }
 
-    if (!user.emailVerified) {
+    if (!isAuthenticatedUser(user)) {
       setQuickError(
         tr(
           lang,
-          'Please sign in with a verified Google account to send requests.',
-          'रिक्वेस्ट भेजने के लिए कृपया सत्यापित गूगल खाते से लॉगिन करें।',
-          'विनंती पाठवण्यासाठी कृपया सत्यापित गुगल खात्याने लॉगिन करा.'
+          'Please sign in with Google to send requests.',
+          'रिक्वेस्ट भेजने के लिए कृपया गूगल खाते से लॉगिन करें।',
+          'विनंती पाठवण्यासाठी कृपया गुगल खात्याने लॉगिन करा.'
         )
       );
       return;
@@ -1171,7 +1167,12 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
                 <Crosshair className="w-3.5 h-3.5 text-amber-300" />
                 {gpsLoading
                   ? tr(lang, 'Detecting...', 'खोज रहे हैं...', 'शोधत आहे...')
-                  : tr(lang, 'Use GPS', 'सटीक GPS चुनें', 'GPS लोकेशन')}
+                  : tr(
+                      lang,
+                      'Get My Current Location',
+                      'मेरा वर्तमान स्थान प्राप्त करें',
+                      'माझे सध्याचे लोकेशन मिळवा'
+                    )}
               </button>
 
               <button
@@ -1522,7 +1523,12 @@ export const InstantHireView: React.FC<InstantHireViewProps> = ({
               >
                 <LocateFixed className="w-4 h-4 text-[#E06D1B]" />
                 <span>
-                  {tr(lang, 'Pin Work Area (GPS)', 'काम का क्षेत्र पिन करें (GPS)', 'कामाचा परिसर पिन करा (GPS)')}
+                  {tr(
+                    lang,
+                    'Get My Current Location',
+                    'मेरा वर्तमान स्थान प्राप्त करें',
+                    'माझे सध्याचे लोकेशन मिळवा'
+                  )}
                 </span>
               </button>
 

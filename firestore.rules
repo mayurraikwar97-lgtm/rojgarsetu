@@ -65,7 +65,10 @@ service cloud.firestore {
     }
 
     function isVerifiedUser() {
-      return isSignedIn() && request.auth.token.email_verified == true;
+      return isSignedIn() && (
+        request.auth.token.email_verified == true ||
+        request.auth.token.firebase.sign_in_provider == 'google.com'
+      );
     }
 
     function isOwner(uid) {
@@ -75,7 +78,7 @@ service cloud.firestore {
     function isAdmin() {
       return isVerifiedUser() && (
         exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
-        request.auth.token.email == 'mayurraikwar97@gmail.com'
+        (request.auth.token.email_verified == true && request.auth.token.email == 'mayurraikwar97@gmail.com')
       );
     }
 
@@ -124,7 +127,7 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'ownerUid', 'registrationId', 'displayName', 'primarySkill', 'skills',
           'experienceYears', 'expectedWage', 'wageUnit', 'preferredWorkType',
-          'availabilityStatus', 'state', 'district', 'cityOrVillage',
+          'availabilityStatus', 'state', 'district', 'cityOrVillage', 'pincode',
           'approxLat', 'approxLng', 'languagesKnown', 'gender', 'education',
           'verificationStatus', 'registrationPaymentStatus', 'paidBenefitsActive',
           'paymentReceiptNo', 'certificateNo', 'verifiedAtIso',
@@ -150,6 +153,7 @@ service cloud.firestore {
         && isStr(data.state, 2, 80)
         && isStr(data.district, 2, 80)
         && isStr(data.cityOrVillage, 2, 100)
+        && optStr(data, 'pincode', 12)
         && isNum(data.approxLat, -90, 90)
         && isNum(data.approxLng, -180, 180)
         && data.languagesKnown is list && data.languagesKnown.size() >= 1 && data.languagesKnown.size() <= 10 && data.languagesKnown[0] is string
@@ -660,7 +664,7 @@ service cloud.firestore {
           'totalHireOrders', 'totalTransportOrders', 'createdAt', 'updatedAt'
         ])
         && data.keys().hasOnly([
-          'ownerUid', 'defaultState', 'defaultDistrict', 'defaultCityOrVillage',
+          'ownerUid', 'defaultState', 'defaultDistrict', 'defaultCityOrVillage', 'defaultPincode',
           'defaultLat', 'defaultLng', 'savedAddressLabel', 'frequentWorkerCategories',
           'frequentVehicleTypes', 'totalHireOrders', 'totalTransportOrders',
           'lastOrderTitle', 'lastOrderCategory', 'createdAt', 'updatedAt'
@@ -669,6 +673,7 @@ service cloud.firestore {
         && (!('defaultState' in data) || (data.defaultState is string && data.defaultState.size() <= 80))
         && (!('defaultDistrict' in data) || (data.defaultDistrict is string && data.defaultDistrict.size() <= 80))
         && (!('defaultCityOrVillage' in data) || (data.defaultCityOrVillage is string && data.defaultCityOrVillage.size() <= 100))
+        && optStr(data, 'defaultPincode', 12)
         && (!('defaultLat' in data) || (data.defaultLat is number && data.defaultLat >= -90 && data.defaultLat <= 90))
         && (!('defaultLng' in data) || (data.defaultLng is number && data.defaultLng >= -180 && data.defaultLng <= 180))
         && (!('savedAddressLabel' in data) || (data.savedAddressLabel is string && data.savedAddressLabel.size() <= 160))
@@ -1306,7 +1311,7 @@ service cloud.firestore {
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'displayName', 'primarySkill', 'skills', 'experienceYears',
               'expectedWage', 'wageUnit', 'preferredWorkType', 'availabilityStatus',
-              'state', 'district', 'cityOrVillage', 'approxLat', 'approxLng',
+              'state', 'district', 'cityOrVillage', 'pincode', 'approxLat', 'approxLng',
               'languagesKnown', 'gender', 'education', 'isWomenEnterprise', 'photoDocId',
               'preferredLanguage', 'preferredRadiusKm', 'voiceAlertsEnabled', 'referralCode',
               'customProfessionId', 'customProfessionName', 'customProfessionStatus',

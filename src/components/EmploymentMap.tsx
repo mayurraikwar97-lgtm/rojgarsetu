@@ -16,7 +16,11 @@ import {
   getDistrictCoordinates,
   INDIA_STATES_DISTRICTS,
 } from '../data/indiaLocations';
-import { detectBestGpsLocation } from '../lib/locationService';
+import {
+  detectBestGpsLocation,
+  formatCoordinatesLabel,
+  formatGeolocationError,
+} from '../lib/locationService';
 import { useLanguage } from '../i18n/LanguageContext';
 import type { JobPosting, PageRoute, PublicWorkerProfile } from '../types/domain';
 
@@ -165,22 +169,30 @@ export const EmploymentMap: React.FC<EmploymentMapProps> = ({ jobs, workers, onN
   }, [userCoords, selectedDistrict, selectedState]);
 
   const requestUserLocation = async () => {
-    setGeoStatus('Detecting your exact location via GPS...');
+    setGeoStatus(
+      lang === 'mr'
+        ? 'GPS द्वारे तुमचे सध्याचे ठिकाण शोधत आहे...'
+        : lang === 'hi'
+        ? 'GPS से आपकी वर्तमान लोकेशन खोजी जा रही है...'
+        : 'Detecting your current location via GPS...'
+    );
     try {
       const detected = await detectBestGpsLocation(lang);
+      const coordStr = formatCoordinatesLabel(detected.lat, detected.lng);
+      setUserCoords({ lat: detected.lat, lng: detected.lng });
       if (detected.isApproximate) {
-        setUserCoords({ lat: detected.lat, lng: detected.lng });
         setGeoStatus(
-          `Network/IP estimate (${detected.accuracyMeters ? `${Math.round(detected.accuracyMeters / 1000)} km accuracy` : 'low precision'}): ${detected.formattedAddress || detected.district}. Use State/District filters if inaccurate.`
+          `Network estimate (${detected.accuracyMeters ? `${Math.round(detected.accuracyMeters / 1000)} km accuracy` : 'low precision'}): ${detected.formattedAddress || detected.district} (${coordStr}). Use State/District filters if inaccurate.`
         );
         return;
       }
-      setUserCoords({ lat: detected.lat, lng: detected.lng });
       if (detected.state) setSelectedState(detected.state);
       if (detected.district) setSelectedDistrict(detected.district);
-      setGeoStatus(`Exact location active: ${detected.cityOrVillage}, ${detected.district}, ${detected.state}.`);
-    } catch {
-      setGeoStatus('Location permission declined or unavailable. Continue using State/District filters.');
+      setGeoStatus(
+        `GPS location active: ${detected.formattedAddress || `${detected.cityOrVillage}, ${detected.district}, ${detected.state}`} (${coordStr}).`
+      );
+    } catch (err) {
+      setGeoStatus(formatGeolocationError(err, lang).message);
     }
   };
 

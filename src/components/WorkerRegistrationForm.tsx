@@ -5,7 +5,7 @@ import { SERVICE_CATALOG_V2, getServiceCategoryLabel } from '../data/serviceCata
 import { getDistrictCoordinates, INDIA_STATES_DISTRICTS } from '../data/indiaLocations';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../i18n/LanguageContext';
-import { formatUiError } from '../lib/firebase';
+import { formatUiError, isAuthenticatedUser } from '../lib/firebase';
 import { saveWorkerRegistration } from '../lib/firestoreService';
 import {
   captureReferralCodeFromUrl,
@@ -13,7 +13,12 @@ import {
   lookupReferralCode,
   recordWorkerReferralAttribution,
 } from '../lib/adsReferralService';
-import { detectBestGpsLocation } from '../lib/locationService';
+import {
+  detectBestGpsLocation,
+  formatCoordinatesLabel,
+  formatGeolocationError,
+  searchLocations,
+} from '../lib/locationService';
 import {
   getOtpFraudWarningLocalized,
   isWorkerRegistrationOtpEnabled,
@@ -95,11 +100,14 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
   const [verificationMethod, setVerificationMethod] = useState<VerificationMethod | undefined>(undefined);
   const [testPinHash, setTestPinHash] = useState('');
   const [email, setEmail] = useState('');
-  const [stateName, setStateName] = useState('Chhattisgarh');
-  const [districtName, setDistrictName] = useState('Narayanpur (Abujhmad)');
+  const [stateName, setStateName] = useState('Maharashtra');
+  const [districtName, setDistrictName] = useState('Chandrapur');
   const [cityOrVillage, setCityOrVillage] = useState('');
-  const [approxLat, setApproxLat] = useState<number>(19.7176);
-  const [approxLng, setApproxLng] = useState<number>(81.2468);
+  const [workerPincode, setWorkerPincode] = useState('');
+  const [pincodeResolving, setPincodeResolving] = useState(false);
+  const [approxLat, setApproxLat] = useState<number | null>(null);
+  const [approxLng, setApproxLng] = useState<number | null>(null);
+  const [gpsFeedback, setGpsFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [photoUrl, setPhotoUrl] = useState('');
   const [selectedPhoto, setSelectedPhoto] = useState<SelectedProfilePhoto | null>(null);
   const [removePhoto, setRemovePhoto] = useState(false);
@@ -137,7 +145,6 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
   const [errorMsg, setErrorMsg] = useState('');
   const [savedId, setSavedId] = useState('');
   const [showSuccessScreen, setShowSuccessScreen] = useState(false);
-  const [gpsStatusMsg, setGpsStatusMsg] = useState('');
   const [gpsDetecting, setGpsDetecting] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
   const verifyingPaymentRef = useRef(false);
@@ -220,8 +227,17 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
       setStateName(workerProfile.state);
       setDistrictName(workerProfile.district);
       setCityOrVillage(workerProfile.cityOrVillage);
-      setApproxLat(workerProfile.approxLat);
-      setApproxLng(workerProfile.approxLng);
+      setWorkerPincode(workerProfile.pincode || '');
+      setApproxLat(
+        typeof workerProfile.approxLat === 'number' && Number.isFinite(workerProfile.approxLat)
+          ? workerProfile.approxLat
+          : null
+      );
+      setApproxLng(
+        typeof workerProfile.approxLng === 'number' && Number.isFinite(workerProfile.approxLng)
+          ? workerProfile.approxLng
+          : null
+      );
       setPhotoUrl(workerPrivate.photoUrl || '');
       setGender(workerProfile.gender || 'prefer_not_to_say');
       setAgeConfirmed(workerPrivate.ageConfirmed);
@@ -313,9 +329,41 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
     setApproxLng(coords.lng);
   };
 
+  const handleWorkerPincodeLookup = async (pin: string) => {
+    const clean = pin.replace(/\D/g, '').slice(0, 6);
+    if (!/^[1-9]\d{5}$/.test(clean)) return;
+    setPincodeResolving(true);
+    try {
+      const hits = await searchLocations(clean, lang);
+      if (hits.length > 0) {
+        const top = hits[0];
+        setApproxLat(top.lat);
+        setApproxLng(top.lng);
+        if (top.state && INDIA_STATES_DISTRICTS.some((s) => s.name === top.state)) {
+          setStateName(top.state);
+        }
+        if (top.district) setDistrictName(top.district);
+        if (top.cityOrVillage) setCityOrVillage(top.cityOrVillage);
+        setGpsFeedback({
+          type: 'success',
+          message:
+            lang === 'mr'
+              ? `पिनकोड ${clean} वरून ठिकाण सेट झाले: ${top.formattedAddress} (${formatCoordinatesLabel(top.lat, top.lng)})`
+              : lang === 'hi'
+              ? `पिनकोड ${clean} से स्थान सेट हुआ: ${top.formattedAddress} (${formatCoordinatesLabel(top.lat, top.lng)})`
+              : `Location resolved from PIN ${clean}: ${top.formattedAddress} (${formatCoordinatesLabel(top.lat, top.lng)})`,
+        });
+      }
+    } catch {
+      // Non-blocking; worker can still edit manually
+    } finally {
+      setPincodeResolving(false);
+    }
+  };
+
   const handleCaptureBrowserLocation = async () => {
     setGpsDetecting(true);
-    setGpsStatusMsg('');
+    setGpsFeedback(null);
     try {
       const detected = await detectBestGpsLocation(lang);
       setApproxLat(detected.lat);
@@ -325,13 +373,28 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
       }
       if (detected.district) setDistrictName(detected.district);
       if (detected.cityOrVillage) setCityOrVillage(detected.cityOrVillage);
-      setGpsStatusMsg(
-        detected.isApproximate
-          ? `Network estimate (${detected.accuracyMeters ? `~${Math.round(detected.accuracyMeters / 1000)} km` : 'coarse'}): ${detected.formattedAddress}. Tap "Pin on Map" if inaccurate.`
-          : `Detected: ${detected.formattedAddress}`
-      );
-    } catch {
-      setGpsStatusMsg('Unable to access device GPS. Please select State/District or Pin on Map.');
+      if (detected.postalCode) setWorkerPincode(detected.postalCode);
+      const coordLabel = formatCoordinatesLabel(detected.lat, detected.lng);
+      const accLabel =
+        typeof detected.accuracyMeters === 'number' && Number.isFinite(detected.accuracyMeters)
+          ? detected.accuracyMeters >= 1000
+            ? ` (~${(detected.accuracyMeters / 1000).toFixed(1)} km)`
+            : ` (~${Math.round(detected.accuracyMeters)} m)`
+          : '';
+      setGpsFeedback({
+        type: 'success',
+        message:
+          lang === 'mr'
+            ? `GPS लोकेशन सापडले${accLabel}: ${detected.formattedAddress} · ${coordLabel}`
+            : lang === 'hi'
+            ? `GPS स्थान मिल गया${accLabel}: ${detected.formattedAddress} · ${coordLabel}`
+            : `GPS location detected${accLabel}: ${detected.formattedAddress} · ${coordLabel}`,
+      });
+    } catch (err) {
+      setGpsFeedback({
+        type: 'error',
+        message: formatGeolocationError(err, lang).message,
+      });
     } finally {
       setGpsDetecting(false);
     }
@@ -370,9 +433,9 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
       );
       return null;
     }
-    if (!user.emailVerified) {
+    if (!isAuthenticatedUser(user)) {
       failValidation(
-        'Your Google account email is not verified. Please sign in with a verified Google account to register.',
+        'Your Google account session could not be verified. Please sign in with Google again to register.',
         authBannerRef
       );
       return null;
@@ -393,6 +456,17 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
     }
     if (cityOrVillage.trim().length < 2) {
       failValidation('Please enter your city, town, or village (minimum 2 characters).');
+      return null;
+    }
+    const cleanWorkerPin = workerPincode.replace(/\D/g, '').slice(0, 6);
+    if (cleanWorkerPin.length > 0 && !/^[1-9]\d{5}$/.test(cleanWorkerPin)) {
+      failValidation(
+        lang === 'mr'
+          ? 'कृपया वैध ६ अंकी पिनकोड टाका.'
+          : lang === 'hi'
+          ? 'कृपया सही 6 अंकों का पिनकोड दर्ज करें।'
+          : 'Please enter a valid 6-digit Indian PIN code.'
+      );
       return null;
     }
     const expNum = Number(experienceYears);
@@ -544,6 +618,29 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
         ? resolvedReferrer
         : null;
 
+    // Resolve worker coordinates from confirmed GPS / Map Pin / PIN / user-chosen City & District (never fake defaults)
+    let resolvedWorkerLat = approxLat;
+    let resolvedWorkerLng = approxLng;
+    if (resolvedWorkerLat === null || resolvedWorkerLng === null) {
+      try {
+        const searchTerm = [cityOrVillage.trim(), districtName, cleanWorkerPin].filter(Boolean).join(', ');
+        const hits = await searchLocations(searchTerm, lang);
+        if (hits.length > 0) {
+          resolvedWorkerLat = hits[0].lat;
+          resolvedWorkerLng = hits[0].lng;
+          setApproxLat(resolvedWorkerLat);
+          setApproxLng(resolvedWorkerLng);
+        }
+      } catch {
+        // Fallback to user's explicitly selected District centroid below
+      }
+    }
+    if (resolvedWorkerLat === null || resolvedWorkerLng === null) {
+      const distCoords = getDistrictCoordinates(stateName, districtName);
+      resolvedWorkerLat = distCoords.lat;
+      resolvedWorkerLng = distCoords.lng;
+    }
+
     const publicWorkerData = {
       ownerUid: user.uid,
       registrationId: regId,
@@ -558,8 +655,9 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
       state: stateName,
       district: districtName,
       cityOrVillage: cityOrVillage.trim().slice(0, 100),
-      approxLat,
-      approxLng,
+      ...(cleanWorkerPin ? { pincode: cleanWorkerPin } : {}),
+      approxLat: resolvedWorkerLat,
+      approxLng: resolvedWorkerLng,
       languagesKnown: langs,
       gender,
       education: education.trim().slice(0, 100),
@@ -1244,7 +1342,7 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
           )}
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
               {t.workerForm.state} *
@@ -1288,28 +1386,79 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
               required
               value={cityOrVillage}
               onChange={(e) => setCityOrVillage(e.target.value)}
+              placeholder={
+                lang === 'mr'
+                  ? 'उदा. चंद्रपूर / वॉर्ड'
+                  : lang === 'hi'
+                  ? 'जैसे: चंद्रपुर / क्षेत्र'
+                  : 'e.g., City / Area / Village'
+              }
               className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#0B3B75]"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1">
+              {lang === 'mr' ? 'पिनकोड (६ अंक)' : lang === 'hi' ? 'पिनकोड (6 अंक)' : 'PIN Code (6 digits)'}
+              {pincodeResolving && (
+                <span className="ml-1 text-[11px] font-normal text-[#0B3B75]">...</span>
+              )}
+            </label>
+            <input
+              type="text"
+              inputMode="numeric"
+              maxLength={6}
+              value={workerPincode}
+              onChange={(e) => {
+                const next = e.target.value.replace(/\D/g, '').slice(0, 6);
+                setWorkerPincode(next);
+                if (/^[1-9]\d{5}$/.test(next)) {
+                  void handleWorkerPincodeLookup(next);
+                }
+              }}
+              placeholder="442401"
+              className="w-full px-3 py-2 border border-slate-300 rounded-md text-sm font-mono-tabular focus:outline-none focus:ring-2 focus:ring-[#0B3B75]"
             />
           </div>
         </div>
 
-        <div className="space-y-2 bg-slate-50 border border-slate-200 rounded-md p-3">
+        <div className="space-y-2.5 bg-slate-50 border border-slate-200 rounded-md p-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="text-xs text-slate-700">
               <span className="font-semibold">{t.workerForm.currentLocationOpt}:</span>{' '}
-              <span className="font-mono-tabular">
-                {approxLat.toFixed(4)}° N, {approxLng.toFixed(4)}° E
-              </span>
+              {approxLat !== null && approxLng !== null ? (
+                <span className="font-mono-tabular font-semibold text-[#0B3B75]">
+                  {formatCoordinatesLabel(approxLat, approxLng)}
+                </span>
+              ) : (
+                <span className="text-slate-500">
+                  {lang === 'mr'
+                    ? 'अद्याप GPS घेतलेले नाही — खालील बटण दाबा किंवा शहर व पिनकोड भरा'
+                    : lang === 'hi'
+                    ? 'अभी GPS नहीं लिया गया — बटन दबाएँ या शहर व पिनकोड भरें'
+                    : 'Not captured yet — click button or enter City & PIN code'}
+                </span>
+              )}
             </div>
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
                 disabled={gpsDetecting}
                 onClick={handleCaptureBrowserLocation}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-slate-300 bg-white text-xs font-semibold text-[#0B3B75] hover:bg-slate-100 cursor-pointer disabled:opacity-60"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#0B3B75] hover:bg-[#072A54] text-xs font-semibold text-white cursor-pointer disabled:opacity-60"
               >
-                <Compass className="w-3.5 h-3.5" />
-                {gpsDetecting ? 'Detecting...' : t.workerForm.captureCoords}
+                <Compass className={`w-3.5 h-3.5 ${gpsDetecting ? 'animate-spin' : ''}`} />
+                {gpsDetecting
+                  ? lang === 'mr'
+                    ? 'लोकेशन शोधत आहे...'
+                    : lang === 'hi'
+                    ? 'स्थान खोज रहे हैं...'
+                    : 'Detecting...'
+                  : lang === 'mr'
+                  ? 'माझे सध्याचे लोकेशन मिळवा'
+                  : lang === 'hi'
+                  ? 'मेरा वर्तमान स्थान प्राप्त करें'
+                  : 'Get My Current Location'}
               </button>
               <button
                 type="button"
@@ -1321,12 +1470,28 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
               </button>
             </div>
           </div>
-          {gpsStatusMsg && <p className="text-xs text-[#15803D] font-medium">{gpsStatusMsg}</p>}
+          {gpsFeedback && (
+            <div
+              role={gpsFeedback.type === 'error' ? 'alert' : 'status'}
+              className={`rounded-md px-3 py-2 text-xs font-medium flex items-start gap-2 border ${
+                gpsFeedback.type === 'error'
+                  ? 'bg-red-50 border-red-200 text-red-800'
+                  : 'bg-emerald-50 border-emerald-200 text-emerald-900'
+              }`}
+            >
+              {gpsFeedback.type === 'error' ? (
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+              ) : (
+                <CheckCircle2 className="w-4 h-4 text-[#15803D] shrink-0 mt-0.5" />
+              )}
+              <span>{gpsFeedback.message}</span>
+            </div>
+          )}
           <LocationPinModal
             open={showPinModal}
             onClose={() => setShowPinModal(false)}
-            initialLat={approxLat}
-            initialLng={approxLng}
+            initialLat={approxLat ?? getDistrictCoordinates(stateName, districtName).lat}
+            initialLng={approxLng ?? getDistrictCoordinates(stateName, districtName).lng}
             initialLabel={cityOrVillage || districtName}
             onConfirmLocation={(loc) => {
               setApproxLat(loc.lat);
@@ -1336,7 +1501,16 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
               }
               if (loc.district) setDistrictName(loc.district);
               if (loc.cityOrVillage) setCityOrVillage(loc.cityOrVillage);
-              setGpsStatusMsg(`Pinned exact location: ${loc.formattedAddress}`);
+              if (loc.postalCode) setWorkerPincode(loc.postalCode);
+              setGpsFeedback({
+                type: 'success',
+                message:
+                  lang === 'mr'
+                    ? `नकाशावर अचूक लोकेशन सेट झाले: ${loc.formattedAddress} · ${formatCoordinatesLabel(loc.lat, loc.lng)}`
+                    : lang === 'hi'
+                    ? `नक्शे पर सटीक स्थान सेट हुआ: ${loc.formattedAddress} · ${formatCoordinatesLabel(loc.lat, loc.lng)}`
+                    : `Pinned exact location: ${loc.formattedAddress} · ${formatCoordinatesLabel(loc.lat, loc.lng)}`,
+              });
             }}
           />
         </div>

@@ -16,7 +16,7 @@ import { doc, serverTimestamp, updateDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { EMPLOYMENT_CATEGORIES } from '../data/categories';
 import { useLanguage } from '../i18n/LanguageContext';
-import { db } from '../lib/firebase';
+import { db, isAuthenticatedUser } from '../lib/firebase';
 import {
   markAllNotificationsRead,
   markNotificationRead,
@@ -105,7 +105,7 @@ export const UserNotificationCenter: React.FC<UserNotificationCenterProps> = ({
   const [demoMsg, setDemoMsg] = useState('');
 
   useEffect(() => {
-    if (!user?.emailVerified) {
+    if (!isAuthenticatedUser(user) || !user) {
       setPrefs(null);
       setTokens([]);
       setNotifications([]);
@@ -119,10 +119,10 @@ export const UserNotificationCenter: React.FC<UserNotificationCenterProps> = ({
       u2();
       u3();
     };
-  }, [user?.uid, user?.emailVerified]);
+  }, [user]);
 
   useEffect(() => {
-    if (!user?.emailVerified || mode !== 'worker') return;
+    if (!isAuthenticatedUser(user) || !user || mode !== 'worker') return;
     if (!showDemoMode && !highlightedDemoJobId) return;
     const u1 = subscribeDemoAccounts(setDemoAccounts);
     const u2 = subscribeDemoJobs(setDemoJobs);
@@ -132,7 +132,7 @@ export const UserNotificationCenter: React.FC<UserNotificationCenterProps> = ({
       u2();
       u3();
     };
-  }, [user?.uid, user?.emailVerified, mode, showDemoMode, highlightedDemoJobId]);
+  }, [user, mode, showDemoMode, highlightedDemoJobId]);
 
   useEffect(() => {
     if (highlightedDemoJobId) {

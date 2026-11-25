@@ -113,6 +113,7 @@ export interface PublicWorkerProfile {
   state: string;
   district: string;
   cityOrVillage: string;
+  pincode?: string;
   approxLat: number;
   approxLng: number;
   languagesKnown: string[];
@@ -490,6 +491,7 @@ export interface CustomerPreference {
   defaultState?: string;
   defaultDistrict?: string;
   defaultCityOrVillage?: string;
+  defaultPincode?: string;
   defaultLat?: number;
   defaultLng?: number;
   savedAddressLabel?: string;

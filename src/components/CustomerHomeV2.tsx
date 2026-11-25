@@ -56,7 +56,7 @@ import {
   isFemaleCustomerProtected,
 } from '../lib/customerPrivacy';
 import { getSixStepLabel, toSixStepDealStage } from '../lib/dealWorkflow';
-import { formatUiError } from '../lib/firebase';
+import { formatUiError, isAuthenticatedUser } from '../lib/firebase';
 import {
   callNotificationApi,
   createInstantHireRequest,
@@ -67,7 +67,12 @@ import {
   saveCustomerDefaultLocation,
   saveOrderExactAddress,
 } from '../lib/firestoreService';
-import { detectBestGpsLocation, searchLocations } from '../lib/locationService';
+import {
+  detectBestGpsLocation,
+  formatCoordinatesLabel,
+  formatGeolocationError,
+  searchLocations,
+} from '../lib/locationService';
 import {
   DEFAULT_BATCH_ESCALATION_WINDOW_MS,
   buildApproxLocationLabel,
@@ -107,13 +112,15 @@ interface CustomerHomeV2Props {
 }
 
 interface ActiveLocationState {
-  lat: number;
-  lng: number;
+  lat: number | null;
+  lng: number | null;
   label: string;
   state: string;
   district: string;
   cityOrVillage: string;
   pincode?: string;
+  source: 'unset' | 'saved' | 'gps' | 'manual';
+  accuracyMeters?: number | null;
 }
 
 function extractSixDigitPincode(raw?: string): string {
@@ -154,23 +161,48 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
     return subscribeApprovedProfessions(setApprovedProfessions);
   }, []);
 
-  // Location State
+  // Location State — NEVER initializes fake GPS coordinates before user permission or manual entry
   const [location, setLocation] = useState<ActiveLocationState>(() => {
-    const defaultState = customerPreference?.defaultState || employerProfile?.state || 'Maharashtra';
-    const defaultDistrict = customerPreference?.defaultDistrict || employerProfile?.district || 'Chandrapur';
-    const fallbackCoords = getDistrictCoordinates(defaultState, defaultDistrict);
+    const hasSavedCoords =
+      typeof customerPreference?.defaultLat === 'number' &&
+      typeof customerPreference?.defaultLng === 'number' &&
+      Number.isFinite(customerPreference.defaultLat) &&
+      Number.isFinite(customerPreference.defaultLng);
+    if (hasSavedCoords) {
+      const savedState = customerPreference?.defaultState || employerProfile?.state || 'Maharashtra';
+      const savedDistrict = customerPreference?.defaultDistrict || employerProfile?.district || '';
+      const savedCity = customerPreference?.defaultCityOrVillage || savedDistrict;
+      const savedPin =
+        customerPreference?.defaultPincode ||
+        extractSixDigitPincode(customerPreference?.savedAddressLabel);
+      return {
+        lat: customerPreference.defaultLat!,
+        lng: customerPreference.defaultLng!,
+        label:
+          customerPreference?.savedAddressLabel ||
+          [savedCity, savedDistrict, savedState].filter(Boolean).join(', '),
+        state: savedState,
+        district: savedDistrict,
+        cityOrVillage: savedCity,
+        pincode: savedPin || undefined,
+        source: 'saved',
+        accuracyMeters: null,
+      };
+    }
     return {
-      lat: customerPreference?.defaultLat ?? fallbackCoords.lat,
-      lng: customerPreference?.defaultLng ?? fallbackCoords.lng,
-      label:
-        customerPreference?.savedAddressLabel ||
-        `${customerPreference?.defaultCityOrVillage || defaultDistrict}, ${defaultState}`,
-      state: defaultState,
-      district: defaultDistrict,
-      cityOrVillage: customerPreference?.defaultCityOrVillage || defaultDistrict,
+      lat: null,
+      lng: null,
+      label: '',
+      state: employerProfile?.state || 'Maharashtra',
+      district: employerProfile?.district || '',
+      cityOrVillage: '',
+      pincode: undefined,
+      source: 'unset',
+      accuracyMeters: null,
     };
   });
   const [gpsLoading, setGpsLoading] = useState(false);
+  const [gpsFeedback, setGpsFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [showPinModal, setShowPinModal] = useState(false);
   const [pincodeQuery, setPincodeQuery] = useState('');
   const [pincodeBusy, setPincodeBusy] = useState(false);
@@ -179,6 +211,8 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
 
   // Order Form State
   const [workDescription, setWorkDescription] = useState('');
+  const [manualCity, setManualCity] = useState('');
+  const [manualArea, setManualArea] = useState('');
   const [exactServiceAddress, setExactServiceAddress] = useState('');
   const [addressLandmark, setAddressLandmark] = useState('');
   const [orderPincode, setOrderPincode] = useState('');
@@ -213,23 +247,46 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
     Math.ceil(DEFAULT_BATCH_ESCALATION_WINDOW_MS / 1000)
   );
 
-  // Sync saved location preference once available
+  // Sync saved location preference once available (only if user hasn't already picked GPS/manual in this session)
   useEffect(() => {
     if (!customerPreference) return;
     if (
       typeof customerPreference.defaultLat === 'number' &&
-      typeof customerPreference.defaultLng === 'number'
+      typeof customerPreference.defaultLng === 'number' &&
+      Number.isFinite(customerPreference.defaultLat) &&
+      Number.isFinite(customerPreference.defaultLng)
     ) {
-      setLocation({
-        lat: customerPreference.defaultLat,
-        lng: customerPreference.defaultLng,
-        label:
-          customerPreference.savedAddressLabel ||
-          `${customerPreference.defaultCityOrVillage || customerPreference.defaultDistrict || ''}, ${customerPreference.defaultState || ''}`,
-        state: customerPreference.defaultState || 'Maharashtra',
-        district: customerPreference.defaultDistrict || 'Chandrapur',
-        cityOrVillage: customerPreference.defaultCityOrVillage || customerPreference.defaultDistrict || 'Chandrapur',
+      const savedPin =
+        customerPreference.defaultPincode ||
+        extractSixDigitPincode(customerPreference.savedAddressLabel);
+      setLocation((prev) => {
+        if (prev.source === 'gps' || prev.source === 'manual') return prev;
+        return {
+          lat: customerPreference.defaultLat!,
+          lng: customerPreference.defaultLng!,
+          label:
+            customerPreference.savedAddressLabel ||
+            [
+              customerPreference.defaultCityOrVillage || customerPreference.defaultDistrict || '',
+              customerPreference.defaultState || '',
+            ]
+              .filter(Boolean)
+              .join(', '),
+          state: customerPreference.defaultState || 'Maharashtra',
+          district: customerPreference.defaultDistrict || '',
+          cityOrVillage:
+            customerPreference.defaultCityOrVillage || customerPreference.defaultDistrict || '',
+          pincode: savedPin || undefined,
+          source: 'saved',
+          accuracyMeters: null,
+        };
       });
+      if (savedPin) {
+        setOrderPincode((prev) => prev || savedPin);
+      }
+      if (customerPreference.defaultCityOrVillage) {
+        setManualCity((prev) => prev || customerPreference.defaultCityOrVillage || '');
+      }
     }
   }, [customerPreference]);
 
@@ -309,30 +366,53 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
     };
   }, [searchQuery, allCatalogCategories, approvedCustomCatalog, approvedProfessions]);
 
-  const resolveLocationFromPincode = async (pin: string): Promise<ActiveLocationState> => {
+  const resolveLocationFromPincode = async (
+    pin: string,
+    cityHint?: string
+  ): Promise<ActiveLocationState> => {
     const clean = pin.replace(/\D/g, '').slice(0, 6);
-    if (!/^[1-9]\d{5}$/.test(clean) || location.pincode === clean) {
+    if (!/^[1-9]\d{5}$/.test(clean)) {
+      return location;
+    }
+    if (location.pincode === clean && location.lat !== null && location.lng !== null) {
       return location;
     }
     setOrderPincodeResolving(true);
     try {
-      const results = await searchLocations(clean, lang);
+      const query = cityHint?.trim() ? `${cityHint.trim()}, ${clean}` : clean;
+      let results = await searchLocations(query, lang);
+      if (results.length === 0 && cityHint?.trim()) {
+        results = await searchLocations(clean, lang);
+      }
       if (results.length > 0) {
         const hit = results[0];
+        const nextCity = cityHint?.trim() || hit.cityOrVillage || hit.district || location.cityOrVillage;
         const nextLoc: ActiveLocationState = {
           lat: hit.lat,
           lng: hit.lng,
-          label: hit.formattedAddress || `${hit.cityOrVillage || hit.district}, ${hit.state} (${clean})`,
-          state: hit.state || location.state,
-          district: hit.district || location.district,
-          cityOrVillage: hit.cityOrVillage || hit.district || location.cityOrVillage,
+          label: hit.formattedAddress || `${nextCity}, ${hit.state} (${clean})`,
+          state: hit.state || location.state || 'Maharashtra',
+          district: hit.district || location.district || nextCity,
+          cityOrVillage: nextCity,
           pincode: hit.postalCode || clean,
+          source: 'manual',
+          accuracyMeters: null,
         };
         setLocation(nextLoc);
+        if (nextCity) setManualCity((prev) => prev || nextCity);
+        setGpsFeedback({
+          type: 'success',
+          message: tr(
+            lang,
+            `Location set from PIN ${clean}: ${nextLoc.label} (${formatCoordinatesLabel(nextLoc.lat!, nextLoc.lng!)})`,
+            `पिन ${clean} से स्थान सेट हुआ: ${nextLoc.label} (${formatCoordinatesLabel(nextLoc.lat!, nextLoc.lng!)})`,
+            `पिन ${clean} वरून ठिकाण सेट झाले: ${nextLoc.label} (${formatCoordinatesLabel(nextLoc.lat!, nextLoc.lng!)})`
+          ),
+        });
         return nextLoc;
       }
     } catch {
-      // Fall back gracefully to current location with entered PIN attached
+      // Fall back gracefully to manual city + PIN without fabricating fake GPS
     } finally {
       setOrderPincodeResolving(false);
     }
@@ -342,6 +422,7 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
   const handleDetectGps = async () => {
     setGpsLoading(true);
     setFormError('');
+    setGpsFeedback(null);
     try {
       const geo = await detectBestGpsLocation(lang);
       const detectedPin = geo.postalCode || extractSixDigitPincode(geo.formattedAddress);
@@ -349,33 +430,49 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
         lat: geo.lat,
         lng: geo.lng,
         label: geo.formattedAddress || `${geo.cityOrVillage}, ${geo.district}`,
-        state: geo.state || location.state,
-        district: geo.district || location.district,
+        state: geo.state || location.state || 'Maharashtra',
+        district: geo.district || location.district || geo.cityOrVillage,
         cityOrVillage: geo.cityOrVillage || geo.district || location.cityOrVillage,
         pincode: detectedPin || location.pincode,
+        source: 'gps',
+        accuracyMeters: geo.accuracyMeters ?? null,
       };
       setLocation(nextLoc);
       if (detectedPin) setOrderPincode(detectedPin);
-      if (user?.emailVerified) {
-        void saveCustomerDefaultLocation(user.uid, {
+      if (nextLoc.cityOrVillage) setManualCity(nextLoc.cityOrVillage);
+      const accText =
+        typeof geo.accuracyMeters === 'number' && Number.isFinite(geo.accuracyMeters)
+          ? geo.accuracyMeters >= 1000
+            ? ` (~${(geo.accuracyMeters / 1000).toFixed(1)} km)`
+            : ` (~${Math.round(geo.accuracyMeters)} m)`
+          : '';
+      setGpsFeedback({
+        type: 'success',
+        message: tr(
+          lang,
+          `GPS location detected${accText}: ${nextLoc.label} · ${formatCoordinatesLabel(nextLoc.lat!, nextLoc.lng!)}`,
+          `GPS स्थान मिल गया${accText}: ${nextLoc.label} · ${formatCoordinatesLabel(nextLoc.lat!, nextLoc.lng!)}`,
+          `GPS लोकेशन सापडले${accText}: ${nextLoc.label} · ${formatCoordinatesLabel(nextLoc.lat!, nextLoc.lng!)}`
+        ),
+      });
+      if (isAuthenticatedUser(user)) {
+        void saveCustomerDefaultLocation(user!.uid, {
           state: nextLoc.state,
           district: nextLoc.district,
           cityOrVillage: nextLoc.cityOrVillage,
-          lat: nextLoc.lat,
-          lng: nextLoc.lng,
+          pincode: nextLoc.pincode,
+          lat: nextLoc.lat!,
+          lng: nextLoc.lng!,
           savedAddressLabel: nextLoc.label,
         }).catch(() => undefined);
       }
     } catch (gpsErr) {
-      const geoCode =
-        gpsErr && typeof gpsErr === 'object' && 'code' in gpsErr
-          ? Number((gpsErr as { code?: unknown }).code)
-          : 0;
-      const geoMsg = gpsErr instanceof Error ? gpsErr.message.toLowerCase() : '';
-      if (geoCode === 1 || geoMsg.includes('denied') || geoMsg.includes('permission')) {
-        setFormError(formatUiError(new Error('LOCATION_PERMISSION_DENIED: GPS permission denied'), undefined, lang));
-      }
-      setShowPinModal(true);
+      const formatted = formatGeolocationError(gpsErr, lang);
+      // NEVER swallow GPS error or cover it with a modal — display exact localized reason inline
+      setGpsFeedback({
+        type: 'error',
+        message: formatted.message,
+      });
     } finally {
       setGpsLoading(false);
     }
@@ -400,6 +497,9 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
     const detectedPin = location.pincode || extractSixDigitPincode(location.label);
     if (detectedPin && !orderPincode) {
       setOrderPincode(detectedPin);
+    }
+    if (location.cityOrVillage && !manualCity) {
+      setManualCity(location.cityOrVillage);
     }
     setStep('order_form');
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -431,9 +531,52 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
       return;
     }
 
+    const cleanedDesc = workDescription.trim();
+    if (cleanedDesc.length < 4) {
+      setFormError(
+        tr(
+          lang,
+          'Please enter a short work description (at least 4 characters) so workers understand the job.',
+          'कृपया काम का संक्षिप्त विवरण लिखें (कम से कम 4 अक्षर) ताकि कामगार काम समझ सकें।',
+          'कृपया कामाचे थोडक्यात वर्णन लिहा (किमान ४ अक्षरे) जेणेकरून कामगारांना काम समजेल.'
+        )
+      );
+      return;
+    }
+
     const cleanPin = orderPincode.replace(/\D/g, '').slice(0, 6);
     if (cleanPin.length > 0 && !/^[1-9]\d{5}$/.test(cleanPin)) {
       setFormError(formatUiError(new Error('INVALID_PINCODE: Invalid 6-digit PIN'), undefined, lang));
+      return;
+    }
+
+    const trimmedManualCity = manualCity.trim();
+    const trimmedManualArea = manualArea.trim();
+    const hasConfirmedGpsOrPin =
+      location.source !== 'unset' && location.lat !== null && location.lng !== null;
+    const hasManualCityOrPin = trimmedManualCity.length >= 2 || cleanPin.length === 6;
+
+    if (!hasConfirmedGpsOrPin && !hasManualCityOrPin) {
+      setFormError(
+        tr(
+          lang,
+          'Please detect your GPS location ("Get My Current Location"), pick a spot on the map, or enter your City/Area and 6-digit PIN code.',
+          'कृपया "मेरा वर्तमान स्थान प्राप्त करें" से GPS लोकेशन लें, मैप पर चुनें, या अपना शहर/क्षेत्र और 6 अंकों का पिनकोड भरें।',
+          'कृपया "माझे सध्याचे लोकेशन मिळवा" दाबून GPS घ्या, नकाशावर निवडा, किंवा तुमचे शहर/परिसर आणि ६ अंकी पिनकोड भरा.'
+        )
+      );
+      return;
+    }
+
+    if (cleanPin.length !== 6 && !location.pincode && !extractSixDigitPincode(location.label)) {
+      setFormError(
+        tr(
+          lang,
+          'Please enter a valid 6-digit PIN code for your service location.',
+          'कृपया अपने काम के स्थान का सही 6 अंकों का पिनकोड दर्ज करें।',
+          'कृपया तुमच्या कामाच्या ठिकाणाचा अचूक ६ अंकी पिनकोड टाका.'
+        )
+      );
       return;
     }
 
@@ -449,127 +592,161 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
       return;
     }
 
-    let activeUser = user;
-    if (!activeUser) {
-      try {
-        activeUser = await signInWithGoogleStrict();
-      } catch (authErr) {
-        setFormError(
-          formatUiError(
-            authErr,
-            formatUiError(new Error('AUTH_REQUIRED: Google login required'), undefined, lang),
-            lang
-          )
-        );
-        return;
-      }
-    }
-
-    if (!activeUser?.uid) {
-      setFormError(formatUiError(new Error('AUTH_REQUIRED: Google login required'), undefined, lang));
-      return;
-    }
-
-    if (!activeUser.emailVerified) {
-      try {
-        await activeUser.reload();
-      } catch {
-        // Ignore reload errors and re-check below
-      }
-      if (!activeUser.emailVerified) {
-        setFormError(formatUiError(new Error('EMAIL_UNVERIFIED: Email not verified'), undefined, lang));
-        return;
-      }
-    }
-
-    const effectiveLoc =
-      cleanPin.length === 6 && cleanPin !== location.pincode
-        ? await resolveLocationFromPincode(cleanPin)
-        : location;
-
-    const genderProtected = isFemaleCustomerProtected({
-      gender: employerProfile?.gender || employerPrivate?.gender,
-    });
-    const resolvedLastName =
-      employerProfile?.lastName ||
-      employerPrivate?.lastName ||
-      extractLastName(employerPrivate?.contactPerson || activeUser.displayName || '');
-    const customerName = getWorkerVisibleCustomerName({
-      employerProfile,
-      employerPrivate,
-      fallbackName: activeUser.displayName || activeUser.email?.split('@')[0] || 'Customer',
-      viewerRole: 'worker',
-    }).slice(0, 160);
-
-    const subLabelEn = selectedSubService.en;
-    const catLabelEn = selectedCategory.en;
-    const title = `${catLabelEn}: ${subLabelEn}`.slice(0, 140);
-    const cleanedDesc = workDescription.trim();
-    const finalDescription =
-      cleanedDesc.length >= 10
-        ? cleanedDesc.slice(0, 2000)
-        : `${subLabelEn} (${catLabelEn}) needed at ${effectiveLoc.cityOrVillage}, ${effectiveLoc.district}. ${cleanedDesc}`.trim().slice(0, 2000);
-
-    const effState = effectiveLoc.state || 'Maharashtra';
-    const effDistrict =
-      effectiveLoc.district ||
-      INDIA_STATES_DISTRICTS.find((s) => s.name === effState)?.districts[0]?.name ||
-      'Chandrapur';
-    const safeCity = (effectiveLoc.cityOrVillage || effDistrict).slice(0, 100);
-    const resolvedPincode = cleanPin || effectiveLoc.pincode || extractSixDigitPincode(effectiveLoc.label);
-    const baseApproxLabel = buildApproxLocationLabel({
-      cityOrVillage: safeCity,
-      district: effDistrict,
-      state: effState,
-    });
-    const approxLocationLabel =
-      resolvedPincode && !baseApproxLabel.includes(resolvedPincode)
-        ? `${baseApproxLabel} (${resolvedPincode})`.slice(0, 160)
-        : baseApproxLabel.slice(0, 160);
-
-    const jobDate =
-      preferredTimeType === 'now'
-        ? new Date().toISOString().split('T')[0]
-        : scheduledDate;
-    const startTime =
-      preferredTimeType === 'now'
-        ? new Date().toTimeString().slice(0, 5)
-        : scheduledTime;
-
     setSubmitting(true);
-    setStep('searching');
-    setCreatedOrder({
-      jobId: '',
-      title,
-      category: selectedCategory.canonicalCategory,
-      notifiedCount: 0,
-      currentRadiusKm: 2,
-      batchIndex: 0,
-      remainingEligibleCount: 0,
-      hasNextBatch: false,
-      confirmed: false,
-      expanding: true,
-      autoEscalating: false,
-      allBatchesExhausted: false,
-      batchDispatchedAtMs: Date.now(),
-      retrying: false,
-      statusMessage: tr(
-        lang,
-        'Searching nearby available workers within 2 km...',
-        'आपके नज़दीक 2 किमी में उपलब्ध कामगार खोज रहे हैं...',
-        'आपल्या जवळचा कामगार शोधत आहोत...'
-      ),
-    });
 
     try {
+      let activeUser = user;
+      if (!activeUser) {
+        try {
+          activeUser = await signInWithGoogleStrict();
+        } catch (authErr) {
+          setFormError(
+            formatUiError(
+              authErr,
+              formatUiError(new Error('AUTH_REQUIRED: Google login required'), undefined, lang),
+              lang
+            )
+          );
+          return;
+        }
+      }
+
+      if (!activeUser?.uid) {
+        setFormError(formatUiError(new Error('AUTH_REQUIRED: Google login required'), undefined, lang));
+        return;
+      }
+
+      const reloadActiveUser = () => activeUser!.reload();
+      if (!isAuthenticatedUser(activeUser)) {
+        try {
+          await reloadActiveUser();
+        } catch {
+          // Ignore reload errors and re-check below
+        }
+        if (!isAuthenticatedUser(activeUser)) {
+          setFormError(formatUiError(new Error('EMAIL_UNVERIFIED: Email not verified'), undefined, lang));
+          return;
+        }
+      }
+
+      // Refresh Firebase Auth token so freshly signed-in or resumed sessions pass Firestore rules reliably
+      try {
+        await activeUser.getIdToken(false);
+      } catch {
+        try {
+          await activeUser.getIdToken(true);
+        } catch {
+          // Proceed; createJobPosting also refreshes before write
+        }
+      }
+
+      let effectiveLoc: ActiveLocationState = location;
+      if (cleanPin.length === 6 && (cleanPin !== location.pincode || location.lat === null || location.lng === null)) {
+        effectiveLoc = await resolveLocationFromPincode(
+          cleanPin,
+          trimmedManualArea || trimmedManualCity
+        );
+      } else if ((effectiveLoc.lat === null || effectiveLoc.lng === null) && trimmedManualCity.length >= 2) {
+        try {
+          const hits = await searchLocations(
+            [trimmedManualArea, trimmedManualCity, cleanPin].filter(Boolean).join(', '),
+            lang
+          );
+          if (hits.length > 0) {
+            const top = hits[0];
+            effectiveLoc = {
+              lat: top.lat,
+              lng: top.lng,
+              label: top.formattedAddress || `${trimmedManualCity}, ${top.state}`,
+              state: top.state || effectiveLoc.state || 'Maharashtra',
+              district: top.district || effectiveLoc.district || trimmedManualCity,
+              cityOrVillage: trimmedManualCity || top.cityOrVillage || top.district,
+              pincode: cleanPin || top.postalCode || effectiveLoc.pincode,
+              source: 'manual',
+              accuracyMeters: null,
+            };
+            setLocation(effectiveLoc);
+          }
+        } catch {
+          // Handled below using user-entered state/district centroid if geocoder unavailable
+        }
+      }
+
+      const effState = effectiveLoc.state || employerProfile?.state || 'Maharashtra';
+      const matchedStateObj = INDIA_STATES_DISTRICTS.find((s) => s.name === effState);
+      const effDistrict =
+        effectiveLoc.district ||
+        trimmedManualCity ||
+        employerProfile?.district ||
+        matchedStateObj?.districts[0]?.name ||
+        'Chandrapur';
+
+      let resolvedLat = effectiveLoc.lat;
+      let resolvedLng = effectiveLoc.lng;
+      if (resolvedLat === null || resolvedLng === null || !Number.isFinite(resolvedLat) || !Number.isFinite(resolvedLng)) {
+        const distFallback = getDistrictCoordinates(effState, effDistrict);
+        resolvedLat = distFallback.lat;
+        resolvedLng = distFallback.lng;
+      }
+
+      const genderProtected = isFemaleCustomerProtected({
+        gender: employerProfile?.gender || employerPrivate?.gender,
+      });
+      const resolvedLastName =
+        employerProfile?.lastName ||
+        employerPrivate?.lastName ||
+        extractLastName(employerPrivate?.contactPerson || activeUser.displayName || '');
+      const customerName = getWorkerVisibleCustomerName({
+        employerProfile,
+        employerPrivate,
+        fallbackName: activeUser.displayName || activeUser.email?.split('@')[0] || 'Customer',
+        viewerRole: 'worker',
+      }).slice(0, 160);
+
+      const subLabelEn = selectedSubService.en;
+      const catLabelEn = selectedCategory.en;
+      const title = `${catLabelEn}: ${subLabelEn}`.slice(0, 140);
+      const safeCity = (
+        trimmedManualArea && trimmedManualCity
+          ? `${trimmedManualArea}, ${trimmedManualCity}`
+          : trimmedManualCity || effectiveLoc.cityOrVillage || effDistrict
+      ).slice(0, 100);
+      const resolvedPincode =
+        cleanPin || effectiveLoc.pincode || extractSixDigitPincode(effectiveLoc.label);
+      const finalDescription =
+        cleanedDesc.length >= 10
+          ? cleanedDesc.slice(0, 2000)
+          : `${subLabelEn} (${catLabelEn}) needed at ${safeCity}, ${effDistrict}. ${cleanedDesc}`.trim().slice(0, 2000);
+
+      const baseApproxLabel = buildApproxLocationLabel({
+        cityOrVillage: safeCity,
+        district: effDistrict,
+        state: effState,
+      });
+      const approxLocationLabel =
+        resolvedPincode && !baseApproxLabel.includes(resolvedPincode)
+          ? `${baseApproxLabel} (${resolvedPincode})`.slice(0, 160)
+          : baseApproxLabel.slice(0, 160);
+
+      const jobDate =
+        preferredTimeType === 'now'
+          ? new Date().toISOString().split('T')[0]
+          : scheduledDate;
+      const startTime =
+        preferredTimeType === 'now'
+          ? new Date().toTimeString().slice(0, 5)
+          : scheduledTime;
+
       const idempotencyKey = `rs2_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
       const trimmedExactAddress = (
         exactServiceAddress.trim() ||
         employerPrivate?.businessAddress?.trim() ||
-        effectiveLoc.label
+        effectiveLoc.label ||
+        approxLocationLabel
       ).slice(0, 320);
       const hasExactVault = trimmedExactAddress.length >= 4;
 
+      // WAIT for Firestore write confirmation BEFORE transitioning UI to success/searching state
       const res = await createInstantHireRequest(
         {
           employerUid: activeUser.uid,
@@ -594,8 +771,8 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
           approxLocationLabel,
           initialRadiusKm: 2,
           currentRadiusKm: 2,
-          lat: effectiveLoc.lat,
-          lng: effectiveLoc.lng,
+          lat: resolvedLat,
+          lng: resolvedLng,
           jobDate,
           startTime,
           duration: selectedSubService.estimatedDuration,
@@ -616,14 +793,18 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
         workers
       );
 
-      if (hasExactVault && res.jobId) {
+      if (!res?.jobId) {
+        throw new Error('Request could not be confirmed in the database. Please try again.');
+      }
+
+      if (hasExactVault) {
         void saveOrderExactAddress({
           jobId: res.jobId,
           employerUid: activeUser.uid,
           exactAddress: trimmedExactAddress,
           landmark: addressLandmark.trim().slice(0, 160),
-          exactLat: effectiveLoc.lat,
-          exactLng: effectiveLoc.lng,
+          exactLat: resolvedLat,
+          exactLng: resolvedLng,
         }).catch(() => undefined);
       }
 
@@ -634,8 +815,9 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
         state: effState,
         district: effDistrict,
         cityOrVillage: safeCity,
-        lat: effectiveLoc.lat,
-        lng: effectiveLoc.lng,
+        pincode: resolvedPincode || undefined,
+        lat: resolvedLat,
+        lng: resolvedLng,
       }).catch(() => undefined);
 
       const initialMatched = res.notifiedCount;
@@ -645,7 +827,7 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
       const initialHasNext = res.hasNextBatch ?? getNextRadiusStage(initialRadius) !== null;
       const noWorkersAnywhere = initialMatched === 0 && !initialHasNext;
 
-      // Immediately confirm job creation & Batch 1 status so the UI never stalls on background FCM push
+      // Only NOW — after Firestore confirmed res.jobId — transition to searching/confirmation view
       setCreatedOrder({
         jobId: res.jobId,
         title,
@@ -665,17 +847,18 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
           initialMatched > 0
             ? tr(
                 lang,
-                `Batch ${Math.max(1, initialBatchIndex)} sent to ${initialMatched} priority worker(s) within ${initialRadius} km (fair rotation).`,
-                `बैच ${Math.max(1, initialBatchIndex)}: ${initialRadius} किमी के दायरे में ${initialMatched} कामगारों को रिक्वेस्ट भेज दी गई है (समान बारी प्रणाली)।`,
-                `बॅच ${Math.max(1, initialBatchIndex)}: ${initialRadius} किमी मध्ये ${initialMatched} कामगारांना प्राधान्याने रिक्वेस्ट पाठवली आहे.`
+                `Request #${res.jobId.slice(0, 8)} saved! Batch ${Math.max(1, initialBatchIndex)} sent to ${initialMatched} priority worker(s) within ${initialRadius} km (fair rotation).`,
+                `रिक्वेस्ट #${res.jobId.slice(0, 8)} दर्ज! बैच ${Math.max(1, initialBatchIndex)}: ${initialRadius} किमी के दायरे में ${initialMatched} कामगारों को रिक्वेस्ट भेज दी गई है (समान बारी प्रणाली)।`,
+                `रिक्वेस्ट #${res.jobId.slice(0, 8)} जतन झाली! बॅच ${Math.max(1, initialBatchIndex)}: ${initialRadius} किमी मध्ये ${initialMatched} कामगारांना प्राधान्याने रिक्वेस्ट पाठवली आहे.`
               )
             : tr(
                 lang,
-                'Your request is live! No matching workers were immediately available nearby—you can browse matching workers directly or retry sending alerts.',
-                'आपकी रिक्वेस्ट लाइव हो गई है! अभी नज़दीक में कोई उपलब्ध कामगार नहीं मिला—आप सीधे कामगार देख सकते हैं या अलर्ट दोबारा भेज सकते हैं।',
-                'तुमची रिक्वेस्ट पोस्ट झाली आहे! सध्या जवळपास उपलब्ध कामगार आढळले नाहीत—तुम्ही थेट कामगार पाहू शकता किंवा पुन्हा अलर्ट पाठवू शकता.'
+                `Request #${res.jobId.slice(0, 8)} is live! No matching workers were immediately available nearby—you can browse matching workers directly or retry sending alerts.`,
+                `रिक्वेस्ट #${res.jobId.slice(0, 8)} लाइव हो गई है! अभी नज़दीक में कोई उपलब्ध कामगार नहीं मिला—आप सीधे कामगार देख सकते हैं या अलर्ट दोबारा भेज सकते हैं।`,
+                `रिक्वेस्ट #${res.jobId.slice(0, 8)} पोस्ट झाली आहे! सध्या जवळपास उपलब्ध कामगार आढळले नाहीत—तुम्ही थेट कामगार पाहू शकता किंवा पुन्हा अलर्ट पाठवू शकता.`
               ),
       });
+      setStep('searching');
 
       setWorkDescription('');
       setExactServiceAddress('');
@@ -1142,12 +1325,13 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
     const raw = pincodeQuery.trim();
     if (raw.length < 3) return;
     setPincodeBusy(true);
+    setGpsFeedback(null);
     const typedPin = extractSixDigitPincode(raw);
     try {
       const results = await searchLocations(raw, lang);
       const top = results[0];
       if (top) {
-        const resolvedPin = typedPin || extractSixDigitPincode(top.formattedAddress);
+        const resolvedPin = typedPin || top.postalCode || extractSixDigitPincode(top.formattedAddress);
         const cleanLabel =
           resolvedPin && !top.formattedAddress.includes(resolvedPin)
             ? `${top.cityOrVillage || top.district}, ${resolvedPin}`
@@ -1156,42 +1340,65 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
           lat: top.lat,
           lng: top.lng,
           label: cleanLabel,
-          state: top.state || location.state,
-          district: top.district || location.district,
+          state: top.state || location.state || 'Maharashtra',
+          district: top.district || location.district || raw,
           cityOrVillage: top.cityOrVillage || top.district || raw,
           pincode: resolvedPin || undefined,
+          source: 'manual',
+          accuracyMeters: null,
         };
         setLocation(nextLoc);
+        if (resolvedPin) setOrderPincode(resolvedPin);
+        if (nextLoc.cityOrVillage) setManualCity(nextLoc.cityOrVillage);
         setPincodeQuery('');
-        if (user?.emailVerified) {
-          void saveCustomerDefaultLocation(user.uid, {
+        setGpsFeedback({
+          type: 'success',
+          message: tr(
+            lang,
+            `Location set: ${nextLoc.label} · ${formatCoordinatesLabel(nextLoc.lat!, nextLoc.lng!)}`,
+            `स्थान सेट हुआ: ${nextLoc.label} · ${formatCoordinatesLabel(nextLoc.lat!, nextLoc.lng!)}`,
+            `ठिकाण सेट झाले: ${nextLoc.label} · ${formatCoordinatesLabel(nextLoc.lat!, nextLoc.lng!)}`
+          ),
+        });
+        if (isAuthenticatedUser(user)) {
+          void saveCustomerDefaultLocation(user!.uid, {
             state: nextLoc.state,
             district: nextLoc.district,
             cityOrVillage: nextLoc.cityOrVillage,
-            lat: nextLoc.lat,
-            lng: nextLoc.lng,
+            pincode: nextLoc.pincode,
+            lat: nextLoc.lat!,
+            lng: nextLoc.lng!,
             savedAddressLabel: nextLoc.label,
           }).catch(() => undefined);
         }
       } else {
-        // Graceful local fallback so typed area/pincode is still honored immediately
         const nextLoc: ActiveLocationState = {
           ...location,
-          label: typedPin ? `${location.cityOrVillage}, ${typedPin}` : `${raw}, ${location.district}`,
+          label: typedPin
+            ? `${location.cityOrVillage || 'Manual Area'}, ${typedPin}`
+            : `${raw}${location.district ? `, ${location.district}` : ''}`,
           cityOrVillage: typedPin ? location.cityOrVillage : raw,
           pincode: typedPin || location.pincode,
+          source: 'manual',
         };
         setLocation(nextLoc);
+        if (typedPin) setOrderPincode(typedPin);
+        if (!typedPin) setManualCity(raw);
         setPincodeQuery('');
       }
     } catch {
       const nextLoc: ActiveLocationState = {
         ...location,
-        label: typedPin ? `${location.cityOrVillage}, ${typedPin}` : `${raw}, ${location.district}`,
+        label: typedPin
+          ? `${location.cityOrVillage || 'Manual Area'}, ${typedPin}`
+          : `${raw}${location.district ? `, ${location.district}` : ''}`,
         cityOrVillage: typedPin ? location.cityOrVillage : raw,
         pincode: typedPin || location.pincode,
+        source: 'manual',
       };
       setLocation(nextLoc);
+      if (typedPin) setOrderPincode(typedPin);
+      if (!typedPin) setManualCity(raw);
       setPincodeQuery('');
     } finally {
       setPincodeBusy(false);
@@ -1239,9 +1446,20 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
                       </span>
                     )}
                   </div>
-                  <div className="text-xs sm:text-sm font-bold text-[#0B3B75] truncate max-w-[200px] sm:max-w-[250px] group-hover:text-[#E06D1B] transition-colors">
-                    {location.label}
+                  <div className="text-xs sm:text-sm font-bold text-[#0B3B75] truncate max-w-[200px] sm:max-w-[260px] group-hover:text-[#E06D1B] transition-colors">
+                    {location.label ||
+                      tr(
+                        lang,
+                        'Tap to set your location',
+                        'अपना स्थान सेट करने के लिए टैप करें',
+                        'तुमचे ठिकाण सेट करण्यासाठी टॅप करा'
+                      )}
                   </div>
+                  {location.lat !== null && location.lng !== null && (
+                    <div className="text-[10px] font-mono-tabular text-slate-500">
+                      {formatCoordinatesLabel(location.lat, location.lng)}
+                    </div>
+                  )}
                 </div>
               </button>
 
@@ -1250,10 +1468,19 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
                   type="button"
                   onClick={handleDetectGps}
                   disabled={gpsLoading}
-                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-xs font-bold text-[#0B3B75] transition-colors cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0B3B75] hover:bg-[#072A54] text-xs font-bold text-white transition-colors cursor-pointer disabled:opacity-60"
                 >
-                  <Crosshair className={`w-3.5 h-3.5 text-[#E06D1B] ${gpsLoading ? 'animate-spin' : ''}`} />
-                  <span>{tr(lang, 'GPS', 'GPS', 'GPS')}</span>
+                  <Crosshair className={`w-3.5 h-3.5 text-amber-300 ${gpsLoading ? 'animate-spin' : ''}`} />
+                  <span>
+                    {gpsLoading
+                      ? tr(lang, 'Detecting...', 'खोज रहे हैं...', 'शोधत आहे...')
+                      : tr(
+                          lang,
+                          'Get My Current Location',
+                          'मेरा वर्तमान स्थान प्राप्त करें',
+                          'माझे सध्याचे लोकेशन मिळवा'
+                        )}
+                  </span>
                 </button>
                 <button
                   type="button"
@@ -1312,6 +1539,34 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
             </div>
           )}
         </div>
+        {gpsFeedback && (
+          <div className="max-w-6xl mx-auto px-4 sm:px-6 pb-2.5">
+            <div
+              role={gpsFeedback.type === 'error' ? 'alert' : 'status'}
+              className={`rounded-lg px-3 py-2 text-xs font-semibold flex items-start justify-between gap-2 border ${
+                gpsFeedback.type === 'error'
+                  ? 'bg-red-50 border-red-200 text-red-800'
+                  : 'bg-emerald-50 border-emerald-200 text-emerald-900'
+              }`}
+            >
+              <div className="flex items-start gap-2">
+                {gpsFeedback.type === 'error' ? (
+                  <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                ) : (
+                  <CheckCircle2 className="w-4 h-4 text-[#15803D] shrink-0 mt-0.5" />
+                )}
+                <span>{gpsFeedback.message}</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setGpsFeedback(null)}
+                className="text-[11px] font-bold underline shrink-0 cursor-pointer"
+              >
+                {tr(lang, 'Dismiss', 'बंद करें', 'बंद करा')}
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Main Content Container */}
@@ -1880,50 +2135,175 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
                 />
               </div>
 
-              {/* 3. Service Location */}
-              <div className="space-y-1.5">
+              {/* 3. Service Location (GPS + Map Pin + Manual City / Area / PIN Fallback) */}
+              <div className="space-y-2.5">
                 <label className="block text-sm font-bold text-[#0B3B75]">
-                  {tr(lang, 'Service Location', 'काम का स्थान', 'कामाचे ठिकाण')}
+                  {tr(lang, 'Service Location *', 'काम का स्थान *', 'कामाचे ठिकाण *')}
                 </label>
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-                  <div className="flex items-start gap-2 min-w-0">
-                    <MapPin className="w-4 h-4 text-[#E06D1B] shrink-0 mt-0.5" />
-                    <div className="min-w-0">
-                      <div className="text-sm font-bold text-slate-900 break-words">
-                        {location.label}
-                      </div>
-                      <div className="text-[11px] text-slate-500">
-                        {tr(
-                          lang,
-                          'Only approximate area is shown until you confirm a worker.',
-                          'कामगार कन्फर्म करने तक केवल अनुमानित क्षेत्र दिखाया जाएगा।',
-                          'तुम्ही कामगार निश्चित करेपर्यंत फक्त अंदाजे परिसर दाखवला जातो.'
+                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2.5">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
+                    <div className="flex items-start gap-2 min-w-0">
+                      <MapPin className="w-4 h-4 text-[#E06D1B] shrink-0 mt-0.5" />
+                      <div className="min-w-0">
+                        <div className="text-sm font-bold text-slate-900 break-words">
+                          {location.label ||
+                            tr(
+                              lang,
+                              'Location not detected yet — use GPS or enter City, Area & PIN below',
+                              'स्थान अभी सेट नहीं है — GPS उपयोग करें या नीचे शहर, क्षेत्र व पिनकोड भरें',
+                              'लोकेशन अद्याप सेट नाही — GPS वापरा किंवा खाली शहर, परिसर व पिनकोड भरा'
+                            )}
+                        </div>
+                        {location.lat !== null && location.lng !== null && (
+                          <div className="text-[11px] font-mono-tabular font-semibold text-[#0B3B75] mt-0.5">
+                            {formatCoordinatesLabel(location.lat, location.lng)}
+                            {location.accuracyMeters
+                              ? ` · ±${
+                                  location.accuracyMeters >= 1000
+                                    ? `${(location.accuracyMeters / 1000).toFixed(1)} km`
+                                    : `${Math.round(location.accuracyMeters)} m`
+                                }`
+                              : ''}
+                          </div>
                         )}
+                        <div className="text-[11px] text-slate-500 mt-0.5">
+                          {tr(
+                            lang,
+                            'Only approximate area is shown until you confirm a worker.',
+                            'कामगार कन्फर्म करने तक केवल अनुमानित क्षेत्र दिखाया जाएगा।',
+                            'तुम्ही कामगार निश्चित करेपर्यंत फक्त अंदाजे परिसर दाखवला जातो.'
+                          )}
+                        </div>
                       </div>
                     </div>
+                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={handleDetectGps}
+                        disabled={gpsLoading}
+                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#0B3B75] text-white text-xs font-bold hover:bg-[#072A54] cursor-pointer disabled:opacity-60"
+                      >
+                        <Crosshair className={`w-3.5 h-3.5 ${gpsLoading ? 'animate-spin' : ''}`} />
+                        <span>
+                          {gpsLoading
+                            ? tr(lang, 'Detecting...', 'खोज रहे हैं...', 'शोधत आहे...')
+                            : tr(
+                                lang,
+                                'Get My Current Location',
+                                'मेरा वर्तमान स्थान प्राप्त करें',
+                                'माझे सध्याचे लोकेशन मिळवा'
+                              )}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setShowPinModal(true)}
+                        className="px-3 py-2 rounded-lg border border-slate-300 bg-white text-xs font-bold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                      >
+                        {tr(lang, 'Pin Map', 'मैप पिन', 'नकाशा पिन')}
+                      </button>
+                    </div>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      type="button"
-                      onClick={handleDetectGps}
-                      disabled={gpsLoading}
-                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-[#0B3B75] text-white text-xs font-bold hover:bg-[#072A54] cursor-pointer"
+
+                  {gpsFeedback && (
+                    <div
+                      role={gpsFeedback.type === 'error' ? 'alert' : 'status'}
+                      className={`rounded-lg px-3 py-2 text-xs font-semibold flex items-start gap-2 border ${
+                        gpsFeedback.type === 'error'
+                          ? 'bg-red-50 border-red-200 text-red-800'
+                          : 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                      }`}
                     >
-                      <Crosshair className="w-3.5 h-3.5" />
-                      GPS
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setShowPinModal(true)}
-                      className="px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-xs font-bold text-slate-700 hover:bg-slate-100 cursor-pointer"
-                    >
-                      {tr(lang, 'Pin Map', 'मैप पिन', 'नकाशा पिन')}
-                    </button>
+                      {gpsFeedback.type === 'error' ? (
+                        <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                      ) : (
+                        <CheckCircle2 className="w-4 h-4 text-[#15803D] shrink-0 mt-0.5" />
+                      )}
+                      <span>{gpsFeedback.message}</span>
+                    </div>
+                  )}
+                </div>
+
+                {/* Manual City, Area & 6-Digit PIN Code Entry (Works even when GPS is unavailable) */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      {tr(lang, 'City / Town / Village *', 'शहर / गाँव *', 'शहर / गाव *')}
+                    </label>
+                    <input
+                      type="text"
+                      value={manualCity}
+                      onChange={(e) => {
+                        setManualCity(e.target.value);
+                        if (formError) setFormError('');
+                      }}
+                      maxLength={80}
+                      placeholder={tr(
+                        lang,
+                        'e.g., Chandrapur, Nagpur, Pune',
+                        'जैसे: चंद्रपुर, नागपुर, पुणे',
+                        'उदा. चंद्रपूर, नागपूर, पुणे'
+                      )}
+                      className="w-full h-10 px-3 rounded-xl border border-slate-300 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B3B75]/25 focus:border-[#0B3B75]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      {tr(lang, 'Area / Locality / Ward', 'क्षेत्र / मोहल्ला / वार्ड', 'परिसर / वॉर्ड / कॉलनी')}
+                    </label>
+                    <input
+                      type="text"
+                      value={manualArea}
+                      onChange={(e) => {
+                        setManualArea(e.target.value);
+                        if (formError) setFormError('');
+                      }}
+                      maxLength={80}
+                      placeholder={tr(
+                        lang,
+                        'e.g., Civil Lines, Gandhi Chowk',
+                        'जैसे: सिविल लाइंस, गांधी चौक',
+                        'उदा. सिव्हिल लाईन्स, गांधी चौक'
+                      )}
+                      className="w-full h-10 px-3 rounded-xl border border-slate-300 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B3B75]/25 focus:border-[#0B3B75]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      {tr(lang, 'PIN Code (6 digits) *', 'पिनकोड (6 अंक) *', 'पिनकोड (६ अंक) *')}
+                      {orderPincodeResolving && (
+                        <span className="ml-1.5 text-[11px] font-semibold text-[#0B3B75]">
+                          {tr(lang, 'Finding area...', 'क्षेत्र खोज रहे हैं...', 'परिसर शोधत आहे...')}
+                        </span>
+                      )}
+                    </label>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={6}
+                      value={orderPincode}
+                      onChange={(e) => {
+                        const nextPin = e.target.value.replace(/\D/g, '').slice(0, 6);
+                        setOrderPincode(nextPin);
+                        if (formError) setFormError('');
+                        if (/^[1-9]\d{5}$/.test(nextPin)) {
+                          void resolveLocationFromPincode(nextPin, manualArea || manualCity);
+                        }
+                      }}
+                      onBlur={() => {
+                        const clean = orderPincode.replace(/\D/g, '').slice(0, 6);
+                        if (/^[1-9]\d{5}$/.test(clean) && clean !== location.pincode) {
+                          void resolveLocationFromPincode(clean, manualArea || manualCity);
+                        }
+                      }}
+                      placeholder="442401"
+                      className="w-full h-10 px-3 rounded-xl border border-slate-300 text-sm font-mono-tabular text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B3B75]/25 focus:border-[#0B3B75]"
+                    />
                   </div>
                 </div>
 
-                {/* Exact Service Address & Pincode (Address Locked Until Confirmed) */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
+                {/* Exact Service Address & Landmark (Address Locked Until Confirmed) */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-0.5">
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1">
                       {tr(
@@ -1963,38 +2343,6 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
                         'उदा. हनुमान मंदिराजवळ / बस स्टँडजवळ'
                       )}
                       className="w-full h-10 px-3 rounded-xl border border-slate-300 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B3B75]/25 focus:border-[#0B3B75]"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      {tr(lang, 'Pincode (6 digits)', 'पिनकोड (6 अंक)', 'पिनकोड (६ अंक)')}
-                      {orderPincodeResolving && (
-                        <span className="ml-1.5 text-[11px] font-semibold text-[#0B3B75]">
-                          {tr(lang, 'Finding area...', 'क्षेत्र खोज रहे हैं...', 'परिसर शोधत आहे...')}
-                        </span>
-                      )}
-                    </label>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      maxLength={6}
-                      value={orderPincode}
-                      onChange={(e) => {
-                        const nextPin = e.target.value.replace(/\D/g, '').slice(0, 6);
-                        setOrderPincode(nextPin);
-                        if (formError) setFormError('');
-                        if (/^[1-9]\d{5}$/.test(nextPin)) {
-                          void resolveLocationFromPincode(nextPin);
-                        }
-                      }}
-                      onBlur={() => {
-                        const clean = orderPincode.replace(/\D/g, '').slice(0, 6);
-                        if (/^[1-9]\d{5}$/.test(clean) && clean !== location.pincode) {
-                          void resolveLocationFromPincode(clean);
-                        }
-                      }}
-                      placeholder="442401"
-                      className="w-full h-10 px-3 rounded-xl border border-slate-300 text-sm font-mono-tabular text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B3B75]/25 focus:border-[#0B3B75]"
                     />
                   </div>
                 </div>
@@ -2080,7 +2428,7 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
                 ) : (
                   <>
                     <span>
-                      {user?.emailVerified
+                      {isAuthenticatedUser(user)
                         ? tr(lang, 'SEND REQUEST', 'रिक्वेस्ट भेजें', 'रिक्वेस्ट पाठवा')
                         : tr(lang, 'SIGN IN & SEND REQUEST', 'लॉगिन करें और रिक्वेस्ट भेजें', 'लॉगिन करून रिक्वेस्ट पाठवा')}
                     </span>
@@ -2394,28 +2742,44 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
       {/* Location Map Pin Modal */}
       <LocationPinModal
         open={showPinModal}
-        initialLat={location.lat}
-        initialLng={location.lng}
+        initialLat={location.lat ?? 20.5937}
+        initialLng={location.lng ?? 78.9629}
         initialLabel={location.label}
         onClose={() => setShowPinModal(false)}
         onConfirmLocation={(picked) => {
+            const pickedPin = picked.postalCode || extractSixDigitPincode(picked.formattedAddress);
             const nextLoc: ActiveLocationState = {
               lat: picked.lat,
               lng: picked.lng,
               label: picked.formattedAddress || `${picked.cityOrVillage}, ${picked.district}`,
-              state: picked.state || location.state,
-              district: picked.district || location.district,
+              state: picked.state || location.state || 'Maharashtra',
+              district: picked.district || location.district || picked.cityOrVillage,
               cityOrVillage: picked.cityOrVillage || picked.district || location.cityOrVillage,
+              pincode: pickedPin || location.pincode,
+              source: 'manual',
+              accuracyMeters: null,
             };
             setLocation(nextLoc);
+            if (pickedPin) setOrderPincode(pickedPin);
+            if (nextLoc.cityOrVillage) setManualCity(nextLoc.cityOrVillage);
+            setGpsFeedback({
+              type: 'success',
+              message: tr(
+                lang,
+                `Pinned location confirmed: ${nextLoc.label} · ${formatCoordinatesLabel(nextLoc.lat!, nextLoc.lng!)}`,
+                `पिन स्थान पक्का हुआ: ${nextLoc.label} · ${formatCoordinatesLabel(nextLoc.lat!, nextLoc.lng!)}`,
+                `नकाशा पिन निश्चित झाले: ${nextLoc.label} · ${formatCoordinatesLabel(nextLoc.lat!, nextLoc.lng!)}`
+              ),
+            });
             setShowPinModal(false);
-            if (user?.emailVerified) {
-              void saveCustomerDefaultLocation(user.uid, {
+            if (isAuthenticatedUser(user)) {
+              void saveCustomerDefaultLocation(user!.uid, {
                 state: nextLoc.state,
                 district: nextLoc.district,
                 cityOrVillage: nextLoc.cityOrVillage,
-                lat: nextLoc.lat,
-                lng: nextLoc.lng,
+                pincode: nextLoc.pincode,
+                lat: nextLoc.lat!,
+                lng: nextLoc.lng!,
                 savedAddressLabel: nextLoc.label,
               }).catch(() => undefined);
             }

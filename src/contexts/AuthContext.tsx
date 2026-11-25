@@ -9,6 +9,7 @@ import {
   formatUiError,
   googleProvider,
   handleFirestoreError,
+  isAuthenticatedUser,
   OperationType,
   testFirestoreConnection,
 } from '../lib/firebase';
@@ -67,8 +68,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const userSnap = await getDoc(userRef);
       if (userSnap.exists()) {
         setUserAccount(userSnap.data() as UserAccount);
-      } else if (firebaseUser.email && firebaseUser.emailVerified) {
-        const isBootAdmin = firebaseUser.email === BOOTSTRAPPED_ADMIN_EMAIL;
+      } else if (firebaseUser.email && isAuthenticatedUser(firebaseUser)) {
+        const isBootAdmin = firebaseUser.emailVerified && firebaseUser.email === BOOTSTRAPPED_ADMIN_EMAIL;
         const newAccount: UserAccount = {
           uid,
           email: firebaseUser.email,
@@ -136,7 +137,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   }, []);
 
   useEffect(() => {
-    if (!user?.uid || !user.emailVerified) {
+    if (!isAuthenticatedUser(user)) {
       setCustomerPreference(null);
       return;
     }

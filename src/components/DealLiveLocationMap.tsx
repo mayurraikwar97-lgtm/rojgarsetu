@@ -20,7 +20,11 @@ import {
   Square,
 } from 'lucide-react';
 import { calculateDistanceKm } from '../data/indiaLocations';
-import { detectBestGpsLocation } from '../lib/locationService';
+import {
+  classifyGeolocationErrorCode,
+  detectBestGpsLocation,
+  formatGeolocationError,
+} from '../lib/locationService';
 import {
   getEffectiveDealStatus,
   stopDealLocationSharing,
@@ -242,7 +246,7 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
             )
       );
     } catch (err) {
-      setStatusMsg(err instanceof Error ? err.message : 'Unable to read GPS location.');
+      setStatusMsg(formatGeolocationError(err, lang).message);
     } finally {
       setGpsBusy(false);
     }
@@ -277,7 +281,17 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
           source: 'gps_watch',
         }).catch(() => undefined);
       },
-      () => {
+      (geoErr) => {
+        const code = classifyGeolocationErrorCode(geoErr);
+        if (code === 'PERMISSION_DENIED') {
+          if (watchIdRef.current !== null && navigator.geolocation) {
+            navigator.geolocation.clearWatch(watchIdRef.current);
+            watchIdRef.current = null;
+          }
+          setWatching(false);
+          setStatusMsg(formatGeolocationError(geoErr, lang).message);
+          return;
+        }
         void handleShareOnce();
       },
       { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 }

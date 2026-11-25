@@ -8,7 +8,7 @@ import {
   extractLastName,
   getWorkerVisibleCustomerName,
 } from '../lib/customerPrivacy';
-import { formatUiError } from '../lib/firebase';
+import { formatUiError, isAuthenticatedUser } from '../lib/firebase';
 import { saveEmployerRegistration } from '../lib/firestoreService';
 import {
   buildCustomerPhotoDocId,
@@ -139,9 +139,9 @@ export const EmployerRegistrationForm: React.FC<EmployerRegistrationFormProps> =
       );
       return;
     }
-    if (!user.emailVerified) {
+    if (!isAuthenticatedUser(user)) {
       failValidation(
-        'Your Google account email is not verified. Please sign in with a verified Google account to register.',
+        'Please sign in with Google to complete customer registration.',
         authBannerRef
       );
       return;

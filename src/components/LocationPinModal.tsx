@@ -10,6 +10,8 @@ import { CheckCircle2, LocateFixed, MapPin, Search, X } from 'lucide-react';
 import { useLanguage } from '../i18n/LanguageContext';
 import {
   detectBestGpsLocation,
+  formatCoordinatesLabel,
+  formatGeolocationError,
   reverseGeocodeCoords,
   searchLocations,
   type GeoSearchCandidate,
@@ -27,6 +29,7 @@ interface LocationPinModalProps {
     state: string;
     district: string;
     cityOrVillage: string;
+    postalCode?: string;
     formattedAddress: string;
   }) => void;
 }
@@ -58,18 +61,22 @@ export const LocationPinModal: React.FC<LocationPinModalProps> = ({
   const [resolvedState, setResolvedState] = useState<string>('');
   const [resolvedDistrict, setResolvedDistrict] = useState<string>('');
   const [resolvedCity, setResolvedCity] = useState<string>('');
+  const [resolvedPostalCode, setResolvedPostalCode] = useState<string>('');
   const [resolvedAddress, setResolvedAddress] = useState<string>(initialLabel);
   const [searchInput, setSearchInput] = useState<string>('');
   const [candidates, setCandidates] = useState<GeoSearchCandidate[]>([]);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
+  const [noticeIsError, setNoticeIsError] = useState(false);
 
   useEffect(() => {
     if (!open) return;
     setPinLat(initialLat);
     setPinLng(initialLng);
     setResolvedAddress(initialLabel);
+    setResolvedPostalCode('');
     setNotice('');
+    setNoticeIsError(false);
     setCandidates([]);
     void (async () => {
       try {
@@ -77,6 +84,7 @@ export const LocationPinModal: React.FC<LocationPinModalProps> = ({
         setResolvedState(res.state);
         setResolvedDistrict(res.district);
         setResolvedCity(res.cityOrVillage);
+        setResolvedPostalCode(res.postalCode || '');
         setResolvedAddress(res.formattedAddress);
       } catch {
         // ignore
@@ -102,19 +110,22 @@ export const LocationPinModal: React.FC<LocationPinModalProps> = ({
     setPinLng(lng);
     setBusy(true);
     setNotice('');
+    setNoticeIsError(false);
     try {
       const res = await reverseGeocodeCoords(lat, lng, lang);
       setResolvedState(res.state);
       setResolvedDistrict(res.district);
       setResolvedCity(res.cityOrVillage);
+      setResolvedPostalCode(res.postalCode || '');
       setResolvedAddress(res.formattedAddress);
     } catch {
+      setNoticeIsError(true);
       setNotice(
         lang === 'mr'
-          ? 'निवडलेल्या बिंदूचा पत्ता तपासता आला नाही.'
+          ? 'निवडलेल्या बिंदूचा पत्ता तपासता आला नाही. तुम्ही तरीही अक्षांश/रेखांश पक्के करू शकता.'
           : lang === 'hi'
-          ? 'चुने गए स्थान का पता प्राप्त नहीं हो सका।'
-          : 'Could not reverse-geocode the selected pin.'
+          ? 'चुने गए स्थान का पता प्राप्त नहीं हो सका। आप फिर भी ये निर्देशांक पक्के कर सकते हैं।'
+          : 'Could not reverse-geocode the selected pin. You can still confirm these coordinates.'
       );
     } finally {
       setBusy(false);
@@ -126,6 +137,7 @@ export const LocationPinModal: React.FC<LocationPinModalProps> = ({
     if (!searchInput.trim()) return;
     setBusy(true);
     setNotice('');
+    setNoticeIsError(false);
     try {
       const list = await searchLocations(searchInput.trim(), lang);
       setCandidates(list);
@@ -136,17 +148,20 @@ export const LocationPinModal: React.FC<LocationPinModalProps> = ({
         setResolvedState(first.state);
         setResolvedDistrict(first.district);
         setResolvedCity(first.cityOrVillage);
+        setResolvedPostalCode(first.postalCode || '');
         setResolvedAddress(first.formattedAddress);
       } else {
+        setNoticeIsError(true);
         setNotice(
           lang === 'mr'
-            ? 'ठिकाण सापडले नाही. गाव, शहर किंवा पिनकोड टाका.'
+            ? 'ठिकाण सापडले नाही. गाव, शहर किंवा 6-अंकी पिनकोड टाका.'
             : lang === 'hi'
-            ? 'स्थान नहीं मिला। गाँव, शहर या पिनकोड डालें।'
-            : 'Location not found. Try a town, ward, or 6-digit pincode.'
+            ? 'स्थान नहीं मिला। गाँव, शहर या 6-अंकीय पिनकोड डालें।'
+            : 'Location not found. Try a town, ward, or 6-digit PIN code.'
         );
       }
     } catch (err) {
+      setNoticeIsError(true);
       setNotice(err instanceof Error ? err.message : 'Search failed');
     } finally {
       setBusy(false);
@@ -156,6 +171,7 @@ export const LocationPinModal: React.FC<LocationPinModalProps> = ({
   const handleGpsInsideModal = async () => {
     setBusy(true);
     setNotice('');
+    setNoticeIsError(false);
     try {
       const res = await detectBestGpsLocation(lang);
       setPinLat(res.lat);
@@ -163,24 +179,21 @@ export const LocationPinModal: React.FC<LocationPinModalProps> = ({
       setResolvedState(res.state);
       setResolvedDistrict(res.district);
       setResolvedCity(res.cityOrVillage);
+      setResolvedPostalCode(res.postalCode || '');
       setResolvedAddress(res.formattedAddress);
       if (res.isApproximate) {
+        setNoticeIsError(false);
         setNotice(
           lang === 'mr'
             ? `सूचना: ब्राउझर नेटवर्क लोकेशन ~${res.accuracyMeters ? Math.round(res.accuracyMeters / 1000) : '?'} किमी अंदाजे आहे. नकाशावर बरोबर पिन टॅप करा किंवा वॉर्ड/शहर शोधा.`
             : lang === 'hi'
             ? `सूचना: ब्राउज़र नेटवर्क लोकेशन लगभग ${res.accuracyMeters ? Math.round(res.accuracyMeters / 1000) : '?'} किमी दूर हो सकती है। नक्शे पर सही पिन टैप करें या शहर/पिनकोड खोजें।`
-            : `Note: Browser IP/Wi-Fi location has ~${res.accuracyMeters ? Math.round(res.accuracyMeters / 1000) : '?'} km variance. Tap the exact spot on the map or search your town/pincode.`
+            : `Note: Browser IP/Wi-Fi location has ~${res.accuracyMeters ? Math.round(res.accuracyMeters / 1000) : '?'} km variance. Tap the exact spot on the map or search your town/PIN code.`
         );
       }
-    } catch {
-      setNotice(
-        lang === 'mr'
-          ? 'डिव्हाइस GPS उपलब्ध नाही. कृपया शहर/पिनकोड शोधा किंवा नकाशावर टॅप करा.'
-          : lang === 'hi'
-          ? 'डिवाइस GPS उपलब्ध नहीं है। कृपया शहर/पिनकोड खोजें या नक्शे पर टैप करें।'
-          : 'Device GPS unavailable. Search your town/pincode or tap directly on the map.'
-      );
+    } catch (err) {
+      setNoticeIsError(true);
+      setNotice(formatGeolocationError(err, lang).message);
     } finally {
       setBusy(false);
     }
@@ -246,10 +259,16 @@ export const LocationPinModal: React.FC<LocationPinModalProps> = ({
               type="button"
               onClick={handleGpsInsideModal}
               disabled={busy}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold disabled:opacity-60"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-semibold disabled:opacity-60 cursor-pointer"
             >
               <LocateFixed className="w-4 h-4" />
-              GPS
+              <span>
+                {lang === 'mr'
+                  ? 'माझे सध्याचे लोकेशन मिळवा'
+                  : lang === 'hi'
+                  ? 'मेरा वर्तमान स्थान प्राप्त करें'
+                  : 'Get My Current Location'}
+              </span>
             </button>
           </form>
 
@@ -273,9 +292,10 @@ export const LocationPinModal: React.FC<LocationPinModalProps> = ({
                       setResolvedState(c.state);
                       setResolvedDistrict(c.district);
                       setResolvedCity(c.cityOrVillage);
+                      setResolvedPostalCode(c.postalCode || '');
                       setResolvedAddress(c.formattedAddress);
                     }}
-                    className="text-xs px-2.5 py-1 rounded border border-slate-300 bg-white hover:border-[#0B3B75] hover:bg-blue-50 text-left"
+                    className="text-xs px-2.5 py-1 rounded border border-slate-300 bg-white hover:border-[#0B3B75] hover:bg-blue-50 text-left cursor-pointer"
                   >
                     {c.formattedAddress}
                   </button>
@@ -285,7 +305,14 @@ export const LocationPinModal: React.FC<LocationPinModalProps> = ({
           )}
 
           {notice && (
-            <div className="bg-amber-50 border border-amber-200 text-amber-900 rounded px-3 py-2 text-xs font-medium">
+            <div
+              role="alert"
+              className={`rounded px-3 py-2 text-xs font-medium border ${
+                noticeIsError
+                  ? 'bg-red-50 border-red-200 text-red-800'
+                  : 'bg-amber-50 border-amber-200 text-amber-900'
+              }`}
+            >
               {notice}
             </div>
           )}
@@ -324,14 +351,18 @@ export const LocationPinModal: React.FC<LocationPinModalProps> = ({
           </div>
 
           <div className="bg-emerald-50 border border-emerald-200 rounded p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <div className="text-xs text-emerald-950">
+            <div className="text-xs text-emerald-950 space-y-0.5">
               <p className="font-bold flex items-center gap-1">
                 <CheckCircle2 className="w-4 h-4 text-emerald-700 shrink-0" />
                 {resolvedCity || resolvedDistrict || 'Selected Location'}
                 {resolvedDistrict ? `, ${resolvedDistrict}` : ''}
                 {resolvedState ? `, ${resolvedState}` : ''}
+                {resolvedPostalCode ? ` · PIN ${resolvedPostalCode}` : ''}
               </p>
-              <p className="text-emerald-800 mt-0.5 line-clamp-1">{resolvedAddress}</p>
+              <p className="text-emerald-800 line-clamp-1">{resolvedAddress}</p>
+              <p className="text-[11px] font-mono-tabular text-emerald-900/90">
+                {formatCoordinatesLabel(pinLat, pinLng)}
+              </p>
             </div>
             <button
               type="button"
@@ -343,11 +374,12 @@ export const LocationPinModal: React.FC<LocationPinModalProps> = ({
                   state: resolvedState,
                   district: resolvedDistrict,
                   cityOrVillage: resolvedCity || resolvedDistrict,
+                  postalCode: resolvedPostalCode || undefined,
                   formattedAddress: resolvedAddress || `${resolvedCity}, ${resolvedDistrict}`,
                 });
                 onClose();
               }}
-              className="px-4 py-2 rounded bg-[#C25E00] hover:bg-[#9F4D00] text-white text-sm font-bold whitespace-nowrap"
+              className="px-4 py-2 rounded bg-[#C25E00] hover:bg-[#9F4D00] text-white text-sm font-bold whitespace-nowrap cursor-pointer"
             >
               {lang === 'mr'
                 ? 'हेच लोकेशन पक्के करा'

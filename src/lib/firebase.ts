@@ -5,6 +5,7 @@ import {
   GoogleAuthProvider,
   setPersistence,
 } from 'firebase/auth';
+import type { User } from 'firebase/auth';
 import { doc, getDocFromServer, getFirestore } from 'firebase/firestore';
 import { getMessaging, isSupported } from 'firebase/messaging';
 import type { Messaging } from 'firebase/messaging';
@@ -19,6 +20,13 @@ setPersistence(auth, browserLocalPersistence).catch((err) => {
   console.warn('Auth persistence setup notice:', err);
 });
 export const googleProvider = new GoogleAuthProvider();
+googleProvider.setCustomParameters({ prompt: 'select_account' });
+
+export function isAuthenticatedUser(user: User | null | undefined): user is User {
+  if (!user || !user.uid || user.isAnonymous) return false;
+  if (user.emailVerified) return true;
+  return Array.isArray(user.providerData) && user.providerData.some((p) => p?.providerId === 'google.com');
+}
 
 let messagingPromise: Promise<Messaging | null> | null = null;
 export function getFirebaseMessaging(): Promise<Messaging | null> {

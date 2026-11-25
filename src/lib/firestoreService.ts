@@ -17,7 +17,7 @@ import {
   where,
   writeBatch,
 } from 'firebase/firestore';
-import { auth, db, handleFirestoreError, OperationType } from './firebase';
+import { auth, db, handleFirestoreError, isAuthenticatedUser, OperationType } from './firebase';
 import { grantAcceptedCustomerPhoto } from './photoStorageService';
 import { normalizeTenDigitIndianMobile } from './pinAuth';
 import {
@@ -276,6 +276,8 @@ export async function saveWorkerRegistration(
 
       const cleanPub = { ...publicData };
       if (!cleanPub.photoDocId) delete cleanPub.photoDocId;
+      if (!cleanPub.pincode || !/^[1-9]\d{5}$/.test(cleanPub.pincode.trim())) delete cleanPub.pincode;
+      else cleanPub.pincode = cleanPub.pincode.trim();
       if (!cleanPub.customProfessionId) delete cleanPub.customProfessionId;
       if (!cleanPub.customProfessionName) delete cleanPub.customProfessionName;
       if (!cleanPub.customProfessionStatus) delete cleanPub.customProfessionStatus;
@@ -308,6 +310,7 @@ export async function saveWorkerRegistration(
           state: cleanPub.state,
           district: cleanPub.district,
           cityOrVillage: cleanPub.cityOrVillage,
+          ...(cleanPub.pincode ? { pincode: cleanPub.pincode } : {}),
           approxLat: cleanPub.approxLat,
           approxLng: cleanPub.approxLng,
           languagesKnown: cleanPub.languagesKnown,
@@ -851,25 +854,30 @@ export async function createJobPosting(
       throw new Error('AUTH_REQUIRED: Please sign in with Google before posting a job.');
     }
 
-    if (!currentUser.emailVerified) {
+    const reloadCurrentUser = () => currentUser.reload();
+    if (!isAuthenticatedUser(currentUser)) {
       try {
-        await currentUser.reload();
+        await reloadCurrentUser();
       } catch {
-        // Ignore reload network failure; check emailVerified immediately below
+        // Ignore reload network failure; re-evaluate below
       }
-      if (!auth.currentUser?.emailVerified) {
-        throw new Error('EMAIL_UNVERIFIED: Signed-in Google email is not verified.');
+      if (!isAuthenticatedUser(auth.currentUser)) {
+        throw new Error('EMAIL_UNVERIFIED: Please sign in with a verified Google account.');
       }
     }
 
     try {
-      await currentUser.getIdToken();
-    } catch (tokenErr) {
-      const tokenMsg = tokenErr instanceof Error ? tokenErr.message.toLowerCase() : '';
-      if (tokenMsg.includes('network') || tokenMsg.includes('offline') || tokenMsg.includes('unavailable')) {
-        throw new Error('NETWORK_ERROR: Failed to verify Firebase auth token due to network error.');
+      await currentUser.getIdToken(false);
+    } catch {
+      try {
+        await currentUser.getIdToken(true);
+      } catch (tokenErr) {
+        const tokenMsg = tokenErr instanceof Error ? tokenErr.message.toLowerCase() : '';
+        if (tokenMsg.includes('network') || tokenMsg.includes('offline') || tokenMsg.includes('unavailable')) {
+          throw new Error('NETWORK_ERROR: Failed to verify Firebase auth token due to network error.');
+        }
+        throw new Error('AUTH_REQUIRED: Failed to obtain valid Firebase ID token.');
       }
-      throw new Error('AUTH_REQUIRED: Failed to obtain valid Firebase ID token.');
     }
 
     const resolvedEmployerUid = currentUser.uid;
@@ -3497,6 +3505,7 @@ export async function saveCustomerDefaultLocation(
     state: string;
     district: string;
     cityOrVillage: string;
+    pincode?: string;
     lat?: number;
     lng?: number;
     savedAddressLabel?: string;
@@ -3504,10 +3513,12 @@ export async function saveCustomerDefaultLocation(
 ): Promise<void> {
   const path = `customerPreferences/${uid}`;
   const ref = doc(db, 'customerPreferences', uid);
+  const cleanPin = (location.pincode || '').replace(/\D/g, '').slice(0, 6);
   const safeFields = {
     ...(location.state.trim() ? { defaultState: location.state.trim().slice(0, 80) } : {}),
     ...(location.district.trim() ? { defaultDistrict: location.district.trim().slice(0, 80) } : {}),
     ...(location.cityOrVillage.trim() ? { defaultCityOrVillage: location.cityOrVillage.trim().slice(0, 100) } : {}),
+    ...(/^[1-9]\d{5}$/.test(cleanPin) ? { defaultPincode: cleanPin } : {}),
     ...(typeof location.lat === 'number' && Number.isFinite(location.lat) ? { defaultLat: location.lat } : {}),
     ...(typeof location.lng === 'number' && Number.isFinite(location.lng) ? { defaultLng: location.lng } : {}),
     ...(location.savedAddressLabel?.trim()
@@ -3548,6 +3559,7 @@ export async function recordCustomerOrderPreference(
     state?: string;
     district?: string;
     cityOrVillage?: string;
+    pincode?: string;
     lat?: number;
     lng?: number;
   }
@@ -3574,10 +3586,12 @@ export async function recordCustomerOrderPreference(
           ].slice(0, 10)
         : prevVehicles.slice(0, 10);
 
+    const cleanPin = (input.pincode || '').replace(/\D/g, '').slice(0, 6);
     const locFields = {
       ...(input.state?.trim() ? { defaultState: input.state.trim().slice(0, 80) } : {}),
       ...(input.district?.trim() ? { defaultDistrict: input.district.trim().slice(0, 80) } : {}),
       ...(input.cityOrVillage?.trim() ? { defaultCityOrVillage: input.cityOrVillage.trim().slice(0, 100) } : {}),
+      ...(/^[1-9]\d{5}$/.test(cleanPin) ? { defaultPincode: cleanPin } : {}),
       ...(typeof input.lat === 'number' && Number.isFinite(input.lat) ? { defaultLat: input.lat } : {}),
       ...(typeof input.lng === 'number' && Number.isFinite(input.lng) ? { defaultLng: input.lng } : {}),
     };

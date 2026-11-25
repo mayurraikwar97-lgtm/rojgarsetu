@@ -27,8 +27,12 @@ import {
   normalizeCustomShopCategory,
 } from '../data/shopCategories';
 import { useLanguage } from '../i18n/LanguageContext';
-import { formatUiError } from '../lib/firebase';
-import { detectBestGpsLocation } from '../lib/locationService';
+import { formatUiError, isAuthenticatedUser } from '../lib/firebase';
+import {
+  detectBestGpsLocation,
+  formatCoordinatesLabel,
+  formatGeolocationError,
+} from '../lib/locationService';
 import { getOtpFraudWarningLocalized } from '../lib/otpFeatureFlags';
 import {
   SHOPKEEPER_REGISTRATION_FEE_INR,
@@ -209,25 +213,19 @@ export const ShopkeeperRegistrationForm: React.FC<ShopkeeperRegistrationFormProp
       }
       if (geo.district) setDistrictName(geo.district);
       if (geo.cityOrVillage) setCityOrVillage(geo.cityOrVillage);
-      const pinMatch = (geo.formattedAddress || '').match(/\b\d{6}\b/);
-      if (pinMatch && !pincode) setPincode(pinMatch[0]);
+      const detectedPin = geo.postalCode || (geo.formattedAddress || '').match(/\b\d{6}\b/)?.[0] || '';
+      if (detectedPin && !pincode) setPincode(detectedPin);
+      const coordStr = formatCoordinatesLabel(geo.lat, geo.lng);
       setGpsMsg(
         tr(
           lang,
-          `Location detected: ${geo.formattedAddress}`,
-          `स्थान प्राप्त: ${geo.formattedAddress}`,
-          `ठिकाण मिळाले: ${geo.formattedAddress}`
+          `Location detected: ${geo.formattedAddress} (${coordStr})`,
+          `स्थान प्राप्त: ${geo.formattedAddress} (${coordStr})`,
+          `ठिकाण मिळाले: ${geo.formattedAddress} (${coordStr})`
         )
       );
-    } catch {
-      setGpsMsg(
-        tr(
-          lang,
-          'GPS unavailable. Please select State/District or tap "Pin on Map".',
-          'GPS उपलब्ध नहीं है। राज्य/जिला चुनें या "नक्शे पर पिन करें" दबाएँ।',
-          'GPS उपलब्ध नाही. कृपया राज्य/जिल्हा निवडा किंवा "नकाशावर पिन करा" वापरा.'
-        )
-      );
+    } catch (err) {
+      setGpsMsg(formatGeolocationError(err, lang).message);
     } finally {
       setGpsLoading(false);
     }
@@ -273,7 +271,7 @@ export const ShopkeeperRegistrationForm: React.FC<ShopkeeperRegistrationFormProp
     setStatusMessage('');
     clearAuthError();
 
-    if (!user?.emailVerified) {
+    if (!isAuthenticatedUser(user)) {
       setErrorMsg(
         tr(
           lang,

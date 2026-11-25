@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Bell, BellOff, BellRing, CheckCircle2, Info, Smartphone } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../i18n/LanguageContext';
+import { isAuthenticatedUser } from '../lib/firebase';
 import { subscribeUserDeviceTokens } from '../lib/firestoreService';
 import {
   disablePushNotificationsForUser,
@@ -53,12 +54,12 @@ export const NotificationOptInButton: React.FC<NotificationOptInButtonProps> = (
   }, []);
 
   useEffect(() => {
-    if (!user?.emailVerified) {
+    if (!isAuthenticatedUser(user) || !user) {
       setTokens([]);
       return;
     }
     return subscribeUserDeviceTokens(user.uid, setTokens);
-  }, [user?.uid, user?.emailVerified]);
+  }, [user]);
 
   const hasEnabledToken = tokens.some((t) => t.enabled);
 

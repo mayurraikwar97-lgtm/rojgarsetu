@@ -10,16 +10,43 @@ import {
   validateAdTrackingPayload,
   type AdEventValidationInput,
 } from '../src/server/adsAndReferralsEngine.js';
+import { handleGeocodeReverse, handleGeocodeSearch } from '../src/server/geocodeEngine.js';
 import { handleRunDemoVerification } from '../src/server/paymentReferralEngine.js';
 import { handleCreateMaskedCallSession } from '../src/server/privacyAndCallEngine.js';
 
 export default async function handler(req: ServerlessRequest, res: ServerlessResponse): Promise<void> {
+  const action = getQueryParam(req, 'action').toLowerCase();
+
+  if (action === 'geocode-reverse') {
+    if (req.method !== 'GET') {
+      sendJson(res, 405, { ok: false, error: 'METHOD_NOT_ALLOWED' });
+      return;
+    }
+    const lat = Number(getQueryParam(req, 'lat'));
+    const lng = Number(getQueryParam(req, 'lng'));
+    const lang = getQueryParam(req, 'lang') || 'en';
+    const out = await handleGeocodeReverse({ lat, lng, lang });
+    sendJson(res, out.httpStatus, out.payload);
+    return;
+  }
+
+  if (action === 'geocode-search') {
+    if (req.method !== 'GET') {
+      sendJson(res, 405, { ok: false, error: 'METHOD_NOT_ALLOWED' });
+      return;
+    }
+    const q = getQueryParam(req, 'q');
+    const lang = getQueryParam(req, 'lang') || 'en';
+    const out = await handleGeocodeSearch({ q, lang });
+    sendJson(res, out.httpStatus, out.payload);
+    return;
+  }
+
   if (req.method !== 'POST') {
     sendJson(res, 405, { ok: false, error: 'METHOD_NOT_ALLOWED' });
     return;
   }
 
-  const action = getQueryParam(req, 'action').toLowerCase();
   const authHeader = typeof req.headers.authorization === 'string' ? req.headers.authorization : '';
   const rootDir = process.cwd();
 

@@ -7,9 +7,13 @@ import {
 } from '../data/indiaLocations';
 import { VEHICLE_TYPE_CATALOG } from '../data/vehicleTypes';
 import { useLanguage } from '../i18n/LanguageContext';
-import { formatUiError } from '../lib/firebase';
+import { formatUiError, isAuthenticatedUser } from '../lib/firebase';
 import { saveVehicleListing } from '../lib/firestoreService';
-import { detectBestGpsLocation } from '../lib/locationService';
+import {
+  detectBestGpsLocation,
+  formatCoordinatesLabel,
+  formatGeolocationError,
+} from '../lib/locationService';
 import {
   getOtpFraudWarningLocalized,
   isVehicleRegistrationOtpEnabled,
@@ -51,6 +55,7 @@ export const VehicleRegistrationForm: React.FC<VehicleRegistrationFormProps> = (
   const [cityOrVillage, setCityOrVillage] = useState('');
   const [gpsCoords, setGpsCoords] = useState<{ lat: number; lng: number } | null>(null);
   const [gpsMsg, setGpsMsg] = useState('');
+  const [gpsIsError, setGpsIsError] = useState(false);
   const [gpsLoading, setGpsLoading] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
 
@@ -89,6 +94,7 @@ export const VehicleRegistrationForm: React.FC<VehicleRegistrationFormProps> = (
   const handleDetectGps = async () => {
     setGpsLoading(true);
     setGpsMsg('');
+    setGpsIsError(false);
     try {
       const data = await detectBestGpsLocation(lang);
       setGpsCoords({ lat: data.lat, lng: data.lng });
@@ -101,34 +107,29 @@ export const VehicleRegistrationForm: React.FC<VehicleRegistrationFormProps> = (
       if (data.cityOrVillage) {
         setCityOrVillage(data.cityOrVillage);
       }
+      const coordStr = formatCoordinatesLabel(data.lat, data.lng);
       if (data.isApproximate) {
         setGpsMsg(
           tr(
             lang,
-            `Network/IP estimate (${data.accuracyMeters ? `~${Math.round(data.accuracyMeters / 1000)} km` : 'coarse'}): ${data.formattedAddress}. Tap "Pin on Map" if inaccurate.`,
-            `नेटवर्क लोकेशन (~${data.accuracyMeters ? Math.round(data.accuracyMeters / 1000) : '?'} किमी): ${data.formattedAddress}। गलत होने पर "Pin on Map" दबाएँ।`,
-            `ब्राउझर नेटवर्क लोकेशन (~${data.accuracyMeters ? Math.round(data.accuracyMeters / 1000) : '?'} किमी): ${data.formattedAddress}. चुकीचे वाटल्यास "नकाशावर पिन करा" दाबा.`
+            `Network estimate (${data.accuracyMeters ? `~${Math.round(data.accuracyMeters / 1000)} km` : 'coarse'}): ${data.formattedAddress} (${coordStr}). Tap "Pin on Map" if inaccurate.`,
+            `नेटवर्क लोकेशन (~${data.accuracyMeters ? Math.round(data.accuracyMeters / 1000) : '?'} किमी): ${data.formattedAddress} (${coordStr})। गलत होने पर "नक्शे पर पिन करें" दबाएँ।`,
+            `ब्राउझर नेटवर्क लोकेशन (~${data.accuracyMeters ? Math.round(data.accuracyMeters / 1000) : '?'} किमी): ${data.formattedAddress} (${coordStr}). चुकीचे वाटल्यास "नकाशावर पिन करा" दाबा.`
           )
         );
       } else {
         setGpsMsg(
           tr(
             lang,
-            `Exact GPS detected: ${data.formattedAddress}`,
-            `सटीक स्थान प्राप्त: ${data.formattedAddress}`,
-            `अचूक GPS स्थान मिळाले: ${data.formattedAddress}`
+            `Exact GPS detected: ${data.formattedAddress} (${coordStr})`,
+            `सटीक GPS स्थान प्राप्त: ${data.formattedAddress} (${coordStr})`,
+            `अचूक GPS स्थान मिळाले: ${data.formattedAddress} (${coordStr})`
           )
         );
       }
-    } catch {
-      setGpsMsg(
-        tr(
-          lang,
-          'GPS permission denied or unavailable. Select State/District or tap "Pin on Map".',
-          'GPS उपलब्ध नहीं है। राज्य/जिला चुनें या "Pin on Map" का उपयोग करें।',
-          'GPS उपलब्ध नाही. कृपया राज्य/जिल्हा निवडा किंवा "नकाशावर पिन करा" वापरा.'
-        )
-      );
+    } catch (err) {
+      setGpsIsError(true);
+      setGpsMsg(formatGeolocationError(err, lang).message);
     } finally {
       setGpsLoading(false);
     }
@@ -148,8 +149,8 @@ export const VehicleRegistrationForm: React.FC<VehicleRegistrationFormProps> = (
       setErrorMsg(t.common.signInRequired || 'Please sign in with Google before submitting.');
       return;
     }
-    if (!user.emailVerified) {
-      setErrorMsg('Please sign in with a verified Google account to register a vehicle.');
+    if (!isAuthenticatedUser(user)) {
+      setErrorMsg('Please sign in with Google to register a vehicle.');
       return;
     }
     if (ownerDisplayName.trim().length < 2) {
@@ -496,7 +497,9 @@ export const VehicleRegistrationForm: React.FC<VehicleRegistrationFormProps> = (
                   className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#0B3B75] text-white text-xs font-bold hover:bg-[#072A54] cursor-pointer"
                 >
                   <Crosshair className="w-3.5 h-3.5 text-amber-300" />
-                  {gpsLoading ? 'Detecting...' : tr(lang, 'Auto-Detect GPS', 'GPS से चुनें', 'GPS ने स्थान शोधा')}
+                  {gpsLoading
+                    ? tr(lang, 'Detecting GPS...', 'GPS खोज रहे हैं...', 'GPS शोधत आहे...')
+                    : tr(lang, 'Get My Current Location', 'मेरी वर्तमान लोकेशन पाएं', 'माझे सध्याचे ठिकाण मिळवा')}
                 </button>
                 <button
                   type="button"
@@ -508,7 +511,18 @@ export const VehicleRegistrationForm: React.FC<VehicleRegistrationFormProps> = (
                 </button>
               </div>
             </div>
-            {gpsMsg && <p className="text-xs font-medium text-[#15803D]">{gpsMsg}</p>}
+            {gpsMsg && (
+              <p
+                role={gpsIsError ? 'alert' : 'status'}
+                className={`text-xs font-medium rounded px-2.5 py-1.5 ${
+                  gpsIsError
+                    ? 'bg-red-50 border border-red-200 text-red-800'
+                    : 'bg-emerald-50 border border-emerald-200 text-[#15803D]'
+                }`}
+              >
+                {gpsMsg}
+              </p>
+            )}
             <LocationPinModal
               open={showPinModal}
               onClose={() => setShowPinModal(false)}
