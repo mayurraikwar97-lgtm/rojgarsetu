@@ -6,6 +6,7 @@ import {
   auth,
   BOOTSTRAPPED_ADMIN_EMAIL,
   db,
+  formatUiError,
   googleProvider,
   handleFirestoreError,
   OperationType,
@@ -37,7 +38,8 @@ interface AuthContextValue {
   isAdmin: boolean;
   authError: string;
   clearAuthError: () => void;
-  signInWithGoogle: () => Promise<void>;
+  signInWithGoogle: () => Promise<User | null>;
+  signInWithGoogleStrict: () => Promise<User>;
   logout: () => Promise<void>;
   refreshUserProfiles: () => Promise<void>;
 }
@@ -142,27 +144,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => unsubPref();
   }, [user?.uid, user?.emailVerified]);
 
-  const signInWithGoogle = async () => {
+  const signInWithGoogleStrict = async (): Promise<User> => {
     setAuthError('');
     try {
-      await signInWithPopup(auth, googleProvider);
+      const cred = await signInWithPopup(auth, googleProvider);
+      return cred.user;
     } catch (err: unknown) {
-      const code = (err as { code?: string })?.code || '';
-      if (code === 'auth/popup-closed-by-user') {
-        setAuthError('Google sign-in popup was closed before finishing. Click Sign In again.');
-      } else if (code === 'auth/popup-blocked') {
-        setAuthError('Your browser blocked the Google sign-in popup. Please enable popups and retry.');
-      } else if (code === 'auth/unauthorized-domain') {
-        setAuthError('Sign-in failed: this domain is not listed in Firebase Authorized Domains.');
-      } else if (code === 'auth/network-request-failed') {
-        setAuthError('Network error during Google sign-in. Check your internet connection and retry.');
-      } else {
-        setAuthError(
-          err instanceof Error && err.message
-            ? err.message
-            : 'Unable to complete Google sign-in. Please retry.'
-        );
-      }
+      const friendly = formatUiError(
+        err,
+        lang === 'mr'
+          ? 'गुगल लॉगिन पूर्ण करता आले नाही. कृपया पुन्हा प्रयत्न करा.'
+          : lang === 'hi'
+            ? 'गूगल लॉगिन पूरा नहीं हो सका। कृपया पुनः प्रयास करें।'
+            : 'Unable to complete Google sign-in. Please retry.',
+        lang
+      );
+      setAuthError(friendly);
+      throw err;
+    }
+  };
+
+  const signInWithGoogle = async (): Promise<User | null> => {
+    try {
+      return await signInWithGoogleStrict();
+    } catch {
+      return null;
     }
   };
 
@@ -204,6 +210,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         authError,
         clearAuthError,
         signInWithGoogle,
+        signInWithGoogleStrict,
         logout,
         refreshUserProfiles,
       }}

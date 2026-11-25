@@ -250,6 +250,14 @@ export interface MaskedCallSession {
   updatedAt?: unknown;
 }
 
+export type JobRequestStatus =
+  | 'PENDING'
+  | 'APPROVED'
+  | 'ASSIGNED'
+  | 'COMPLETED'
+  | 'REJECTED'
+  | 'CANCELLED';
+
 export interface JobPosting {
   id: string;
   employerUid: string;
@@ -295,6 +303,7 @@ export interface JobPosting {
   preferredTimeType?: 'now' | 'later';
   startingPrice?: number;
   status: 'open' | 'in_progress' | 'completed' | 'cancelled' | 'flagged';
+  requestStatus?: JobRequestStatus;
   dealStatus?: DealStatus;
   acceptedApplicationId?: string;
   acceptedWorkerUid?: string;

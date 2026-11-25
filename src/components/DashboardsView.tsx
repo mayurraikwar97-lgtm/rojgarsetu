@@ -2893,6 +2893,24 @@ export const EmployerDashboardView: React.FC<EmployerDashboardProps> = ({
                           <span className="px-2 py-0.5 rounded bg-slate-100 border border-slate-300 font-mono-tabular uppercase font-bold text-[#0B3B75]">
                             {job?.status || (firstApp?.status === 'work_completed' ? 'completed' : 'active')}
                           </span>
+                          {job?.requestStatus && (
+                            <span
+                              className={`px-2 py-0.5 rounded font-mono-tabular uppercase font-bold ${
+                                job.requestStatus === 'APPROVED' || job.requestStatus === 'COMPLETED'
+                                  ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                                  : job.requestStatus === 'REJECTED' || job.requestStatus === 'CANCELLED'
+                                    ? 'bg-red-50 text-red-700 border border-red-200'
+                                    : 'bg-amber-50 text-amber-800 border border-amber-200'
+                              }`}
+                            >
+                              {job.requestStatus}
+                            </span>
+                          )}
+                          {job?.pincode && (
+                            <span className="px-2 py-0.5 rounded bg-slate-50 border border-slate-200 font-mono-tabular font-semibold text-slate-700">
+                              PIN: {job.pincode}
+                            </span>
+                          )}
                           {dateTimeText && (
                             <span className="font-mono-tabular text-slate-600 font-semibold">
                               · {dateTimeText}
@@ -4640,8 +4658,19 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
               onClick={() =>
                 downloadCsv(
                   'rojgar-setu-jobs.csv',
-                  ['Job ID', 'Title', 'Employer', 'Category', 'State', 'District', 'Wage', 'Status'],
-                  jobs.map((j) => [j.id, j.title, j.employerName, j.category, j.state, j.district, j.offeredWage, j.status])
+                  ['Job ID', 'Title', 'Employer', 'Category', 'State', 'District', 'Pincode', 'Wage', 'Status', 'Request Status'],
+                  jobs.map((j) => [
+                    j.id,
+                    j.title,
+                    j.employerName,
+                    j.category,
+                    j.state,
+                    j.district,
+                    j.pincode || '',
+                    j.offeredWage,
+                    j.status,
+                    j.requestStatus || 'PENDING',
+                  ])
                 )
               }
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
@@ -4654,23 +4683,44 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
             <p className="text-sm text-slate-500">{t.common.noRecords}</p>
           ) : (
             <div className="divide-y divide-slate-200">
-              {jobs.map((job) => (
+              {jobs.map((job) => {
+                const reqStatus = job.requestStatus || (job.status === 'cancelled' ? 'REJECTED' : job.status === 'completed' ? 'COMPLETED' : 'PENDING');
+                return (
                 <div key={job.id} className="py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div>
+                  <div className="space-y-0.5">
                     <p className="text-xs font-mono-tabular text-slate-500">
-                      {job.category} · {job.district}, {job.state} · Status: <strong className="uppercase">{job.status}</strong>
+                      {job.category} · {job.cityOrVillage ? `${job.cityOrVillage}, ` : ''}{job.district}, {job.state}
+                      {job.pincode ? ` · PIN: ${job.pincode}` : ''} · Status: <strong className="uppercase">{job.status}</strong>{' '}
+                      · Request: <strong className="uppercase text-[#0B3B75]">{reqStatus}</strong>
                     </p>
                     <h3 className="font-display text-sm font-bold text-[#0B3B75]">{job.title}</h3>
                     <p className="text-xs text-slate-600">{job.employerName}</p>
+                    {job.description && (
+                      <p className="text-xs text-slate-500 line-clamp-2 max-w-2xl">{job.description}</p>
+                    )}
                   </div>
-                  <div className="flex gap-2">
-                    {job.status !== 'open' && (
+                  <div className="flex flex-wrap gap-2">
+                    {reqStatus !== 'APPROVED' && job.status !== 'completed' && (
                       <button
                         type="button"
                         disabled={busyId === job.id}
                         onClick={async () => {
                           setBusyId(job.id);
-                          await adminUpdateJobStatus(job.id, 'open', user.uid, adminEmail);
+                          await adminUpdateJobStatus(job.id, 'open', user.uid, adminEmail, 'APPROVED');
+                          setBusyId(null);
+                        }}
+                        className="px-2.5 py-1 rounded bg-[#15803D] text-white text-xs font-semibold cursor-pointer"
+                      >
+                        Approve
+                      </button>
+                    )}
+                    {job.status !== 'open' && reqStatus === 'APPROVED' && (
+                      <button
+                        type="button"
+                        disabled={busyId === job.id}
+                        onClick={async () => {
+                          setBusyId(job.id);
+                          await adminUpdateJobStatus(job.id, 'open', user.uid, adminEmail, 'APPROVED');
                           setBusyId(null);
                         }}
                         className="px-2.5 py-1 rounded bg-[#15803D] text-white text-xs font-semibold cursor-pointer"
@@ -4684,7 +4734,7 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
                         disabled={busyId === job.id}
                         onClick={async () => {
                           setBusyId(job.id);
-                          await adminUpdateJobStatus(job.id, 'flagged', user.uid, adminEmail);
+                          await adminUpdateJobStatus(job.id, 'flagged', user.uid, adminEmail, 'PENDING');
                           setBusyId(null);
                         }}
                         className="px-2.5 py-1 rounded border border-amber-300 text-amber-800 text-xs font-semibold cursor-pointer"
@@ -4698,17 +4748,18 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
                         disabled={busyId === job.id}
                         onClick={async () => {
                           setBusyId(job.id);
-                          await adminUpdateJobStatus(job.id, 'cancelled', user.uid, adminEmail);
+                          await adminUpdateJobStatus(job.id, 'cancelled', user.uid, adminEmail, 'REJECTED');
                           setBusyId(null);
                         }}
                         className="px-2.5 py-1 rounded border border-red-300 text-red-700 text-xs font-semibold cursor-pointer"
                       >
-                        Cancel
+                        Reject / Cancel
                       </button>
                     )}
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>

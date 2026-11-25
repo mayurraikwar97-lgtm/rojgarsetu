@@ -758,7 +758,10 @@ export async function createJobPosting(
   const finalEmployerName = rawEmployerName.length >= 2 ? rawEmployerName : 'Customer';
 
   const rawCategory = (payload.category || '').trim().slice(0, 80);
-  const finalCategory = rawCategory.length >= 2 ? rawCategory : 'General Service';
+  if (rawCategory.length < 1) {
+    throw new Error('MISSING_CATEGORY: Please select a work category or custom profession.');
+  }
+  const finalCategory = rawCategory.length >= 2 ? rawCategory : rawCategory.padEnd(2, ' ');
 
   const rawTitle = (payload.title || '').trim().slice(0, 140);
   const finalTitle =
@@ -827,10 +830,11 @@ export async function createJobPosting(
         .slice(0, 6)
     : [];
 
-  const sanitizedPincode =
-    typeof payload.pincode === 'string'
-      ? payload.pincode.replace(/[^0-9]/g, '').slice(0, 12)
-      : '';
+  const rawPincode = typeof payload.pincode === 'string' ? payload.pincode.trim() : '';
+  const sanitizedPincode = rawPincode.replace(/[^0-9]/g, '').slice(0, 12);
+  if (rawPincode.length > 0 && !/^[1-9]\d{5}$/.test(sanitizedPincode)) {
+    throw new Error('INVALID_PINCODE: Please enter a valid 6-digit Indian PIN code.');
+  }
 
   let debugDocMeta: Record<string, unknown> = {
     path,
@@ -838,10 +842,37 @@ export async function createJobPosting(
   };
 
   try {
-    const resolvedEmployerUid = auth.currentUser?.uid || payload.employerUid;
-    if (!resolvedEmployerUid) {
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      throw new Error('NETWORK_ERROR: Browser appears offline.');
+    }
+
+    const currentUser = auth.currentUser;
+    if (!currentUser?.uid) {
       throw new Error('AUTH_REQUIRED: Please sign in with Google before posting a job.');
     }
+
+    if (!currentUser.emailVerified) {
+      try {
+        await currentUser.reload();
+      } catch {
+        // Ignore reload network failure; check emailVerified immediately below
+      }
+      if (!auth.currentUser?.emailVerified) {
+        throw new Error('EMAIL_UNVERIFIED: Signed-in Google email is not verified.');
+      }
+    }
+
+    try {
+      await currentUser.getIdToken();
+    } catch (tokenErr) {
+      const tokenMsg = tokenErr instanceof Error ? tokenErr.message.toLowerCase() : '';
+      if (tokenMsg.includes('network') || tokenMsg.includes('offline') || tokenMsg.includes('unavailable')) {
+        throw new Error('NETWORK_ERROR: Failed to verify Firebase auth token due to network error.');
+      }
+      throw new Error('AUTH_REQUIRED: Failed to obtain valid Firebase ID token.');
+    }
+
+    const resolvedEmployerUid = currentUser.uid;
     const safeInitialDealStatus = payload.dealStatus === 'NOTIFIED' ? ('NOTIFIED' as const) : ('REQUESTED' as const);
 
     const baseDoc: Record<string, unknown> = {
@@ -855,7 +886,7 @@ export async function createJobPosting(
       state: finalState,
       district: finalDistrict,
       cityOrVillage: finalCity,
-      ...(sanitizedPincode.length > 0 ? { pincode: sanitizedPincode } : {}),
+      ...(sanitizedPincode.length === 6 ? { pincode: sanitizedPincode } : {}),
       workLocationLabel: finalWorkLocationLabel,
       approxLocationLabel,
       lat: finalLat,
@@ -872,6 +903,7 @@ export async function createJobPosting(
       currentRadiusKm,
       radiusStageUpdatedAt: serverTimestamp(),
       status: 'open' as const,
+      requestStatus: 'PENDING' as const,
       dealStatus: safeInitialDealStatus,
       applicationsCount: 0,
       createdAt: serverTimestamp(),
@@ -938,7 +970,7 @@ export async function createJobPosting(
     if (typeof payload.startingPrice === 'number' && Number.isFinite(payload.startingPrice) && payload.startingPrice >= 0) {
       baseDoc.startingPrice = Math.min(500000, Math.round(payload.startingPrice));
     }
-    if (Array.isArray(payload.notifiedWorkerUids)) {
+    if (Array.isArray(payload.notifiedWorkerUids) && payload.notifiedWorkerUids.length > 0) {
       baseDoc.notifiedWorkerUids = payload.notifiedWorkerUids
         .filter((u): u is string => typeof u === 'string' && u.trim().length > 0)
         .slice(0, 100);
@@ -952,6 +984,7 @@ export async function createJobPosting(
       employerUid: baseDoc.employerUid,
       category: baseDoc.category,
       status: baseDoc.status,
+      requestStatus: baseDoc.requestStatus,
       dealStatus: baseDoc.dealStatus,
       initialRadiusKm: baseDoc.initialRadiusKm,
       currentRadiusKm: baseDoc.currentRadiusKm,
@@ -972,13 +1005,21 @@ export async function createJobPosting(
     const ref = await addDoc(collection(db, path), baseDoc);
     return ref.id;
   } catch (err) {
+    const rawMsg = err instanceof Error ? err.message : String(err);
     const firebaseCode =
       err && typeof err === 'object' && 'code' in err ? String((err as { code?: unknown }).code) : 'unknown';
     console.error('[ROJGAR SETU][jobs.create] Failed to create job document:', {
       ...debugDocMeta,
       errorCode: firebaseCode,
-      errorMessage: err instanceof Error ? err.message : String(err),
+      errorMessage: rawMsg,
     });
+    if (
+      /^(AUTH_REQUIRED|EMAIL_UNVERIFIED|MISSING_CATEGORY|INVALID_PINCODE|LOCATION_PERMISSION_DENIED|NETWORK_ERROR|SERVER_ERROR|DB_WRITE_ERROR):/.test(
+        rawMsg
+      )
+    ) {
+      throw err;
+    }
     handleFirestoreError(err, OperationType.CREATE, path);
   }
 }
@@ -3146,17 +3187,39 @@ export async function adminUpdateJobStatus(
   jobId: string,
   status: JobPosting['status'],
   adminUid: string,
-  adminEmail: string
+  adminEmail: string,
+  requestStatus?: JobPosting['requestStatus']
 ): Promise<void> {
+  const derivedRequestStatus: NonNullable<JobPosting['requestStatus']> =
+    requestStatus ||
+    (status === 'open'
+      ? 'APPROVED'
+      : status === 'cancelled'
+        ? 'REJECTED'
+        : status === 'completed'
+          ? 'COMPLETED'
+          : status === 'in_progress'
+            ? 'ASSIGNED'
+            : 'PENDING');
+
+  const updatePayload: Record<string, unknown> = {
+    status,
+    requestStatus: derivedRequestStatus,
+    updatedAt: serverTimestamp(),
+  };
+  if (status === 'cancelled' && derivedRequestStatus === 'REJECTED') {
+    updatePayload.dealStatus = 'REJECTED';
+  }
+
   const batch = writeBatch(db);
-  batch.update(doc(db, 'jobs', jobId), { status, updatedAt: serverTimestamp() });
+  batch.update(doc(db, 'jobs', jobId), updatePayload);
   batch.set(doc(collection(db, 'auditLogs')), {
     adminUid,
     adminEmail,
-    action: `set_job_status_${status}`,
+    action: `set_job_status_${status}_${derivedRequestStatus.toLowerCase()}`,
     targetCollection: 'jobs',
     targetId: jobId,
-    details: `Updated job status to ${status}`,
+    details: `Updated job status to ${status} (requestStatus: ${derivedRequestStatus})`,
     createdAt: serverTimestamp(),
   });
 

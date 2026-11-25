@@ -227,6 +227,7 @@
         "preferredTimeType": { "type": "string", "enum": ["now", "later"] },
         "startingPrice": { "type": "number" },
         "status": { "type": "string", "enum": ["open", "in_progress", "completed", "cancelled", "flagged"] },
+        "requestStatus": { "type": "string", "enum": ["PENDING", "APPROVED", "ASSIGNED", "COMPLETED", "REJECTED", "CANCELLED"] },
         "dealStatus": { "type": "string", "enum": ["REQUESTED", "NOTIFIED", "OFFER_RECEIVED", "OFFER_ACCEPTED", "DEAL_CONFIRMED", "WORKER_ON_THE_WAY", "WORKER_ARRIVED", "WORK_IN_PROGRESS", "WORK_COMPLETED", "CANCELLED", "REJECTED"] },
         "acceptedApplicationId": { "type": "string", "maxLength": 128 },
         "acceptedWorkerUid": { "type": "string", "maxLength": 128 },

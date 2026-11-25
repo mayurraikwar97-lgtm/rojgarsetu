@@ -134,7 +134,14 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
   onNavigate,
 }) => {
   const { lang } = useLanguage();
-  const { user, workerProfile, employerProfile, employerPrivate, customerPreference, signInWithGoogle } = useAuth();
+  const {
+    user,
+    workerProfile,
+    employerProfile,
+    employerPrivate,
+    customerPreference,
+    signInWithGoogleStrict,
+  } = useAuth();
 
   // Step machine: 'home' -> 'subservices' -> 'order_form' -> 'searching'
   const [step, setStep] = useState<'home' | 'subservices' | 'order_form' | 'searching'>('home');
@@ -175,6 +182,7 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
   const [exactServiceAddress, setExactServiceAddress] = useState('');
   const [addressLandmark, setAddressLandmark] = useState('');
   const [orderPincode, setOrderPincode] = useState('');
+  const [orderPincodeResolving, setOrderPincodeResolving] = useState(false);
   const [workPhotoUrls, setWorkPhotoUrls] = useState<string[]>([]);
   const [photoUploading, setPhotoUploading] = useState(false);
   const [preferredTimeType, setPreferredTimeType] = useState<'now' | 'later'>('now');
@@ -301,8 +309,39 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
     };
   }, [searchQuery, allCatalogCategories, approvedCustomCatalog, approvedProfessions]);
 
+  const resolveLocationFromPincode = async (pin: string): Promise<ActiveLocationState> => {
+    const clean = pin.replace(/\D/g, '').slice(0, 6);
+    if (!/^[1-9]\d{5}$/.test(clean) || location.pincode === clean) {
+      return location;
+    }
+    setOrderPincodeResolving(true);
+    try {
+      const results = await searchLocations(clean, lang);
+      if (results.length > 0) {
+        const hit = results[0];
+        const nextLoc: ActiveLocationState = {
+          lat: hit.lat,
+          lng: hit.lng,
+          label: hit.formattedAddress || `${hit.cityOrVillage || hit.district}, ${hit.state} (${clean})`,
+          state: hit.state || location.state,
+          district: hit.district || location.district,
+          cityOrVillage: hit.cityOrVillage || hit.district || location.cityOrVillage,
+          pincode: hit.postalCode || clean,
+        };
+        setLocation(nextLoc);
+        return nextLoc;
+      }
+    } catch {
+      // Fall back gracefully to current location with entered PIN attached
+    } finally {
+      setOrderPincodeResolving(false);
+    }
+    return { ...location, pincode: clean };
+  };
+
   const handleDetectGps = async () => {
     setGpsLoading(true);
+    setFormError('');
     try {
       const geo = await detectBestGpsLocation(lang);
       const detectedPin = geo.postalCode || extractSixDigitPincode(geo.formattedAddress);
@@ -327,7 +366,15 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
           savedAddressLabel: nextLoc.label,
         }).catch(() => undefined);
       }
-    } catch {
+    } catch (gpsErr) {
+      const geoCode =
+        gpsErr && typeof gpsErr === 'object' && 'code' in gpsErr
+          ? Number((gpsErr as { code?: unknown }).code)
+          : 0;
+      const geoMsg = gpsErr instanceof Error ? gpsErr.message.toLowerCase() : '';
+      if (geoCode === 1 || geoMsg.includes('denied') || geoMsg.includes('permission')) {
+        setFormError(formatUiError(new Error('LOCATION_PERMISSION_DENIED: GPS permission denied'), undefined, lang));
+      }
       setShowPinModal(true);
     } finally {
       setGpsLoading(false);
@@ -362,15 +409,13 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
     e.preventDefault();
     setFormError('');
 
+    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+      setFormError(formatUiError(new Error('NETWORK_ERROR: Offline'), undefined, lang));
+      return;
+    }
+
     if (!selectedCategory || !selectedSubService) {
-      setFormError(
-        tr(
-          lang,
-          'Please choose a service category and work type first.',
-          'कृपया पहले सेवा श्रेणी और काम का प्रकार चुनें।',
-          'कृपया आधी कामाची श्रेणी आणि कामाचा प्रकार निवडा.'
-        )
-      );
+      setFormError(formatUiError(new Error('MISSING_CATEGORY: Category missing'), undefined, lang));
       return;
     }
 
@@ -388,14 +433,7 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
 
     const cleanPin = orderPincode.replace(/\D/g, '').slice(0, 6);
     if (cleanPin.length > 0 && !/^[1-9]\d{5}$/.test(cleanPin)) {
-      setFormError(
-        tr(
-          lang,
-          'Please enter a valid 6-digit Indian pincode (or leave it blank to use your GPS location).',
-          'कृपया सही 6 अंकों का भारतीय पिनकोड दर्ज करें (या GPS लोकेशन के लिए खाली छोड़ें)।',
-          'कृपया वैध ६ अंकी पिनकोड भरा (किंवा GPS लोकेशन वापरण्यासाठी रिकामा ठेवा).'
-        )
-      );
+      setFormError(formatUiError(new Error('INVALID_PINCODE: Invalid 6-digit PIN'), undefined, lang));
       return;
     }
 
@@ -411,37 +449,43 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
       return;
     }
 
-    if (!user) {
+    let activeUser = user;
+    if (!activeUser) {
       try {
-        await signInWithGoogle();
+        activeUser = await signInWithGoogleStrict();
       } catch (authErr) {
         setFormError(
           formatUiError(
             authErr,
-            tr(
-              lang,
-              'Google sign-in was cancelled or failed. Please sign in to send your request.',
-              'गूगल लॉगिन रद्द या विफल हो गया। रिक्वेस्ट भेजने के लिए कृपया लॉगिन करें।',
-              'गुगल लॉगिन रद्द झाले किंवा अयशस्वी झाले. रिक्वेस्ट पाठवण्यासाठी कृपया लॉगिन करा.'
-            ),
+            formatUiError(new Error('AUTH_REQUIRED: Google login required'), undefined, lang),
             lang
           )
         );
+        return;
       }
+    }
+
+    if (!activeUser?.uid) {
+      setFormError(formatUiError(new Error('AUTH_REQUIRED: Google login required'), undefined, lang));
       return;
     }
 
-    if (!user.emailVerified) {
-      setFormError(
-        tr(
-          lang,
-          'Please sign in with a verified Google account to submit your request.',
-          'रिक्वेस्ट भेजने के लिए कृपया सत्यापित गूगल खाते से लॉगिन करें।',
-          'रिक्वेस्ट पाठवण्यासाठी कृपया सत्यापित गुगल खात्याने लॉगिन करा.'
-        )
-      );
-      return;
+    if (!activeUser.emailVerified) {
+      try {
+        await activeUser.reload();
+      } catch {
+        // Ignore reload errors and re-check below
+      }
+      if (!activeUser.emailVerified) {
+        setFormError(formatUiError(new Error('EMAIL_UNVERIFIED: Email not verified'), undefined, lang));
+        return;
+      }
     }
+
+    const effectiveLoc =
+      cleanPin.length === 6 && cleanPin !== location.pincode
+        ? await resolveLocationFromPincode(cleanPin)
+        : location;
 
     const genderProtected = isFemaleCustomerProtected({
       gender: employerProfile?.gender || employerPrivate?.gender,
@@ -449,11 +493,11 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
     const resolvedLastName =
       employerProfile?.lastName ||
       employerPrivate?.lastName ||
-      extractLastName(employerPrivate?.contactPerson || user.displayName || '');
+      extractLastName(employerPrivate?.contactPerson || activeUser.displayName || '');
     const customerName = getWorkerVisibleCustomerName({
       employerProfile,
       employerPrivate,
-      fallbackName: user.displayName || user.email?.split('@')[0] || 'Customer',
+      fallbackName: activeUser.displayName || activeUser.email?.split('@')[0] || 'Customer',
       viewerRole: 'worker',
     }).slice(0, 160);
 
@@ -464,15 +508,15 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
     const finalDescription =
       cleanedDesc.length >= 10
         ? cleanedDesc.slice(0, 2000)
-        : `${subLabelEn} (${catLabelEn}) needed at ${location.cityOrVillage}, ${location.district}. ${cleanedDesc}`.trim().slice(0, 2000);
+        : `${subLabelEn} (${catLabelEn}) needed at ${effectiveLoc.cityOrVillage}, ${effectiveLoc.district}. ${cleanedDesc}`.trim().slice(0, 2000);
 
-    const effState = location.state || 'Maharashtra';
+    const effState = effectiveLoc.state || 'Maharashtra';
     const effDistrict =
-      location.district ||
+      effectiveLoc.district ||
       INDIA_STATES_DISTRICTS.find((s) => s.name === effState)?.districts[0]?.name ||
       'Chandrapur';
-    const safeCity = (location.cityOrVillage || effDistrict).slice(0, 100);
-    const resolvedPincode = cleanPin || location.pincode || extractSixDigitPincode(location.label);
+    const safeCity = (effectiveLoc.cityOrVillage || effDistrict).slice(0, 100);
+    const resolvedPincode = cleanPin || effectiveLoc.pincode || extractSixDigitPincode(effectiveLoc.label);
     const baseApproxLabel = buildApproxLocationLabel({
       cityOrVillage: safeCity,
       district: effDistrict,
@@ -522,13 +566,13 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
       const trimmedExactAddress = (
         exactServiceAddress.trim() ||
         employerPrivate?.businessAddress?.trim() ||
-        location.label
+        effectiveLoc.label
       ).slice(0, 320);
       const hasExactVault = trimmedExactAddress.length >= 4;
 
       const res = await createInstantHireRequest(
         {
-          employerUid: user.uid,
+          employerUid: activeUser.uid,
           employerName: customerName.length >= 2 ? customerName : 'Customer',
           customerGenderProtected: genderProtected,
           ...(resolvedLastName && resolvedLastName !== 'Customer'
@@ -550,8 +594,8 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
           approxLocationLabel,
           initialRadiusKm: 2,
           currentRadiusKm: 2,
-          lat: location.lat,
-          lng: location.lng,
+          lat: effectiveLoc.lat,
+          lng: effectiveLoc.lng,
           jobDate,
           startTime,
           duration: selectedSubService.estimatedDuration,
@@ -575,23 +619,23 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
       if (hasExactVault && res.jobId) {
         void saveOrderExactAddress({
           jobId: res.jobId,
-          employerUid: user.uid,
+          employerUid: activeUser.uid,
           exactAddress: trimmedExactAddress,
           landmark: addressLandmark.trim().slice(0, 160),
-          exactLat: location.lat,
-          exactLng: location.lng,
+          exactLat: effectiveLoc.lat,
+          exactLng: effectiveLoc.lng,
         }).catch(() => undefined);
       }
 
-      void recordCustomerOrderPreference(user.uid, {
+      void recordCustomerOrderPreference(activeUser.uid, {
         kind: 'hire',
         categoryOrVehicleType: selectedCategory.canonicalCategory,
         orderTitle: title,
         state: effState,
         district: effDistrict,
         cityOrVillage: safeCity,
-        lat: location.lat,
-        lng: location.lng,
+        lat: effectiveLoc.lat,
+        lng: effectiveLoc.lng,
       }).catch(() => undefined);
 
       const initialMatched = res.notifiedCount;
@@ -1924,6 +1968,11 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1">
                       {tr(lang, 'Pincode (6 digits)', 'पिनकोड (6 अंक)', 'पिनकोड (६ अंक)')}
+                      {orderPincodeResolving && (
+                        <span className="ml-1.5 text-[11px] font-semibold text-[#0B3B75]">
+                          {tr(lang, 'Finding area...', 'क्षेत्र खोज रहे हैं...', 'परिसर शोधत आहे...')}
+                        </span>
+                      )}
                     </label>
                     <input
                       type="text"
@@ -1931,8 +1980,18 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
                       maxLength={6}
                       value={orderPincode}
                       onChange={(e) => {
-                        setOrderPincode(e.target.value.replace(/\D/g, '').slice(0, 6));
+                        const nextPin = e.target.value.replace(/\D/g, '').slice(0, 6);
+                        setOrderPincode(nextPin);
                         if (formError) setFormError('');
+                        if (/^[1-9]\d{5}$/.test(nextPin)) {
+                          void resolveLocationFromPincode(nextPin);
+                        }
+                      }}
+                      onBlur={() => {
+                        const clean = orderPincode.replace(/\D/g, '').slice(0, 6);
+                        if (/^[1-9]\d{5}$/.test(clean) && clean !== location.pincode) {
+                          void resolveLocationFromPincode(clean);
+                        }
                       }}
                       placeholder="442401"
                       className="w-full h-10 px-3 rounded-xl border border-slate-300 text-sm font-mono-tabular text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B3B75]/25 focus:border-[#0B3B75]"

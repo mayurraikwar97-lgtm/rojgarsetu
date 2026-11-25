@@ -17,6 +17,7 @@ import {
 } from '../lib/customProfessionService';
 import { SERVICE_CATALOG_V2 } from '../data/serviceCatalogV2';
 import { useAuth } from '../contexts/AuthContext';
+import { formatUiError } from '../lib/firebase';
 import type { CustomProfessionRecord, Language } from '../types/domain';
 import type { User } from 'firebase/auth';
 
@@ -160,14 +161,16 @@ export const AddProfessionModal: React.FC<AddProfessionModalProps> = ({
       onClose();
     } catch (err) {
       setError(
-        err instanceof Error
-          ? err.message
-          : tr(
-              lang,
-              'Could not add profession right now. Please try again.',
-              'अभी नया पेशा जोड़ा नहीं जा सका। कृपया पुनः प्रयास करें।',
-              'सध्या नवीन व्यवसाय जोडता आला नाही. कृपया पुन्हा प्रयत्न करा.'
-            )
+        formatUiError(
+          err,
+          tr(
+            lang,
+            'Could not add profession right now. Please try again.',
+            'अभी नया पेशा जोड़ा नहीं जा सका। कृपया पुनः प्रयास करें।',
+            'सध्या नवीन व्यवसाय जोडता आला नाही. कृपया पुन्हा प्रयत्न करा.'
+          ),
+          lang
+        )
       );
     } finally {
       setSubmitting(false);

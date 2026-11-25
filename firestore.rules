@@ -351,7 +351,7 @@ service cloud.firestore {
           'workPhotoUrls', 'orderKind', 'pickupLocationLabel', 'pickupLat', 'pickupLng',
           'destinationLocationLabel', 'destinationLat', 'destinationLng', 'transportItemType',
           'photoAnalyzed', 'subService', 'preferredTimeType', 'startingPrice',
-          'status', 'dealStatus', 'acceptedApplicationId',
+          'status', 'requestStatus', 'dealStatus', 'acceptedApplicationId',
           'acceptedWorkerUid', 'notifiedWorkerUids',
           'dispatchBatchIndex', 'dispatchBatchSize', 'lastBatchDispatchedAtMs', 'eligiblePoolCount',
           'approxLocationLabel',
@@ -401,6 +401,7 @@ service cloud.firestore {
         && (!('preferredTimeType' in data) || data.preferredTimeType in ['now', 'later'])
         && optNum(data, 'startingPrice', 0, 500000)
         && data.status in ['open', 'in_progress', 'completed', 'cancelled', 'flagged']
+        && (!('requestStatus' in data) || data.requestStatus in ['PENDING', 'APPROVED', 'ASSIGNED', 'COMPLETED', 'REJECTED', 'CANCELLED'])
         && (!('dealStatus' in data) || isValidDealStatus(data.dealStatus))
         && optId(data, 'acceptedApplicationId')
         && optId(data, 'acceptedWorkerUid')
@@ -1459,6 +1460,7 @@ service cloud.firestore {
         && isValidJob(incoming())
         && incoming().employerUid == request.auth.uid
         && incoming().status == 'open'
+        && (!('requestStatus' in incoming()) || incoming().requestStatus == 'PENDING')
         && incoming().applicationsCount == 0
         && isValidTimestampOnCreate();
       allow update: if isValidId(jobId)
@@ -3199,6 +3201,7 @@ service cloud.firestore {
       // pending/rejected entries are visible only to the creator and authorized Admins.
       allow get: if isValidId(professionId)
         && (
+          resource == null ||
           existing().status == 'approved' ||
           (isVerifiedUser() && existing().createdByUid == request.auth.uid) ||
           isAdmin()
