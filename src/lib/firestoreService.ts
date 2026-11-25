@@ -1000,18 +1000,40 @@ export async function createJobPosting(
       payloadKeys: Object.keys(baseDoc).sort(),
     };
 
-    if (safeKey && safeKey.length >= 8) {
-      const targetRef = doc(db, path, safeKey);
-      const existingSnap = await getDoc(targetRef);
-      if (existingSnap.exists()) {
-        return existingSnap.id;
+    const executeJobWrite = async (): Promise<string> => {
+      if (safeKey && safeKey.length >= 8) {
+        const targetRef = doc(db, path, safeKey);
+        const existingSnap = await getDoc(targetRef);
+        if (existingSnap.exists()) {
+          return existingSnap.id;
+        }
+        await setDoc(targetRef, baseDoc);
+        return safeKey;
       }
-      await setDoc(targetRef, baseDoc);
-      return safeKey;
-    }
 
-    const ref = await addDoc(collection(db, path), baseDoc);
-    return ref.id;
+      const ref = await addDoc(collection(db, path), baseDoc);
+      return ref.id;
+    };
+
+    try {
+      return await executeJobWrite();
+    } catch (writeErr) {
+      const writeCode =
+        writeErr && typeof writeErr === 'object' && 'code' in writeErr
+          ? String((writeErr as { code?: unknown }).code).toLowerCase()
+          : '';
+      const writeMsg = writeErr instanceof Error ? writeErr.message.toLowerCase() : '';
+      if (
+        writeCode.includes('permission-denied') ||
+        writeCode.includes('unauthenticated') ||
+        writeMsg.includes('missing or insufficient permissions')
+      ) {
+        // Retry once after forcing a fresh Firebase Auth ID token in case the session just refreshed
+        await currentUser.getIdToken(true).catch(() => undefined);
+        return await executeJobWrite();
+      }
+      throw writeErr;
+    }
   } catch (err) {
     const rawMsg = err instanceof Error ? err.message : String(err);
     const firebaseCode =

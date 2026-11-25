@@ -47,6 +47,7 @@ export const Header: React.FC<HeaderProps> = ({
   const [mobileOpen, setMobileOpen] = useState(false);
   const [moreOpen, setMoreOpen] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
+  const [accountOpen, setAccountOpen] = useState(false);
   const [fontScale, setFontScale] = useState<'sm' | 'md' | 'lg'>('md');
 
   useEffect(() => {
@@ -59,7 +60,15 @@ export const Header: React.FC<HeaderProps> = ({
     setMobileOpen(false);
     setMoreOpen(false);
     setNotifOpen(false);
+    setAccountOpen(false);
     window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const handleLogout = async () => {
+    setAccountOpen(false);
+    setMobileOpen(false);
+    setNotifOpen(false);
+    await logout();
   };
 
   const languages: { code: Language; label: string }[] = [
@@ -271,8 +280,8 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
 
             {user ? (
-              <div className="hidden sm:flex items-center gap-2 text-slate-100">
-                <span className="inline-flex items-center gap-1 font-medium truncate max-w-[115px]">
+              <div className="flex items-center gap-2 text-slate-100">
+                <span className="hidden sm:inline-flex items-center gap-1 font-medium truncate max-w-[120px]">
                   <UserCheck className="w-3.5 h-3.5 text-emerald-300 shrink-0" />
                   <span className="truncate">{user.displayName?.split(' ')[0] || user.email}</span>
                 </span>
@@ -288,18 +297,18 @@ export const Header: React.FC<HeaderProps> = ({
                 )}
                 <button
                   type="button"
-                  onClick={logout}
-                  className="inline-flex items-center gap-1 text-blue-100 hover:text-white font-medium whitespace-nowrap shrink-0 cursor-pointer"
+                  onClick={handleLogout}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-red-300/40 bg-red-950/40 text-red-100 hover:bg-red-700 hover:text-white font-semibold transition-colors whitespace-nowrap shrink-0 cursor-pointer"
                 >
                   <LogOut className="w-3.5 h-3.5" />
-                  {t.nav.signOut}
+                  <span>{tr(lang, 'Log Out', 'लॉग आउट', 'लॉग आउट')}</span>
                 </button>
               </div>
             ) : (
               <button
                 type="button"
                 onClick={signInWithGoogle}
-                className="hidden sm:inline-flex items-center px-2.5 py-0.5 rounded border border-blue-600 bg-[#0B3B75] text-white font-semibold hover:bg-blue-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                className="inline-flex items-center px-2.5 py-0.5 rounded border border-blue-600 bg-[#0B3B75] text-white font-semibold hover:bg-blue-800 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
               >
                 {t.nav.signIn}
               </button>
@@ -575,9 +584,93 @@ export const Header: React.FC<HeaderProps> = ({
               </div>
             )}
 
+            {/* Always-Visible Account Menu / Log Out Control (Desktop & Mobile Sticky Header) */}
+            {user ? (
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAccountOpen((v) => !v);
+                    setNotifOpen(false);
+                  }}
+                  aria-label={tr(lang, 'Account & Log Out', 'खाता व लॉग आउट', 'खाते व लॉग आउट')}
+                  aria-expanded={accountOpen}
+                  className="inline-flex items-center gap-1.5 h-9 px-2.5 rounded border border-blue-400/70 bg-[#072A54] text-white text-xs font-bold hover:bg-blue-900 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                >
+                  <span className="w-5 h-5 rounded-full bg-[#E06D1B] text-white text-[11px] font-extrabold flex items-center justify-center shrink-0">
+                    {(user.displayName || user.email || 'U').trim().charAt(0).toUpperCase()}
+                  </span>
+                  <span className="hidden sm:inline max-w-[82px] truncate">
+                    {user.displayName?.split(' ')[0] || tr(lang, 'Account', 'खाता', 'खाते')}
+                  </span>
+                  <ChevronDown className="w-3.5 h-3.5 text-blue-200 shrink-0" />
+                </button>
+
+                {accountOpen && (
+                  <div className="absolute right-0 mt-2 w-64 rounded-xl border border-slate-200 bg-white text-slate-900 shadow-xl z-50 overflow-hidden">
+                    <div className="px-4 py-3 bg-slate-50 border-b border-slate-200">
+                      <div className="text-xs font-extrabold text-[#0B3B75] truncate">
+                        {user.displayName || tr(lang, 'Signed-in User', 'लॉगिन उपयोगकर्ता', 'लॉगिन वापरकर्ता')}
+                      </div>
+                      <div className="text-[11px] text-slate-500 truncate mt-0.5">{user.email}</div>
+                    </div>
+                    <div className="py-1.5">
+                      <button
+                        type="button"
+                        onClick={() => handleNav('employer-dashboard')}
+                        className="w-full text-left px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                      >
+                        {tr(lang, 'My Orders & Requests', 'मेरे ऑर्डर और रिक्वेस्ट', 'माझे ऑर्डर व रिक्वेस्ट')}
+                      </button>
+                      {workerProfile && (
+                        <button
+                          type="button"
+                          onClick={() => handleNav('worker-dashboard')}
+                          className="w-full text-left px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
+                        >
+                          {tr(lang, 'Worker Dashboard', 'कामगार डैशबोर्ड', 'कामगार डॅशबोर्ड')}
+                        </button>
+                      )}
+                      {isAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => handleNav('admin')}
+                          className="w-full text-left px-4 py-2 text-xs font-bold text-[#0B3B75] hover:bg-blue-50 cursor-pointer"
+                        >
+                          {t.nav.adminPanel}
+                        </button>
+                      )}
+                    </div>
+                    <div className="p-2 border-t border-slate-200 bg-red-50/40">
+                      <button
+                        type="button"
+                        onClick={handleLogout}
+                        className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-extrabold transition-colors cursor-pointer"
+                      >
+                        <LogOut className="w-4 h-4" />
+                        <span>{tr(lang, 'Log Out / Sign Out', 'लॉग आउट करें', 'लॉग आउट करा')}</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={signInWithGoogle}
+                className="inline-flex items-center justify-center h-9 px-2.5 rounded border border-blue-400/70 bg-[#072A54] text-white text-xs font-bold hover:bg-blue-900 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                {tr(lang, 'Sign In', 'लॉगिन', 'लॉगिन')}
+              </button>
+            )}
+
             <button
               type="button"
-              onClick={() => setMobileOpen((v) => !v)}
+              onClick={() => {
+                setMobileOpen((v) => !v);
+                setAccountOpen(false);
+                setNotifOpen(false);
+              }}
               aria-label="Toggle Menu"
               aria-expanded={mobileOpen}
               className="xl:hidden inline-flex items-center justify-center w-9 h-9 rounded border border-blue-600 bg-[#072A54] text-white hover:bg-blue-900 cursor-pointer shrink-0"
@@ -590,6 +683,36 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Full Mobile / Tablet Navigation Drawer with All 10 Sections */}
         {mobileOpen && (
           <div className="xl:hidden border-t border-blue-900 bg-white text-slate-800 px-4 py-4 space-y-1 max-h-[75vh] overflow-y-auto shadow-xl">
+            {/* Prominent Account / Log Out Card right at the top of the mobile menu */}
+            <div className="mb-3 p-3 rounded-xl border border-slate-200 bg-slate-50 flex items-center justify-between gap-3">
+              {user ? (
+                <>
+                  <div className="min-w-0">
+                    <div className="text-xs font-extrabold text-[#0B3B75] truncate">
+                      {user.displayName || tr(lang, 'Signed In', 'लॉगिन है', 'लॉगिन आहे')}
+                    </div>
+                    <div className="text-[11px] text-slate-500 truncate">{user.email}</div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleLogout}
+                    className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-extrabold whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                    <span>{tr(lang, 'Log Out', 'लॉग आउट', 'लॉग आउट')}</span>
+                  </button>
+                </>
+              ) : (
+                <button
+                  type="button"
+                  onClick={signInWithGoogle}
+                  className="w-full py-2.5 px-3 rounded-lg bg-[#0B3B75] text-sm font-bold text-white hover:bg-[#072A54] cursor-pointer"
+                >
+                  {t.nav.signIn}
+                </button>
+              )}
+            </div>
+
             <p className="px-3 pb-1 text-[11px] font-bold text-[#C25E00]">
               {tr(lang, 'Portal Sections', 'मुख्य विभाग', 'मुख्य विभाग')}
             </p>
@@ -632,16 +755,19 @@ export const Header: React.FC<HeaderProps> = ({
               {user ? (
                 <button
                   type="button"
-                  onClick={logout}
-                  className="w-full py-2.5 px-3 rounded border border-slate-300 text-sm font-semibold text-slate-800 hover:bg-slate-50 cursor-pointer"
+                  onClick={handleLogout}
+                  className="w-full inline-flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg border border-red-200 bg-red-50 text-sm font-bold text-red-700 hover:bg-red-100 cursor-pointer"
                 >
-                  {t.nav.signOut} ({user.email})
+                  <LogOut className="w-4 h-4" />
+                  <span>
+                    {tr(lang, 'Log Out', 'लॉग आउट', 'लॉग आउट')} ({user.email})
+                  </span>
                 </button>
               ) : (
                 <button
                   type="button"
                   onClick={signInWithGoogle}
-                  className="w-full py-2.5 px-3 rounded bg-[#0B3B75] text-sm font-semibold text-white hover:bg-[#072A54] cursor-pointer"
+                  className="w-full py-2.5 px-3 rounded-lg bg-[#0B3B75] text-sm font-semibold text-white hover:bg-[#072A54] cursor-pointer"
                 >
                   {t.nav.signIn}
                 </button>

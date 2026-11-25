@@ -1251,35 +1251,27 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
       );
     }
 
-    if (cleanDesc.length < 10) {
+    if (cleanDesc.length < 3) {
       nextErrors.description = tr(
-        'Please describe the work in at least 10 characters so workers understand your need.',
-        'कृपया काम का विवरण कम से कम 10 अक्षरों में लिखें ताकि कामगार सही जानकारी समझ सकें।',
-        'कृपया कामाचे वर्णन किमान १० अक्षरांत लिहा जेणेकरून कामगाराला काम स्पष्ट समजेल.'
+        'Please briefly describe the work (at least 3 characters).',
+        'कृपया काम का संक्षिप्त विवरण लिखें (कम से कम 3 अक्षर)।',
+        'कृपया कामाचे थोडक्यात वर्णन लिहा (किमान ३ अक्षरे).'
       );
     }
 
-    if (cleanCity.length < 2) {
+    if (cleanCity.length < 2 && !pinnedCoords && cleanPin.length !== 6) {
       nextErrors.cityOrVillage = tr(
-        'Please enter your city, town, or village name (at least 2 characters).',
-        'कृपया अपने शहर, कस्बे या गाँव का नाम लिखें (कम से कम 2 अक्षर)।',
-        'कृपया तुमच्या गाव किंवा शहराचे नाव लिहा (किमान २ अक्षरे).'
+        'Please enter your city/village, detect GPS location, or enter a 6-digit PIN code.',
+        'कृपया अपना शहर/गाँव लिखें, GPS लोकेशन लें, या 6 अंकों का पिनकोड दर्ज करें।',
+        'कृपया तुमचे गाव/शहर लिहा, GPS लोकेशन घ्या, किंवा ६ अंकी पिनकोड टाका.'
       );
     }
 
-    if (!/^[1-9]\d{5}$/.test(cleanPin)) {
+    if (cleanPin.length > 0 && !/^[1-9]\d{5}$/.test(cleanPin)) {
       nextErrors.pincode = tr(
         'Please enter a valid 6-digit pincode (e.g. 442401).',
         'कृपया सही 6 अंकों का पिनकोड दर्ज करें (जैसे 442401)।',
         'कृपया वैध ६ अंकी पिनकोड टाका (उदा. 442401).'
-      );
-    }
-
-    if (cleanArea.length < 2) {
-      nextErrors.workLocationLabel = tr(
-        'Please enter the work area, colony, or landmark.',
-        'कृपया कार्य क्षेत्र, कॉलोनी या पास की पहचान लिखें।',
-        'कृपया कामाचा परिसर, कॉलनी किंवा जवळची खूण लिहा.'
       );
     }
 
@@ -1291,7 +1283,7 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
       );
     }
 
-    if (!/^[6-9]\d{9}$/.test(cleanContactMobile)) {
+    if (cleanContactMobile.length > 0 && !/^[6-9]\d{9}$/.test(cleanContactMobile)) {
       nextErrors.contactMobile = tr(
         'Please enter a valid 10-digit Indian mobile number (starting with 6–9).',
         'कृपया सही 10 अंकों का मोबाइल नंबर लिखें (6–9 से शुरू)।',
@@ -1344,17 +1336,21 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
 
     setSaving(true);
     try {
+      const effectiveCity = cleanCity.length >= 2 ? cleanCity : resolvedDistrict;
+      const effectiveArea = cleanArea.length >= 2 ? cleanArea : effectiveCity;
       const baseApprox = buildApproxLocationLabel({
-        cityOrVillage: cleanCity,
+        cityOrVillage: effectiveCity,
         district: resolvedDistrict,
         state: stateName,
       });
-      const approxLocationLabel = !baseApprox.includes(cleanPin)
-        ? `${baseApprox} (${cleanPin})`.slice(0, 160)
-        : baseApprox.slice(0, 160);
-      const finalWorkLocationLabel = !cleanArea.includes(cleanPin)
-        ? `${cleanArea} · PIN ${cleanPin}`.slice(0, 160)
-        : cleanArea.slice(0, 160);
+      const approxLocationLabel =
+        cleanPin && !baseApprox.includes(cleanPin)
+          ? `${baseApprox} (${cleanPin})`.slice(0, 160)
+          : baseApprox.slice(0, 160);
+      const finalWorkLocationLabel =
+        cleanPin && !effectiveArea.includes(cleanPin)
+          ? `${effectiveArea} · PIN ${cleanPin}`.slice(0, 160)
+          : effectiveArea.slice(0, 160);
       const approxCoords = getApproximateCoordinates(coords.lat, coords.lng);
       const genderProtected = isFemaleCustomerProtected({
         gender: employerProfile?.gender || employerPrivate?.gender,
@@ -1374,7 +1370,7 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
       const trimmedExactAddress = (
         finalWorkLocationLabel ||
         employerPrivate?.businessAddress?.trim() ||
-        `${cleanCity}, ${resolvedDistrict} ${cleanPin}`
+        `${effectiveCity}, ${resolvedDistrict}${cleanPin ? ` ${cleanPin}` : ''}`
       ).slice(0, 300);
       const hasExactVault = trimmedExactAddress.length >= 4;
 
@@ -1393,7 +1389,7 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
         requiredSkills: reqSkills,
         state: stateName,
         district: resolvedDistrict,
-        cityOrVillage: cleanCity.slice(0, 100),
+        cityOrVillage: effectiveCity.slice(0, 100),
         ...(cleanPin ? { pincode: cleanPin } : {}),
         workLocationLabel: approxLocationLabel.slice(0, 160),
         approxLocationLabel: approxLocationLabel.slice(0, 160),
@@ -1435,7 +1431,7 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
           orderTitle: cleanTitle,
           state: stateName,
           district: resolvedDistrict,
-          cityOrVillage: cleanCity,
+          cityOrVillage: effectiveCity,
           lat: coords.lat,
           lng: coords.lng,
         }),

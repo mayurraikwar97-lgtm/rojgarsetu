@@ -1488,7 +1488,7 @@ service cloud.firestore {
               'workPhotoUrls', 'orderKind', 'pickupLocationLabel', 'pickupLat', 'pickupLng',
               'destinationLocationLabel', 'destinationLat', 'destinationLng', 'transportItemType',
               'photoAnalyzed', 'subService', 'preferredTimeType', 'startingPrice',
-              'status', 'dealStatus', 'acceptedApplicationId', 'acceptedWorkerUid',
+              'status', 'requestStatus', 'dealStatus', 'acceptedApplicationId', 'acceptedWorkerUid',
               'notifiedWorkerUids', 'dispatchBatchIndex', 'dispatchBatchSize',
               'lastBatchDispatchedAtMs', 'eligiblePoolCount',
               'approxLocationLabel', 'initialRadiusKm',

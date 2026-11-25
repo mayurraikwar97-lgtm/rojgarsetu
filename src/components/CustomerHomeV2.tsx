@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AirVent,
   AlertCircle,
@@ -10,6 +10,7 @@ import {
   Camera,
   Car,
   CheckCircle2,
+  ChevronDown,
   ChevronRight,
   Clock,
   Crosshair,
@@ -204,6 +205,7 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
   const [gpsLoading, setGpsLoading] = useState(false);
   const [gpsFeedback, setGpsFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [showPinModal, setShowPinModal] = useState(false);
+  const [showLocationEditor, setShowLocationEditor] = useState(false);
   const [pincodeQuery, setPincodeQuery] = useState('');
   const [pincodeBusy, setPincodeBusy] = useState(false);
   const [showAddProfessionModal, setShowAddProfessionModal] = useState(false);
@@ -215,6 +217,7 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
   const [manualArea, setManualArea] = useState('');
   const [exactServiceAddress, setExactServiceAddress] = useState('');
   const [addressLandmark, setAddressLandmark] = useState('');
+  const [showAddressDetails, setShowAddressDetails] = useState(false);
   const [orderPincode, setOrderPincode] = useState('');
   const [orderPincodeResolving, setOrderPincodeResolving] = useState(false);
   const [workPhotoUrls, setWorkPhotoUrls] = useState<string[]>([]);
@@ -224,6 +227,7 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
   const [scheduledTime, setScheduledTime] = useState('10:00');
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
+  const formErrorRef = useRef<HTMLDivElement | null>(null);
 
   // Live Searching State (fair-rotation small batches + staged radius 2 km -> 5 km -> 10 km)
   const [createdOrder, setCreatedOrder] = useState<{
@@ -505,22 +509,29 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
+  const showFormError = (msg: string) => {
+    setFormError(msg);
+    window.setTimeout(() => {
+      formErrorRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }, 30);
+  };
+
   const handleSubmitOrder = async (e: React.FormEvent) => {
     e.preventDefault();
     setFormError('');
 
     if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-      setFormError(formatUiError(new Error('NETWORK_ERROR: Offline'), undefined, lang));
+      showFormError(formatUiError(new Error('NETWORK_ERROR: Offline'), undefined, lang));
       return;
     }
 
     if (!selectedCategory || !selectedSubService) {
-      setFormError(formatUiError(new Error('MISSING_CATEGORY: Category missing'), undefined, lang));
+      showFormError(formatUiError(new Error('MISSING_CATEGORY: Category missing'), undefined, lang));
       return;
     }
 
     if (photoUploading) {
-      setFormError(
+      showFormError(
         tr(
           lang,
           'Please wait until the selected work photos finish uploading.',
@@ -532,21 +543,10 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
     }
 
     const cleanedDesc = workDescription.trim();
-    if (cleanedDesc.length < 4) {
-      setFormError(
-        tr(
-          lang,
-          'Please enter a short work description (at least 4 characters) so workers understand the job.',
-          'कृपया काम का संक्षिप्त विवरण लिखें (कम से कम 4 अक्षर) ताकि कामगार काम समझ सकें।',
-          'कृपया कामाचे थोडक्यात वर्णन लिहा (किमान ४ अक्षरे) जेणेकरून कामगारांना काम समजेल.'
-        )
-      );
-      return;
-    }
 
     const cleanPin = orderPincode.replace(/\D/g, '').slice(0, 6);
     if (cleanPin.length > 0 && !/^[1-9]\d{5}$/.test(cleanPin)) {
-      setFormError(formatUiError(new Error('INVALID_PINCODE: Invalid 6-digit PIN'), undefined, lang));
+      showFormError(formatUiError(new Error('INVALID_PINCODE: Invalid 6-digit PIN'), undefined, lang));
       return;
     }
 
@@ -554,34 +554,26 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
     const trimmedManualArea = manualArea.trim();
     const hasConfirmedGpsOrPin =
       location.source !== 'unset' && location.lat !== null && location.lng !== null;
-    const hasManualCityOrPin = trimmedManualCity.length >= 2 || cleanPin.length === 6;
+    const hasManualLocation =
+      trimmedManualCity.length >= 2 ||
+      trimmedManualArea.length >= 2 ||
+      cleanPin.length === 6 ||
+      Boolean(location.cityOrVillage && location.cityOrVillage.trim().length >= 2);
 
-    if (!hasConfirmedGpsOrPin && !hasManualCityOrPin) {
-      setFormError(
+    if (!hasConfirmedGpsOrPin && !hasManualLocation) {
+      showFormError(
         tr(
           lang,
-          'Please detect your GPS location ("Get My Current Location"), pick a spot on the map, or enter your City/Area and 6-digit PIN code.',
-          'कृपया "मेरा वर्तमान स्थान प्राप्त करें" से GPS लोकेशन लें, मैप पर चुनें, या अपना शहर/क्षेत्र और 6 अंकों का पिनकोड भरें।',
-          'कृपया "माझे सध्याचे लोकेशन मिळवा" दाबून GPS घ्या, नकाशावर निवडा, किंवा तुमचे शहर/परिसर आणि ६ अंकी पिनकोड भरा.'
-        )
-      );
-      return;
-    }
-
-    if (cleanPin.length !== 6 && !location.pincode && !extractSixDigitPincode(location.label)) {
-      setFormError(
-        tr(
-          lang,
-          'Please enter a valid 6-digit PIN code for your service location.',
-          'कृपया अपने काम के स्थान का सही 6 अंकों का पिनकोड दर्ज करें।',
-          'कृपया तुमच्या कामाच्या ठिकाणाचा अचूक ६ अंकी पिनकोड टाका.'
+          'Please tap GPS to detect your location, pick on the map, or enter your Area/City or 6-digit PIN code.',
+          'कृपया GPS से लोकेशन चुनें, मैप पर पिन करें, या अपना शहर/क्षेत्र या 6 अंकों का पिनकोड लिखें।',
+          'कृपया GPS वर टॅप करून लोकेशन घ्या, नकाशावर निवडा, किंवा तुमचा परिसर/शहर किंवा ६ अंकी पिनकोड टाका.'
         )
       );
       return;
     }
 
     if (preferredTimeType === 'later' && !scheduledDate.trim()) {
-      setFormError(
+      showFormError(
         tr(
           lang,
           'Please select a preferred date for your scheduled booking.',
@@ -1423,79 +1415,90 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
         />
       )}
 
-      {/* Top Location, Pincode & Search Strip */}
+      {/* Top Location & Search Strip (Fast, Clean Zomato/Blinkit Style) */}
       <div id="popular-services" className="bg-white border-b border-slate-200/80 scroll-mt-14">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5">
-          {/* Location Display + Quick Pincode/Area Input + GPS / Pin */}
-          <div className="flex flex-col sm:flex-row sm:items-center gap-2 min-w-0 flex-1">
-            <div className="flex items-center justify-between sm:justify-start gap-2 min-w-0">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-2.5 space-y-2">
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-2.5">
+            {/* Compact Tappable Location Selector + 1-Tap GPS */}
+            <div className="flex items-center justify-between sm:justify-start gap-2 min-w-0 flex-1">
               <button
                 type="button"
-                onClick={() => setShowPinModal(true)}
-                className="flex items-center gap-2 min-w-0 text-left group cursor-pointer"
+                onClick={() => setShowLocationEditor((v) => !v)}
+                aria-expanded={showLocationEditor}
+                className="flex items-center gap-2.5 min-w-0 text-left group cursor-pointer py-1"
               >
-                <div className="w-8 h-8 rounded-lg bg-amber-50 border border-amber-200/80 flex items-center justify-center shrink-0">
+                <div className="w-9 h-9 rounded-xl bg-amber-50 border border-amber-200/80 flex items-center justify-center shrink-0">
                   <MapPin className="w-4 h-4 text-[#E06D1B]" />
                 </div>
                 <div className="min-w-0">
-                  <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                    <span>{tr(lang, 'Service Area & Pincode', 'सेवा क्षेत्र व पिनकोड', 'सेवा परिसर व पिनकोड')}</span>
+                  <div className="flex items-center gap-1.5 text-[11px] font-bold text-slate-500">
+                    <span>{tr(lang, 'Location', 'लोकेशन', 'लोकेशन')}</span>
                     {activePincode && (
-                      <span className="px-1.5 py-0.5 rounded bg-blue-50 border border-blue-200 text-[10px] font-mono-tabular font-bold text-[#0B3B75]">
-                        PIN {activePincode}
+                      <span className="font-mono-tabular font-bold text-[#0B3B75]">
+                        · {activePincode}
                       </span>
                     )}
+                    <ChevronDown
+                      className={`w-3.5 h-3.5 text-slate-400 transition-transform ${
+                        showLocationEditor ? 'rotate-180' : ''
+                      }`}
+                    />
                   </div>
-                  <div className="text-xs sm:text-sm font-bold text-[#0B3B75] truncate max-w-[200px] sm:max-w-[260px] group-hover:text-[#E06D1B] transition-colors">
+                  <div className="text-sm font-extrabold text-[#0B3B75] truncate max-w-[190px] sm:max-w-[290px] group-hover:text-[#E06D1B] transition-colors">
                     {location.label ||
                       tr(
                         lang,
-                        'Tap to set your location',
-                        'अपना स्थान सेट करने के लिए टैप करें',
-                        'तुमचे ठिकाण सेट करण्यासाठी टॅप करा'
+                        'Set area or PIN code',
+                        'क्षेत्र या पिनकोड चुनें',
+                        'परिसर किंवा पिनकोड निवडा'
                       )}
                   </div>
-                  {location.lat !== null && location.lng !== null && (
-                    <div className="text-[10px] font-mono-tabular text-slate-500">
-                      {formatCoordinatesLabel(location.lat, location.lng)}
-                    </div>
-                  )}
                 </div>
               </button>
 
-              <div className="flex items-center gap-1.5 shrink-0">
-                <button
-                  type="button"
-                  onClick={handleDetectGps}
-                  disabled={gpsLoading}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#0B3B75] hover:bg-[#072A54] text-xs font-bold text-white transition-colors cursor-pointer disabled:opacity-60"
-                >
-                  <Crosshair className={`w-3.5 h-3.5 text-amber-300 ${gpsLoading ? 'animate-spin' : ''}`} />
-                  <span>
-                    {gpsLoading
-                      ? tr(lang, 'Detecting...', 'खोज रहे हैं...', 'शोधत आहे...')
-                      : tr(
-                          lang,
-                          'Get My Current Location',
-                          'मेरा वर्तमान स्थान प्राप्त करें',
-                          'माझे सध्याचे लोकेशन मिळवा'
-                        )}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setShowPinModal(true)}
-                  className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-xs font-bold text-slate-700 cursor-pointer"
-                >
-                  {tr(lang, 'Map', 'मैप', 'नकाशा')}
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={handleDetectGps}
+                disabled={gpsLoading}
+                className="inline-flex items-center gap-1.5 h-9 px-3 rounded-xl border border-blue-200 bg-blue-50/80 hover:bg-[#0B3B75] text-[#0B3B75] hover:text-white text-xs font-bold transition-colors cursor-pointer disabled:opacity-60 shrink-0"
+              >
+                <Crosshair className={`w-3.5 h-3.5 ${gpsLoading ? 'animate-spin' : ''}`} />
+                <span>
+                  {gpsLoading
+                    ? tr(lang, 'Finding...', 'खोज रहे...', 'शोधत आहे...')
+                    : tr(lang, 'Use GPS', 'GPS लें', 'GPS घ्या')}
+                </span>
+              </button>
             </div>
 
-            {/* Inline Pincode / Area Quick Set */}
+            {/* Clean Search Input (visible on Home) */}
+            {step === 'home' && (
+              <div className="relative w-full md:w-80 shrink-0">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder={tr(
+                    lang,
+                    'Search plumber, electrician, mechanic...',
+                    'प्लंबर, इलेक्ट्रीशियन, मैकेनिक खोजें...',
+                    'प्लंबर, इलेक्ट्रिशियन, मेकॅनिक शोधा...'
+                  )}
+                  className="w-full h-10 pl-10 pr-3.5 rounded-xl border border-slate-200 bg-slate-50 focus:bg-white text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B3B75]/20 focus:border-[#0B3B75]"
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Expandable Quick Area / PIN / Map Bar (keeps header uncluttered until tapped) */}
+          {showLocationEditor && (
             <form
-              onSubmit={handleApplyPincodeOrArea}
-              className="flex items-center gap-1.5 w-full sm:w-auto sm:max-w-[250px]"
+              onSubmit={(e) => {
+                void handleApplyPincodeOrArea(e);
+                setShowLocationEditor(false);
+              }}
+              className="flex flex-wrap items-center gap-2 pt-1 pb-0.5"
             >
               <input
                 type="text"
@@ -1504,46 +1507,36 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
                 maxLength={40}
                 placeholder={tr(
                   lang,
-                  'Enter Pincode / Area (e.g. 442401)',
-                  'पिनकोड / क्षेत्र लिखें (उदा. 442401)',
-                  'पिनकोड / परिसर टाका (उदा. 442401)'
+                  'Enter city, area or 6-digit PIN (e.g. 442401)',
+                  'शहर, क्षेत्र या 6 अंकों का पिनकोड लिखें (उदा. 442401)',
+                  'शहर, परिसर किंवा ६ अंकी पिनकोड टाका (उदा. 442401)'
                 )}
-                className="flex-1 min-w-0 h-9 px-2.5 rounded-lg border border-slate-200 bg-slate-50 focus:bg-white text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B3B75]/20 focus:border-[#0B3B75]"
+                className="flex-1 min-w-[200px] h-10 px-3 rounded-xl border border-slate-300 bg-white text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B3B75]/20 focus:border-[#0B3B75]"
               />
               <button
                 type="submit"
                 disabled={pincodeBusy || pincodeQuery.trim().length < 3}
-                className="h-9 px-2.5 rounded-lg bg-[#0B3B75] hover:bg-[#072A54] text-white text-xs font-bold disabled:opacity-50 cursor-pointer shrink-0"
+                className="h-10 px-4 rounded-xl bg-[#0B3B75] hover:bg-[#072A54] text-white text-xs font-bold disabled:opacity-50 cursor-pointer shrink-0"
               >
-                {pincodeBusy ? '...' : tr(lang, 'Set', 'सेट', 'सेट')}
+                {pincodeBusy ? '...' : tr(lang, 'Apply', 'सेट करें', 'सेट करा')}
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowLocationEditor(false);
+                  setShowPinModal(true);
+                }}
+                className="h-10 px-3.5 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-xs font-bold text-slate-700 cursor-pointer shrink-0"
+              >
+                {tr(lang, 'Pick on Map', 'मैप पर चुनें', 'नकाशावर निवडा')}
               </button>
             </form>
-          </div>
-
-          {/* Service Search Box (visible on Home) */}
-          {step === 'home' && (
-            <div className="relative w-full lg:w-72 shrink-0">
-              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder={tr(
-                  lang,
-                  'Search electrician, plumber, cameraman...',
-                  'इलेक्ट्रीशियन, प्लंबर, कैमरामैन खोजें...',
-                  'इलेक्ट्रिशियन, प्लंबर, कॅमेरामन शोधा...'
-                )}
-                className="w-full h-9 pl-9 pr-3 rounded-lg border border-slate-200 bg-slate-50 focus:bg-white text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B3B75]/25 focus:border-[#0B3B75]"
-              />
-            </div>
           )}
-        </div>
-        {gpsFeedback && (
-          <div className="max-w-6xl mx-auto px-4 sm:px-6 pb-2.5">
+
+          {gpsFeedback && (
             <div
               role={gpsFeedback.type === 'error' ? 'alert' : 'status'}
-              className={`rounded-lg px-3 py-2 text-xs font-semibold flex items-start justify-between gap-2 border ${
+              className={`rounded-xl px-3 py-2 text-xs font-semibold flex items-start justify-between gap-2 border ${
                 gpsFeedback.type === 'error'
                   ? 'bg-red-50 border-red-200 text-red-800'
                   : 'bg-emerald-50 border-emerald-200 text-emerald-900'
@@ -1562,11 +1555,11 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
                 onClick={() => setGpsFeedback(null)}
                 className="text-[11px] font-bold underline shrink-0 cursor-pointer"
               >
-                {tr(lang, 'Dismiss', 'बंद करें', 'बंद करा')}
+                {tr(lang, 'Close', 'बंद', 'बंद')}
               </button>
             </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
 
       {/* Main Content Container */}
@@ -2101,22 +2094,22 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
                 </button>
               </div>
 
-              {/* 1. Work Description */}
+              {/* 1. Work Note (Optional for fast 2-tap booking) */}
               <div className="space-y-1.5">
                 <label className="block text-sm font-bold text-[#0B3B75]">
-                  {tr(lang, 'Work Description', 'काम का विवरण', 'कामाचे थोडक्यात वर्णन')}
+                  {tr(lang, 'Work Details (Optional)', 'काम का विवरण (वैकल्पिक)', 'कामाचे वर्णन (ऐच्छिक)')}
                 </label>
                 <textarea
-                  rows={3}
+                  rows={2}
                   value={workDescription}
                   onChange={(e) => setWorkDescription(e.target.value)}
                   placeholder={tr(
                     lang,
-                    'Describe the issue briefly (e.g., bathroom tap leaking since morning)...',
-                    'काम के बारे में संक्षेप में लिखें (जैसे: बाथरूम का नल सुबह से टपक रहा है)...',
-                    'कामाची थोडक्यात माहिती लिहा (उदा. सकाळपासून बाथरूमचा नळ गळत आहे)...'
+                    'Add a short note if needed (e.g., bathroom tap leaking)...',
+                    'जरूरत हो तो संक्षेप में लिखें (जैसे: बाथरूम का नल टपक रहा है)...',
+                    'हवे असल्यास थोडक्यात लिहा (उदा. बाथरूमचा नळ गळत आहे)...'
                   )}
-                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B3B75]/25 focus:border-[#0B3B75]"
+                  className="w-full rounded-xl border border-slate-300 px-3.5 py-2.5 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B3B75]/20 focus:border-[#0B3B75]"
                 />
               </div>
 
@@ -2135,72 +2128,52 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
                 />
               </div>
 
-              {/* 3. Service Location (GPS + Map Pin + Manual City / Area / PIN Fallback) */}
-              <div className="space-y-2.5">
+              {/* 3. Service Location (Fast, Clean Zomato/Blinkit Card with Straightforward GPS + Quick Manual Entry) */}
+              <div className="space-y-3">
                 <label className="block text-sm font-bold text-[#0B3B75]">
                   {tr(lang, 'Service Location *', 'काम का स्थान *', 'कामाचे ठिकाण *')}
                 </label>
-                <div className="rounded-xl border border-slate-200 bg-slate-50 p-3 space-y-2.5">
+                <div className="rounded-xl border border-slate-200 bg-slate-50/80 p-3.5 space-y-3">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-                    <div className="flex items-start gap-2 min-w-0">
+                    <div className="flex items-start gap-2.5 min-w-0">
                       <MapPin className="w-4 h-4 text-[#E06D1B] shrink-0 mt-0.5" />
                       <div className="min-w-0">
-                        <div className="text-sm font-bold text-slate-900 break-words">
+                        <div className="text-sm font-extrabold text-slate-900 break-words">
                           {location.label ||
                             tr(
                               lang,
-                              'Location not detected yet — use GPS or enter City, Area & PIN below',
-                              'स्थान अभी सेट नहीं है — GPS उपयोग करें या नीचे शहर, क्षेत्र व पिनकोड भरें',
-                              'लोकेशन अद्याप सेट नाही — GPS वापरा किंवा खाली शहर, परिसर व पिनकोड भरा'
+                              'Tap GPS or type your Area / PIN below',
+                              'GPS पर टैप करें या नीचे अपना क्षेत्र / पिनकोड लिखें',
+                              'GPS वर टॅप करा किंवा खाली परिसर / पिनकोड टाका'
                             )}
                         </div>
                         {location.lat !== null && location.lng !== null && (
-                          <div className="text-[11px] font-mono-tabular font-semibold text-[#0B3B75] mt-0.5">
+                          <div className="text-[11px] font-mono-tabular text-slate-500 mt-0.5">
                             {formatCoordinatesLabel(location.lat, location.lng)}
-                            {location.accuracyMeters
-                              ? ` · ±${
-                                  location.accuracyMeters >= 1000
-                                    ? `${(location.accuracyMeters / 1000).toFixed(1)} km`
-                                    : `${Math.round(location.accuracyMeters)} m`
-                                }`
-                              : ''}
                           </div>
                         )}
-                        <div className="text-[11px] text-slate-500 mt-0.5">
-                          {tr(
-                            lang,
-                            'Only approximate area is shown until you confirm a worker.',
-                            'कामगार कन्फर्म करने तक केवल अनुमानित क्षेत्र दिखाया जाएगा।',
-                            'तुम्ही कामगार निश्चित करेपर्यंत फक्त अंदाजे परिसर दाखवला जातो.'
-                          )}
-                        </div>
                       </div>
                     </div>
-                    <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    <div className="flex items-center gap-2 shrink-0">
                       <button
                         type="button"
                         onClick={handleDetectGps}
                         disabled={gpsLoading}
-                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-[#0B3B75] text-white text-xs font-bold hover:bg-[#072A54] cursor-pointer disabled:opacity-60"
+                        className="inline-flex items-center gap-1.5 h-10 px-3.5 rounded-xl bg-[#0B3B75] text-white text-xs font-bold hover:bg-[#072A54] cursor-pointer disabled:opacity-60"
                       >
                         <Crosshair className={`w-3.5 h-3.5 ${gpsLoading ? 'animate-spin' : ''}`} />
                         <span>
                           {gpsLoading
                             ? tr(lang, 'Detecting...', 'खोज रहे हैं...', 'शोधत आहे...')
-                            : tr(
-                                lang,
-                                'Get My Current Location',
-                                'मेरा वर्तमान स्थान प्राप्त करें',
-                                'माझे सध्याचे लोकेशन मिळवा'
-                              )}
+                            : tr(lang, 'Use GPS', 'GPS लोकेशन लें', 'GPS लोकेशन घ्या')}
                         </span>
                       </button>
                       <button
                         type="button"
                         onClick={() => setShowPinModal(true)}
-                        className="px-3 py-2 rounded-lg border border-slate-300 bg-white text-xs font-bold text-slate-700 hover:bg-slate-100 cursor-pointer"
+                        className="h-10 px-3 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-700 hover:bg-slate-100 cursor-pointer"
                       >
-                        {tr(lang, 'Pin Map', 'मैप पिन', 'नकाशा पिन')}
+                        {tr(lang, 'Map', 'मैप', 'नकाशा')}
                       </button>
                     </div>
                   </div>
@@ -2222,128 +2195,110 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
                       <span>{gpsFeedback.message}</span>
                     </div>
                   )}
-                </div>
 
-                {/* Manual City, Area & 6-Digit PIN Code Entry (Works even when GPS is unavailable) */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-1">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      {tr(lang, 'City / Town / Village *', 'शहर / गाँव *', 'शहर / गाव *')}
-                    </label>
-                    <input
-                      type="text"
-                      value={manualCity}
-                      onChange={(e) => {
-                        setManualCity(e.target.value);
-                        if (formError) setFormError('');
-                      }}
-                      maxLength={80}
-                      placeholder={tr(
-                        lang,
-                        'e.g., Chandrapur, Nagpur, Pune',
-                        'जैसे: चंद्रपुर, नागपुर, पुणे',
-                        'उदा. चंद्रपूर, नागपूर, पुणे'
-                      )}
-                      className="w-full h-10 px-3 rounded-xl border border-slate-300 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B3B75]/25 focus:border-[#0B3B75]"
-                    />
+                  {/* Clean 2-Field Quick Location Row */}
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                    <div className="sm:col-span-2">
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        {tr(lang, 'City / Area', 'शहर / क्षेत्र', 'शहर / परिसर')}
+                      </label>
+                      <input
+                        type="text"
+                        value={manualCity}
+                        onChange={(e) => {
+                          setManualCity(e.target.value);
+                          if (formError) setFormError('');
+                        }}
+                        maxLength={80}
+                        placeholder={tr(
+                          lang,
+                          'e.g., Civil Lines, Chandrapur',
+                          'जैसे: सिविल लाइंस, चंद्रपुर',
+                          'उदा. सिव्हिल लाईन्स, चंद्रपूर'
+                        )}
+                        className="w-full h-10 px-3 rounded-xl border border-slate-300 bg-white text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B3B75]/20 focus:border-[#0B3B75]"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        {tr(lang, 'PIN Code', 'पिनकोड', 'पिनकोड')}
+                        {orderPincodeResolving && (
+                          <span className="ml-1.5 text-[11px] font-semibold text-[#0B3B75]">...</span>
+                        )}
+                      </label>
+                      <input
+                        type="text"
+                        inputMode="numeric"
+                        maxLength={6}
+                        value={orderPincode}
+                        onChange={(e) => {
+                          const nextPin = e.target.value.replace(/\D/g, '').slice(0, 6);
+                          setOrderPincode(nextPin);
+                          if (formError) setFormError('');
+                          if (/^[1-9]\d{5}$/.test(nextPin)) {
+                            void resolveLocationFromPincode(nextPin, manualArea || manualCity);
+                          }
+                        }}
+                        onBlur={() => {
+                          const clean = orderPincode.replace(/\D/g, '').slice(0, 6);
+                          if (/^[1-9]\d{5}$/.test(clean) && clean !== location.pincode) {
+                            void resolveLocationFromPincode(clean, manualArea || manualCity);
+                          }
+                        }}
+                        placeholder="442401"
+                        className="w-full h-10 px-3 rounded-xl border border-slate-300 bg-white text-sm font-mono-tabular text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B3B75]/20 focus:border-[#0B3B75]"
+                      />
+                    </div>
                   </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      {tr(lang, 'Area / Locality / Ward', 'क्षेत्र / मोहल्ला / वार्ड', 'परिसर / वॉर्ड / कॉलनी')}
-                    </label>
-                    <input
-                      type="text"
-                      value={manualArea}
-                      onChange={(e) => {
-                        setManualArea(e.target.value);
-                        if (formError) setFormError('');
-                      }}
-                      maxLength={80}
-                      placeholder={tr(
-                        lang,
-                        'e.g., Civil Lines, Gandhi Chowk',
-                        'जैसे: सिविल लाइंस, गांधी चौक',
-                        'उदा. सिव्हिल लाईन्स, गांधी चौक'
-                      )}
-                      className="w-full h-10 px-3 rounded-xl border border-slate-300 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B3B75]/25 focus:border-[#0B3B75]"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      {tr(lang, 'PIN Code (6 digits) *', 'पिनकोड (6 अंक) *', 'पिनकोड (६ अंक) *')}
-                      {orderPincodeResolving && (
-                        <span className="ml-1.5 text-[11px] font-semibold text-[#0B3B75]">
-                          {tr(lang, 'Finding area...', 'क्षेत्र खोज रहे हैं...', 'परिसर शोधत आहे...')}
-                        </span>
-                      )}
-                    </label>
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      maxLength={6}
-                      value={orderPincode}
-                      onChange={(e) => {
-                        const nextPin = e.target.value.replace(/\D/g, '').slice(0, 6);
-                        setOrderPincode(nextPin);
-                        if (formError) setFormError('');
-                        if (/^[1-9]\d{5}$/.test(nextPin)) {
-                          void resolveLocationFromPincode(nextPin, manualArea || manualCity);
-                        }
-                      }}
-                      onBlur={() => {
-                        const clean = orderPincode.replace(/\D/g, '').slice(0, 6);
-                        if (/^[1-9]\d{5}$/.test(clean) && clean !== location.pincode) {
-                          void resolveLocationFromPincode(clean, manualArea || manualCity);
-                        }
-                      }}
-                      placeholder="442401"
-                      className="w-full h-10 px-3 rounded-xl border border-slate-300 text-sm font-mono-tabular text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B3B75]/25 focus:border-[#0B3B75]"
-                    />
-                  </div>
-                </div>
 
-                {/* Exact Service Address & Landmark (Address Locked Until Confirmed) */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-0.5">
+                  {/* Collapsible Optional House / Street & Landmark (keeps default form ultra-clean) */}
                   <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      {tr(
-                        lang,
-                        'Exact House / Street Address (Locked Until Confirmed)',
-                        'सटीक घर / गली पता (कन्फर्म होने तक गोपनीय)',
-                        'अचूक घर / गल्ली पत्ता (निश्चित होईपर्यंत गोपनीय)'
-                      )}
-                    </label>
-                    <input
-                      type="text"
-                      value={exactServiceAddress}
-                      onChange={(e) => setExactServiceAddress(e.target.value)}
-                      maxLength={300}
-                      placeholder={tr(
-                        lang,
-                        'House / Flat No., Street, Colony...',
-                        'मकान / फ्लैट नं., गली, कॉलोनी...',
-                        'घर / फ्लॅट क्र., गल्ली, कॉलनी...'
-                      )}
-                      className="w-full h-10 px-3 rounded-xl border border-slate-300 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B3B75]/25 focus:border-[#0B3B75]"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      {tr(lang, 'Nearby Landmark (Optional)', 'पास की पहचान (वैकल्पिक)', 'जवळची खूण (ऐच्छिक)')}
-                    </label>
-                    <input
-                      type="text"
-                      value={addressLandmark}
-                      onChange={(e) => setAddressLandmark(e.target.value)}
-                      maxLength={140}
-                      placeholder={tr(
-                        lang,
-                        'e.g., Near Hanuman Mandir / Bus Stand',
-                        'जैसे: हनुमान मंदिर / बस स्टैंड के पास',
-                        'उदा. हनुमान मंदिराजवळ / बस स्टँडजवळ'
-                      )}
-                      className="w-full h-10 px-3 rounded-xl border border-slate-300 text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B3B75]/25 focus:border-[#0B3B75]"
-                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowAddressDetails((v) => !v)}
+                      className="inline-flex items-center gap-1 text-xs font-bold text-[#0B3B75] hover:text-[#E06D1B] cursor-pointer"
+                    >
+                      <Plus className={`w-3.5 h-3.5 transition-transform ${showAddressDetails ? 'rotate-45' : ''}`} />
+                      <span>
+                        {tr(
+                          lang,
+                          'Add house no. / landmark (optional, private until confirmed)',
+                          'घर नं. / पहचान जोड़ें (वैकल्पिक, कन्फर्म होने तक गोपनीय)',
+                          'घर क्र. / जवळची खूण जोडा (ऐच्छिक, निश्चित होईपर्यंत गोपनीय)'
+                        )}
+                      </span>
+                    </button>
+
+                    {showAddressDetails && (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 pt-2.5">
+                        <input
+                          type="text"
+                          value={exactServiceAddress}
+                          onChange={(e) => setExactServiceAddress(e.target.value)}
+                          maxLength={300}
+                          placeholder={tr(
+                            lang,
+                            'House / Flat No., Street, Colony...',
+                            'मकान / फ्लैट नं., गली, कॉलोनी...',
+                            'घर / फ्लॅट क्र., गल्ली, कॉलनी...'
+                          )}
+                          className="w-full h-10 px-3 rounded-xl border border-slate-300 bg-white text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B3B75]/20 focus:border-[#0B3B75]"
+                        />
+                        <input
+                          type="text"
+                          value={addressLandmark}
+                          onChange={(e) => setAddressLandmark(e.target.value)}
+                          maxLength={140}
+                          placeholder={tr(
+                            lang,
+                            'Nearby landmark (e.g., Near Bus Stand)',
+                            'पास की पहचान (जैसे: बस स्टैंड के पास)',
+                            'जवळची खूण (उदा. बस स्टँडजवळ)'
+                          )}
+                          className="w-full h-10 px-3 rounded-xl border border-slate-300 bg-white text-sm text-slate-900 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-[#0B3B75]/20 focus:border-[#0B3B75]"
+                        />
+                      </div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -2401,6 +2356,7 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
 
               {formError && (
                 <div
+                  ref={formErrorRef}
                   role="alert"
                   className="rounded-xl bg-red-50 border border-red-200 px-3.5 py-2.5 text-xs font-semibold text-red-700 flex items-start gap-2"
                 >
