@@ -1393,6 +1393,85 @@
         "updatedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["slug", "nameEn", "group", "keywords", "status", "source", "createdByUid", "usageCount", "createdAt", "updatedAt"]
+    },
+    "ShopkeeperListing": {
+      "title": "ShopkeeperListing",
+      "description": "Public Vocal for Local shopkeeper profile with category, address, pincode, timings, optional thumbnail, and ₹500 registration payment status.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string" },
+        "registrationId": { "type": "string", "maxLength": 40 },
+        "shopName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "ownerName": { "type": "string", "minLength": 2, "maxLength": 120 },
+        "shopCategory": { "type": "string", "minLength": 2, "maxLength": 80 },
+        "customCategoryName": { "type": "string", "maxLength": 80 },
+        "purpose": { "type": "string", "enum": ["hire_staff", "promote_local_goods", "both"] },
+        "description": { "type": "string", "maxLength": 600 },
+        "state": { "type": "string", "maxLength": 80 },
+        "district": { "type": "string", "maxLength": 80 },
+        "cityOrVillage": { "type": "string", "maxLength": 100 },
+        "fullAddress": { "type": "string", "minLength": 5, "maxLength": 300 },
+        "pincode": { "type": "string", "pattern": "^[0-9]{6}$" },
+        "approxLat": { "type": "number" },
+        "approxLng": { "type": "number" },
+        "contactPhone": { "type": "string", "pattern": "^[6-9][0-9]{9}$" },
+        "whatsappNumber": { "type": "string", "pattern": "^[6-9][0-9]{9}$" },
+        "openingTime": { "type": "string", "maxLength": 10 },
+        "closingTime": { "type": "string", "maxLength": 10 },
+        "weeklyOff": { "type": "string", "maxLength": 40 },
+        "logoDataUrl": { "type": "string", "maxLength": 160000 },
+        "registrationFeeInr": { "type": "number" },
+        "registrationPaymentStatus": { "type": "string", "enum": ["unpaid", "pending", "verified", "failed", "refunded"] },
+        "paidListingActive": { "type": "boolean" },
+        "paymentReceiptNo": { "type": "string", "maxLength": 60 },
+        "verifiedAtIso": { "type": "string", "maxLength": 60 },
+        "verificationStatus": { "type": "string", "enum": ["pending", "verified", "suspended"] },
+        "vocalForLocalPledge": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerUid", "registrationId", "shopName", "ownerName", "shopCategory", "purpose",
+        "state", "district", "cityOrVillage", "fullAddress", "pincode", "contactPhone",
+        "openingTime", "closingTime", "registrationFeeInr", "registrationPaymentStatus",
+        "paidListingActive", "verificationStatus", "vocalForLocalPledge", "createdAt", "updatedAt"
+      ]
+    },
+    "ShopkeeperRegistrationPayment": {
+      "title": "ShopkeeperRegistrationPayment",
+      "description": "₹500 shopkeeper registration fee payment record linked to Razorpay or UPI verification.",
+      "type": "object",
+      "properties": {
+        "ownerUid": { "type": "string" },
+        "shopId": { "type": "string" },
+        "shopName": { "type": "string", "maxLength": 120 },
+        "ownerName": { "type": "string", "maxLength": 120 },
+        "shopCategory": { "type": "string", "maxLength": 80 },
+        "shopLocation": { "type": "string", "maxLength": 160 },
+        "contactPhoneMasked": { "type": "string", "maxLength": 24 },
+        "registrationId": { "type": "string", "maxLength": 40 },
+        "amountInr": { "type": "number" },
+        "paymentMethod": { "type": "string", "enum": ["gateway", "upi_qr"] },
+        "status": { "type": "string", "enum": ["pending", "verified", "failed", "refunded"] },
+        "orderRef": { "type": "string", "maxLength": 80 },
+        "utrOrGatewayRef": { "type": "string", "maxLength": 120 },
+        "payerUpiOrName": { "type": "string", "maxLength": 120 },
+        "gatewayOrderId": { "type": "string", "maxLength": 120 },
+        "gatewayPaymentId": { "type": "string", "maxLength": 120 },
+        "gatewaySignatureVerified": { "type": "boolean" },
+        "receiptNo": { "type": "string", "maxLength": 60 },
+        "verifiedByUid": { "type": "string", "maxLength": 128 },
+        "verifiedAtIso": { "type": "string", "maxLength": 60 },
+        "adminNotes": { "type": "string", "maxLength": 500 },
+        "termsAccepted": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": [
+        "ownerUid", "shopId", "shopName", "ownerName", "shopCategory", "shopLocation",
+        "contactPhoneMasked", "registrationId", "amountInr", "paymentMethod", "status",
+        "orderRef", "utrOrGatewayRef", "gatewaySignatureVerified", "termsAccepted", "createdAt", "updatedAt"
+      ]
     }
   },
   "firestore": {
@@ -1603,6 +1682,14 @@
     "/customProfessions/{professionId}": {
       "schema": { "$ref": "#/entities/CustomProfession" },
       "description": "Dynamic and worker-submitted custom professions gated by Admin approval before public search, matching, and ad targeting."
+    },
+    "/shopkeeperListings/{shopId}": {
+      "schema": { "$ref": "#/entities/ShopkeeperListing" },
+      "description": "Public Vocal for Local shopkeeper directory profiles filterable by area, district, and 6-digit pincode."
+    },
+    "/shopkeeperPayments/{paymentId}": {
+      "schema": { "$ref": "#/entities/ShopkeeperRegistrationPayment" },
+      "description": "₹500 shopkeeper registration fee payment records with server/admin verification."
     }
   }
 }

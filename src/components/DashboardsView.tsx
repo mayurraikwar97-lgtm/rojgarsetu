@@ -24,6 +24,7 @@ import {
   Radar,
   Shield,
   Star,
+  Store,
   Users,
   Volume2,
   VolumeX,
@@ -38,6 +39,7 @@ import { AdminNotificationDemoPanel } from './AdminNotificationDemoPanel';
 import { AdminAdsManagementPanel } from './AdminAdsManagementPanel';
 import { AdminProfessionsPanel } from './AdminProfessionsPanel';
 import { AdminReferralsPanel } from './AdminReferralsPanel';
+import { AdminShopkeepersPanel } from './AdminShopkeepersPanel';
 import { subscribeAllProfessionsAdmin } from '../lib/customProfessionService';
 import type { CustomProfessionRecord } from '../types/domain';
 import { PaymentStatusBadge } from './WorkerCertificateAndReceipt';
@@ -3881,6 +3883,7 @@ interface AdminDashboardProps {
 type AdminTab =
   | 'workers'
   | 'employers'
+  | 'shopkeepers'
   | 'jobs'
   | 'professions'
   | 'categories'
@@ -4092,6 +4095,7 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
           [
             { id: 'workers', label: `Workers (${workers.length})`, icon: Users },
             { id: 'employers', label: `Employers (${employers.length})`, icon: Briefcase },
+            { id: 'shopkeepers', label: 'Shopkeepers (₹500)', icon: Store },
             { id: 'jobs', label: `Jobs (${jobs.length})`, icon: FileText },
             {
               id: 'professions',
@@ -4113,6 +4117,7 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
         ).map((item) => {
           const Icon = item.icon;
           const isHighlight =
+            item.id === 'shopkeepers' ||
             item.id === 'professions' ||
             item.id === 'notifications' ||
             item.id === 'advertisements' ||
@@ -4138,6 +4143,8 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
           );
         })}
       </div>
+
+      {tab === 'shopkeepers' && <AdminShopkeepersPanel />}
 
       {tab === 'professions' && <AdminProfessionsPanel />}
 

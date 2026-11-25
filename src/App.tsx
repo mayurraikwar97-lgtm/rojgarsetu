@@ -34,6 +34,7 @@ import {
   stopVoiceAlert,
   unlockAudioOnUserGesture,
 } from './lib/voiceAlertEngine';
+import { subscribeShopkeeperListings } from './lib/shopkeeperService';
 import type {
   AiHirePrefill,
   AppNotificationRecord,
@@ -46,6 +47,7 @@ import type {
   PlatformAnnouncement,
   PublicEmployerProfile,
   PublicWorkerProfile,
+  ShopkeeperListing,
   VehicleListing,
   VehicleType,
 } from './types/domain';
@@ -60,6 +62,8 @@ import { CustomerOrdersV2 } from './components/CustomerOrdersV2';
 import { WorkerRegistrationForm } from './components/WorkerRegistrationForm';
 import { EmployerRegistrationForm } from './components/EmployerRegistrationForm';
 import { VehicleRegistrationForm } from './components/VehicleRegistrationForm';
+import { ShopkeeperRegistrationForm } from './components/ShopkeeperRegistrationForm';
+import { LocalShopsView } from './components/LocalShopsView';
 import { AIVoiceAssistantModal } from './components/AIVoiceAssistantModal';
 import { LocalTransportView } from './components/LocalTransportView';
 import { FindWorkersView, PostJobView } from './components/JobBoardViews';
@@ -83,6 +87,7 @@ const VALID_ROUTES: PageRoute[] = [
   'home',
   'hire',
   'transport',
+  'local-shops',
   'find-work',
   'find-workers',
   'skills-training',
@@ -92,6 +97,7 @@ const VALID_ROUTES: PageRoute[] = [
   'register-worker',
   'register-employer',
   'register-vehicle',
+  'register-shopkeeper',
   'post-job',
   'worker-dashboard',
   'employer-dashboard',
@@ -158,6 +164,7 @@ const AppShell: React.FC = () => {
   const [employers, setEmployers] = useState<PublicEmployerProfile[]>([]);
   const [jobs, setJobs] = useState<JobPosting[]>([]);
   const [vehicles, setVehicles] = useState<VehicleListing[]>([]);
+  const [shops, setShops] = useState<ShopkeeperListing[]>([]);
   const [announcements, setAnnouncements] = useState<PlatformAnnouncement[]>([]);
   const [, setAdminAppsCount] = useState(0);
   const [customerApplications, setCustomerApplications] = useState<JobApplication[]>([]);
@@ -643,12 +650,14 @@ const AppShell: React.FC = () => {
     const u3 = subscribeJobs(setJobs);
     const u4 = subscribeAnnouncements(setAnnouncements);
     const u5 = subscribeVehicleListings(setVehicles);
+    const u6 = subscribeShopkeeperListings(setShops);
     return () => {
       u1();
       u2();
       u3();
       u4();
       u5();
+      u6();
     };
   }, []);
 
@@ -884,12 +893,20 @@ const AppShell: React.FC = () => {
           <CustomerHomeV2
             workers={workers}
             jobs={jobs}
+            shops={shops}
             customerApplications={customerApplications}
             quickHireOnly={route === 'hire'}
             onNavigate={(nextRoute, nextCat, targetJobId) => {
               if (targetJobId) setHighlightedJobId(targetJobId);
               navigate(nextRoute, nextCat);
             }}
+          />
+        )}
+        {route === 'local-shops' && (
+          <LocalShopsView
+            shops={shops}
+            initialPincodeOrArea={categoryFilter}
+            onNavigate={(r, cat) => navigate(r, cat)}
           />
         )}
         {route === 'transport' && (
@@ -955,6 +972,9 @@ const AppShell: React.FC = () => {
         )}
         {route === 'register-vehicle' && (
           <VehicleRegistrationForm onNavigate={(r) => navigate(r)} />
+        )}
+        {route === 'register-shopkeeper' && (
+          <ShopkeeperRegistrationForm onNavigate={(r) => navigate(r)} />
         )}
         {route === 'post-job' && <PostJobView workers={workers} onNavigate={(r) => navigate(r)} />}
         {route === 'advertise' && (

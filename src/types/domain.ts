@@ -6,6 +6,7 @@ export type PageRoute =
   | 'home'
   | 'hire'
   | 'transport'
+  | 'local-shops'
   | 'find-work'
   | 'find-workers'
   | 'skills-training'
@@ -15,6 +16,7 @@ export type PageRoute =
   | 'register-worker'
   | 'register-employer'
   | 'register-vehicle'
+  | 'register-shopkeeper'
   | 'post-job'
   | 'worker-dashboard'
   | 'employer-dashboard'
@@ -1205,6 +1207,7 @@ export interface WorkerPayoutSecret {
 
 export type FinancialLedgerEntryType =
   | 'registration_payment'
+  | 'shopkeeper_registration_payment'
   | 'registration_refund'
   | 'referral_reward_credit'
   | 'referral_reward_reversal'
@@ -1283,6 +1286,70 @@ export interface CustomProfessionRecord {
   updatedAt?: unknown;
 }
 
+// ============================================================
+// VOCAL FOR LOCAL — SHOPKEEPER PROFILE & ₹500 REGISTRATION FLOW
+// ============================================================
 
+export type ShopkeeperPurpose = 'hire_staff' | 'promote_local_goods' | 'both';
 
+export interface ShopkeeperListing {
+  id: string; // canonical doc id === ownerUid
+  ownerUid: string;
+  registrationId: string; // e.g., RS-SHOP-XXXXXX
+  shopName: string;
+  ownerName: string;
+  shopCategory: string;
+  customCategoryName?: string;
+  purpose: ShopkeeperPurpose;
+  description?: string;
+  state: string;
+  district: string;
+  cityOrVillage: string;
+  fullAddress: string;
+  pincode: string; // 6-digit Indian pincode
+  approxLat?: number;
+  approxLng?: number;
+  contactPhone: string;
+  whatsappNumber?: string;
+  openingTime: string; // HH:MM e.g. 09:00
+  closingTime: string; // HH:MM e.g. 21:00
+  weeklyOff?: string;
+  logoDataUrl?: string; // optional small compressed JPEG/PNG/WEBP thumbnail
+  registrationFeeInr: number; // fixed ₹500 shopkeeper registration fee
+  registrationPaymentStatus: 'unpaid' | 'pending' | 'verified' | 'failed' | 'refunded';
+  paidListingActive: boolean;
+  paymentReceiptNo?: string;
+  verifiedAtIso?: string;
+  verificationStatus: VerificationStatus;
+  vocalForLocalPledge: boolean;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
 
+export interface ShopkeeperRegistrationPayment {
+  id: string; // canonical doc id === ownerUid
+  ownerUid: string;
+  shopId: string;
+  shopName: string;
+  ownerName: string;
+  shopCategory: string;
+  shopLocation: string;
+  contactPhoneMasked: string;
+  registrationId: string;
+  amountInr: number; // fixed ₹500
+  paymentMethod: PaymentMethodType;
+  status: RegistrationPaymentStatus;
+  orderRef: string;
+  utrOrGatewayRef: string;
+  payerUpiOrName?: string;
+  gatewayOrderId?: string;
+  gatewayPaymentId?: string;
+  gatewaySignatureVerified: boolean;
+  receiptNo?: string;
+  verifiedByUid?: string;
+  verifiedAtIso?: string;
+  adminNotes?: string;
+  termsAccepted: boolean;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}

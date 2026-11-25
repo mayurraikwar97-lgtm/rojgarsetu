@@ -90,6 +90,16 @@ export const Header: React.FC<HeaderProps> = ({
       fullTitle: tr(lang, 'Find Workers', 'कामगार खोजें', 'कामगार शोधा'),
     },
     {
+      id: 'local-shops',
+      label: tr(lang, 'Local Shops', 'स्थानीय दुकानें', 'स्थानिक दुकाने'),
+      fullTitle: tr(
+        lang,
+        'Vocal for Local · Local Shops',
+        'वोकल फॉर लोकल · स्थानीय दुकानें',
+        'व्होकल फॉर लोकल · स्थानिक दुकाने'
+      ),
+    },
+    {
       id: 'skills-training',
       label: tr(lang, 'Skills & Training', 'कौशल एवं प्रशिक्षण', 'कौशल्य व प्रशिक्षण'),
       fullTitle: tr(lang, 'Skills & Training', 'कौशल एवं प्रशिक्षण', 'कौशल्य व प्रशिक्षण'),
@@ -141,6 +151,10 @@ export const Header: React.FC<HeaderProps> = ({
     {
       id: 'register-worker',
       label: tr(lang, 'Worker Registration (₹250)', 'कामगार पंजीकरण (₹250)', 'कामगार नोंदणी (₹250)'),
+    },
+    {
+      id: 'register-shopkeeper',
+      label: tr(lang, 'Shopkeeper Registration', 'दुकानदार पंजीकरण', 'दुकानदार नोंदणी'),
     },
     {
       id: 'register-employer',

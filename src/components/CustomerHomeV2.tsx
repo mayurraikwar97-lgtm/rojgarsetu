@@ -20,6 +20,7 @@ import {
   MapPin,
   Music,
   Paintbrush,
+  Phone,
   Plus,
   Radar,
   RefreshCw,
@@ -27,6 +28,7 @@ import {
   Search,
   Shield,
   Sparkles,
+  Store,
   Sun,
   Tv,
   Users,
@@ -75,6 +77,7 @@ import {
   customProfessionToServiceCategoryV2,
   subscribeApprovedProfessions,
 } from '../lib/customProfessionService';
+import { getShopCategoryLabel } from '../data/shopCategories';
 import type { CustomProfessionRecord } from '../types/domain';
 import type {
   JobApplication,
@@ -83,6 +86,7 @@ import type {
   PageRoute,
   PublicWorkerProfile,
   ServiceRadiusKm,
+  ShopkeeperListing,
 } from '../types/domain';
 import { BrandSloganBanner } from './BrandSloganBanner';
 import { AddProfessionModal } from './AddProfessionModal';
@@ -95,6 +99,7 @@ import { SponsoredAdSlider } from './SponsoredAdSlider';
 interface CustomerHomeV2Props {
   workers: PublicWorkerProfile[];
   jobs: JobPosting[];
+  shops?: ShopkeeperListing[];
   customerApplications: JobApplication[];
   quickHireOnly?: boolean;
   onNavigate: (route: PageRoute, categoryFilter?: string, targetJobId?: string) => void;
@@ -122,6 +127,7 @@ function tr(lang: Language, en: string, hi: string, mr: string): string {
 export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
   workers,
   jobs,
+  shops = [],
   customerApplications,
   quickHireOnly = false,
   onNavigate,
@@ -945,6 +951,25 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
     [location.pincode, location.label]
   );
 
+  const nearbyLocalShops = useMemo(() => {
+    if (shops.length === 0) return [];
+    const pin = activePincode.trim();
+    const distLower = (location.district || '').trim().toLowerCase();
+    const cityLower = (location.cityOrVillage || '').trim().toLowerCase();
+
+    const scored = shops.map((shop) => {
+      let score = shop.paidListingActive || shop.registrationPaymentStatus === 'verified' ? 4 : 0;
+      if (pin && shop.pincode === pin) score += 10;
+      else if (pin && shop.pincode.slice(0, 3) === pin.slice(0, 3)) score += 5;
+      if (distLower && shop.district.toLowerCase().includes(distLower)) score += 3;
+      if (cityLower && shop.cityOrVillage.toLowerCase().includes(cityLower)) score += 2;
+      return { shop, score };
+    });
+
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, 3).map((item) => item.shop);
+  }, [shops, activePincode, location.district, location.cityOrVillage]);
+
   const handleApplyPincodeOrArea = async (e: React.FormEvent) => {
     e.preventDefault();
     const raw = pincodeQuery.trim();
@@ -1015,6 +1040,7 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
           openJobsCount={openJobsCount}
           onFindWork={() => onNavigate('find-work')}
           onFindWorkers={() => onNavigate('find-workers')}
+          onFindShops={() => onNavigate('local-shops', activePincode || location.district || '')}
           onPostJob={() => onNavigate('post-job')}
           onJumpToServices={() => {
             const el = document.getElementById('popular-services');
@@ -1350,6 +1376,127 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
               placement="homepage"
               onNavigate={(r) => onNavigate(r)}
             />
+
+            {/* Vocal for Local · स्थानिककडून सामान (Nearby Local Shops Strip) */}
+            <div className="bg-white border border-amber-200/90 rounded-xl p-4 sm:p-5 space-y-4 shadow-2xs">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 rounded-xl bg-amber-50 border border-amber-200 flex items-center justify-center shrink-0">
+                    <Store className="w-5 h-5 text-[#E06D1B]" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] font-extrabold text-[#15803D]">
+                      <span>{tr(lang, 'Vocal for Local', 'वोकल फॉर लोकल', 'व्होकल फॉर लोकल')}</span>
+                      <span className="text-slate-300">·</span>
+                      <span className="text-[#C25E00]">
+                        {tr(lang, 'Buy from Local Shops', 'स्थानीय से सामान खरीदें', 'स्थानिककडून सामान खरेदी करा')}
+                      </span>
+                    </div>
+                    <h2 className="font-display text-base sm:text-lg font-extrabold text-[#0B3B75] leading-snug">
+                      {activePincode
+                        ? tr(
+                            lang,
+                            `Nearby Local Shops · PIN ${activePincode}`,
+                            `नज़दीकी स्थानीय दुकानें · पिन ${activePincode}`,
+                            `जवळची स्थानिक दुकाने · पिन ${activePincode}`
+                          )
+                        : tr(
+                            lang,
+                            `Local Shops in ${location.district || 'Your Area'}`,
+                            `${location.district || 'आपके क्षेत्र'} की स्थानीय दुकानें`,
+                            `${location.district || 'तुमच्या परिसरातील'} स्थानिक दुकाने`
+                          )}
+                    </h2>
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => onNavigate('local-shops', activePincode || location.district)}
+                    className="px-3.5 py-2 rounded-lg bg-[#0B3B75] hover:bg-[#072A54] text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <span>{tr(lang, 'Browse Local Shops', 'स्थानीय दुकानें देखें', 'स्थानिक दुकाने पहा')}</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onNavigate('register-shopkeeper')}
+                    className="px-3.5 py-2 rounded-lg bg-[#E06D1B] hover:bg-[#c55b10] text-white text-xs font-bold cursor-pointer"
+                  >
+                    {tr(lang, 'Register Shop', 'दुकान पंजीकरण', 'दुकान नोंदवा')}
+                  </button>
+                </div>
+              </div>
+
+              {nearbyLocalShops.length > 0 ? (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                  {nearbyLocalShops.map((shop) => (
+                    <div
+                      key={shop.id}
+                      className="rounded-lg border border-slate-200 bg-[#F8FAFC] p-3 flex flex-col justify-between gap-2.5 hover:border-[#0B3B75] transition-colors"
+                    >
+                      <div className="flex items-start gap-2.5 min-w-0">
+                        {shop.logoDataUrl ? (
+                          <img
+                            src={shop.logoDataUrl}
+                            alt={shop.shopName}
+                            className="w-11 h-11 rounded-lg object-cover border border-slate-200 bg-white shrink-0"
+                          />
+                        ) : (
+                          <div className="w-11 h-11 rounded-lg bg-amber-50 border border-amber-200 flex items-center justify-center shrink-0">
+                            <Store className="w-5 h-5 text-[#E06D1B]" />
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[11px] font-bold text-[#C25E00] truncate">
+                            {shop.customCategoryName || getShopCategoryLabel(shop.shopCategory, lang)}
+                          </div>
+                          <div className="font-display text-sm font-extrabold text-[#0B3B75] truncate">
+                            {shop.shopName}
+                          </div>
+                          <div className="text-[11px] text-slate-600 truncate flex items-center gap-1 mt-0.5">
+                            <MapPin className="w-3 h-3 text-[#E06D1B] shrink-0" />
+                            <span className="truncate">
+                              {shop.cityOrVillage}, {shop.district} · {shop.pincode}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-200/80 text-[11px]">
+                        <span className="text-slate-600 font-medium truncate">
+                          {shop.openingTime} – {shop.closingTime}
+                        </span>
+                        <a
+                          href={`tel:${shop.contactPhone}`}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-[#15803D] hover:bg-[#116830] text-white font-bold shrink-0"
+                        >
+                          <Phone className="w-3 h-3" />
+                          <span>{tr(lang, 'Call', 'कॉल', 'कॉल')}</span>
+                        </a>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="rounded-lg bg-amber-50/60 border border-amber-200/80 px-3.5 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 text-xs text-slate-700">
+                  <span>
+                    {tr(
+                      lang,
+                      'Own a Kirana, Hardware, Medical, Electronics, Garment or any local shop? Create your Vocal for Local shop profile so nearby customers buy local from you.',
+                      'क्या आपकी किराना, हार्डवेयर, मेडिकल, इलेक्ट्रॉनिक्स या कोई स्थानीय दुकान है? अपनी "वोकल फॉर लोकल" दुकान प्रोफ़ाइल जोड़ें और आस-पास के ग्राहकों तक पहुंचें।',
+                      'तुमचे किराणा, हार्डवेअर, मेडिकल, इलेक्ट्रॉनिक्स किंवा कोणतेही स्थानिक दुकान आहे का? "व्होकल फॉर लोकल" अंतर्गत तुमचे दुकान नोंदवा आणि जवळच्या ग्राहकांपर्यंत पोहोचा.'
+                    )}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => onNavigate('register-shopkeeper')}
+                    className="text-xs font-extrabold text-[#0B3B75] hover:text-[#E06D1B] underline whitespace-nowrap shrink-0 cursor-pointer"
+                  >
+                    {tr(lang, 'List Your Shop Now →', 'अभी दुकान जोड़ें →', 'आता दुकान नोंदवा →')}
+                  </button>
+                </div>
+              )}
+            </div>
 
             {/* Compact Worker Callout only in quickHireOnly mode (full Home displays Section 6 below) */}
             {quickHireOnly && (
@@ -2028,6 +2175,7 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
         <HomePublicPortalSections
           jobs={jobs}
           workers={workers}
+          shops={shops}
           onNavigate={onNavigate}
         />
       )}

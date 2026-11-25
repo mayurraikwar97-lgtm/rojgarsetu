@@ -40,6 +40,10 @@ service cloud.firestore {
       return !(k in d) || isValidId(d[k]);
     }
 
+    function optTs(d, k) {
+      return !(k in d) || d[k] is timestamp;
+    }
+
     function optCode(d, k) {
       return !(k in d) || (d[k] is string && d[k].size() >= 4 && d[k].size() <= 32 && d[k].matches('^[A-Z0-9_\\-]+$'));
     }
@@ -355,60 +359,60 @@ service cloud.firestore {
           'applicationsCount', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.employerUid)
-        && data.employerName is string && data.employerName.size() >= 2 && data.employerName.size() <= 160
-        && (!('customerGenderProtected' in data) || data.customerGenderProtected is bool)
-        && (!('customerLastName' in data) || (data.customerLastName is string && data.customerLastName.size() <= 60))
-        && (!('hasExactAddressVault' in data) || data.hasExactAddressVault is bool)
-        && data.title is string && data.title.size() >= 3 && data.title.size() <= 140
-        && data.category is string && data.category.size() >= 2 && data.category.size() <= 80
-        && data.description is string && data.description.size() >= 10 && data.description.size() <= 2000
-        && data.workersRequired is number && data.workersRequired >= 1 && data.workersRequired <= 5000
+        && isStr(data.employerName, 2, 160)
+        && optBool(data, 'customerGenderProtected')
+        && optStr(data, 'customerLastName', 60)
+        && optBool(data, 'hasExactAddressVault')
+        && isStr(data.title, 3, 140)
+        && isStr(data.category, 2, 80)
+        && isStr(data.description, 10, 2000)
+        && isNum(data.workersRequired, 1, 5000)
         && data.requiredSkills is list && data.requiredSkills.size() >= 1 && data.requiredSkills.size() <= 15 && data.requiredSkills[0] is string
-        && data.state is string && data.state.size() >= 2 && data.state.size() <= 80
-        && data.district is string && data.district.size() >= 2 && data.district.size() <= 80
-        && data.cityOrVillage is string && data.cityOrVillage.size() >= 2 && data.cityOrVillage.size() <= 100
-        && data.workLocationLabel is string && data.workLocationLabel.size() >= 2 && data.workLocationLabel.size() <= 160
-        && data.lat is number && data.lat >= -90 && data.lat <= 90
-        && data.lng is number && data.lng >= -180 && data.lng <= 180
-        && (!('jobDate' in data) || (data.jobDate is string && data.jobDate.size() <= 30))
-        && (!('startTime' in data) || (data.startTime is string && data.startTime.size() <= 30))
-        && (!('duration' in data) || (data.duration is string && data.duration.size() <= 60))
+        && isStr(data.state, 2, 80)
+        && isStr(data.district, 2, 80)
+        && isStr(data.cityOrVillage, 2, 100)
+        && isStr(data.workLocationLabel, 2, 160)
+        && isNum(data.lat, -90, 90)
+        && isNum(data.lng, -180, 180)
+        && optStr(data, 'jobDate', 30)
+        && optStr(data, 'startTime', 30)
+        && optStr(data, 'duration', 60)
         && data.workType in ['full_time', 'part_time', 'daily_wage', 'contract', 'temporary', 'urgent', 'bulk']
-        && data.offeredWage is number && data.offeredWage >= 0 && data.offeredWage <= 500000
+        && isNum(data.offeredWage, 0, 500000)
         && data.wageUnit in ['daily', 'monthly', 'hourly', 'contract']
-        && data.paymentTerms is string && data.paymentTerms.size() <= 200
+        && isStr(data.paymentTerms, 0, 200)
         && data.contactPreference in ['platform_message', 'phone_after_confirm']
         && data.isWomenFriendly is bool
         && data.isAccessible is bool
         && data.biddingEnabled is bool
-        && (!('photoAttachment' in data) || (data.photoAttachment is string && data.photoAttachment.size() <= 100000))
-        && (!('workPhotoUrls' in data) || (data.workPhotoUrls is list && data.workPhotoUrls.size() <= 6 && (data.workPhotoUrls.size() == 0 || (data.workPhotoUrls[0] is string && data.workPhotoUrls[0].size() <= 85000))))
+        && optStr(data, 'photoAttachment', 100000)
+        && (!('workPhotoUrls' in data) || (data.workPhotoUrls is list && data.workPhotoUrls.size() <= 6 && (data.workPhotoUrls.size() == 0 || isStr(data.workPhotoUrls[0], 0, 85000))))
         && (!('orderKind' in data) || data.orderKind in ['work', 'bike_transport'])
-        && (!('pickupLocationLabel' in data) || (data.pickupLocationLabel is string && data.pickupLocationLabel.size() <= 160))
-        && (!('pickupLat' in data) || (data.pickupLat is number && data.pickupLat >= -90 && data.pickupLat <= 90))
-        && (!('pickupLng' in data) || (data.pickupLng is number && data.pickupLng >= -180 && data.pickupLng <= 180))
-        && (!('destinationLocationLabel' in data) || (data.destinationLocationLabel is string && data.destinationLocationLabel.size() <= 160))
-        && (!('destinationLat' in data) || (data.destinationLat is number && data.destinationLat >= -90 && data.destinationLat <= 90))
-        && (!('destinationLng' in data) || (data.destinationLng is number && data.destinationLng >= -180 && data.destinationLng <= 180))
+        && optStr(data, 'pickupLocationLabel', 160)
+        && optNum(data, 'pickupLat', -90, 90)
+        && optNum(data, 'pickupLng', -180, 180)
+        && optStr(data, 'destinationLocationLabel', 160)
+        && optNum(data, 'destinationLat', -90, 90)
+        && optNum(data, 'destinationLng', -180, 180)
         && (!('transportItemType' in data) || data.transportItemType in ['person', 'goods'])
-        && (!('photoAnalyzed' in data) || data.photoAnalyzed is bool)
-        && (!('subService' in data) || (data.subService is string && data.subService.size() <= 100))
+        && optBool(data, 'photoAnalyzed')
+        && optStr(data, 'subService', 100)
         && (!('preferredTimeType' in data) || data.preferredTimeType in ['now', 'later'])
-        && (!('startingPrice' in data) || (data.startingPrice is number && data.startingPrice >= 0 && data.startingPrice <= 500000))
+        && optNum(data, 'startingPrice', 0, 500000)
         && data.status in ['open', 'in_progress', 'completed', 'cancelled', 'flagged']
         && (!('dealStatus' in data) || isValidDealStatus(data.dealStatus))
-        && (!('acceptedApplicationId' in data) || isValidId(data.acceptedApplicationId))
-        && (!('acceptedWorkerUid' in data) || isValidId(data.acceptedWorkerUid))
+        && optId(data, 'acceptedApplicationId')
+        && optId(data, 'acceptedWorkerUid')
         && (!('notifiedWorkerUids' in data) || (data.notifiedWorkerUids is list && data.notifiedWorkerUids.size() <= 100))
         && optNum(data, 'dispatchBatchIndex', 0, 100)
         && optNum(data, 'dispatchBatchSize', 1, 50)
         && optNum(data, 'lastBatchDispatchedAtMs', 0, 9999999999999)
         && optNum(data, 'eligiblePoolCount', 0, 10000)
-        && (!('approxLocationLabel' in data) || (data.approxLocationLabel is string && data.approxLocationLabel.size() <= 160))
+        && optStr(data, 'approxLocationLabel', 160)
         && (!('initialRadiusKm' in data) || data.initialRadiusKm in [2, 5, 10, 20, 30])
         && (!('currentRadiusKm' in data) || data.currentRadiusKm in [2, 5, 10, 20, 30])
-        && (!('radiusStageUpdatedAt' in data) || data.radiusStageUpdatedAt is timestamp)
-        && data.applicationsCount is number && data.applicationsCount >= 0 && data.applicationsCount <= 100000
+        && optTs(data, 'radiusStageUpdatedAt')
+        && isNum(data.applicationsCount, 0, 100000)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -432,43 +436,43 @@ service cloud.firestore {
           'createdAt', 'updatedAt'
         ])
         && isValidId(data.jobId)
-        && data.jobTitle is string && data.jobTitle.size() >= 2 && data.jobTitle.size() <= 140
+        && isStr(data.jobTitle, 2, 140)
         && isValidId(data.employerUid)
         && isValidId(data.workerUid)
-        && data.workerRegistrationId is string && data.workerRegistrationId.size() >= 5 && data.workerRegistrationId.size() <= 40
-        && data.workerName is string && data.workerName.size() >= 2 && data.workerName.size() <= 120
-        && data.workerPrimarySkill is string && data.workerPrimarySkill.size() >= 2 && data.workerPrimarySkill.size() <= 80
-        && (!('workerPhotoDocId' in data) || isValidId(data.workerPhotoDocId))
-        && data.proposedWage is number && data.proposedWage >= 0 && data.proposedWage <= 500000
-        && (!('note' in data) || (data.note is string && data.note.size() <= 600))
+        && isStr(data.workerRegistrationId, 5, 40)
+        && isStr(data.workerName, 2, 120)
+        && isStr(data.workerPrimarySkill, 2, 80)
+        && optId(data, 'workerPhotoDocId')
+        && isNum(data.proposedWage, 0, 500000)
+        && optStr(data, 'note', 600)
         && data.status in ['applied', 'invited', 'accepted', 'declined', 'work_completed']
         && (!('dealStatus' in data) || isValidDealStatus(data.dealStatus))
         && (!('initiatedBy' in data) || data.initiatedBy in ['customer_invite', 'customer_broadcast', 'worker_apply'])
-        && (!('jobCategory' in data) || (data.jobCategory is string && data.jobCategory.size() <= 80))
-        && (!('jobDistrict' in data) || (data.jobDistrict is string && data.jobDistrict.size() <= 80))
-        && (!('jobLocationLabel' in data) || (data.jobLocationLabel is string && data.jobLocationLabel.size() <= 160))
-        && (!('jobDate' in data) || (data.jobDate is string && data.jobDate.size() <= 30))
-        && (!('startTime' in data) || (data.startTime is string && data.startTime.size() <= 30))
-        && (!('customerName' in data) || (data.customerName is string && data.customerName.size() <= 160))
-        && (!('customerGenderProtected' in data) || data.customerGenderProtected is bool)
-        && (!('customerLastName' in data) || (data.customerLastName is string && data.customerLastName.size() <= 60))
-        && (!('offerAmount' in data) || (data.offerAmount is number && data.offerAmount >= 0 && data.offerAmount <= 500000))
-        && (!('travelCharges' in data) || (data.travelCharges is number && data.travelCharges >= 0 && data.travelCharges <= 100000))
-        && (!('estimatedArrivalTime' in data) || (data.estimatedArrivalTime is string && data.estimatedArrivalTime.size() <= 80))
-        && (!('offerMessage' in data) || (data.offerMessage is string && data.offerMessage.size() <= 600))
-        && (!('offerSubmittedAt' in data) || data.offerSubmittedAt is timestamp)
-        && (!('agreedPrice' in data) || (data.agreedPrice is number && data.agreedPrice >= 0 && data.agreedPrice <= 500000))
-        && (!('dealConfirmedAt' in data) || data.dealConfirmedAt is timestamp)
-        && (!('onTheWayAt' in data) || data.onTheWayAt is timestamp)
-        && (!('arrivedAt' in data) || data.arrivedAt is timestamp)
-        && (!('workStartedAt' in data) || data.workStartedAt is timestamp)
-        && (!('completedAt' in data) || data.completedAt is timestamp)
-        && (!('cancelledAt' in data) || data.cancelledAt is timestamp)
-        && (!('cancelledByUid' in data) || isValidId(data.cancelledByUid))
-        && (!('quoteRevisionRequested' in data) || data.quoteRevisionRequested is bool)
+        && optStr(data, 'jobCategory', 80)
+        && optStr(data, 'jobDistrict', 80)
+        && optStr(data, 'jobLocationLabel', 160)
+        && optStr(data, 'jobDate', 30)
+        && optStr(data, 'startTime', 30)
+        && optStr(data, 'customerName', 160)
+        && optBool(data, 'customerGenderProtected')
+        && optStr(data, 'customerLastName', 60)
+        && optNum(data, 'offerAmount', 0, 500000)
+        && optNum(data, 'travelCharges', 0, 100000)
+        && optStr(data, 'estimatedArrivalTime', 80)
+        && optStr(data, 'offerMessage', 600)
+        && optTs(data, 'offerSubmittedAt')
+        && optNum(data, 'agreedPrice', 0, 500000)
+        && optTs(data, 'dealConfirmedAt')
+        && optTs(data, 'onTheWayAt')
+        && optTs(data, 'arrivedAt')
+        && optTs(data, 'workStartedAt')
+        && optTs(data, 'completedAt')
+        && optTs(data, 'cancelledAt')
+        && optId(data, 'cancelledByUid')
+        && optBool(data, 'quoteRevisionRequested')
         && data.liveTrackingAuthorized is bool
-        && (!('workerRating' in data) || (data.workerRating is number && data.workerRating >= 1 && data.workerRating <= 5))
-        && (!('employerFeedback' in data) || (data.employerFeedback is string && data.employerFeedback.size() <= 500))
+        && optNum(data, 'workerRating', 1, 5)
+        && optStr(data, 'employerFeedback', 500)
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -1067,31 +1071,31 @@ service cloud.firestore {
         ])
         && isValidId(data.recipientUid)
         && data.recipientRole in ['worker', 'employer', 'admin', 'demo_worker']
-        && (!('senderUid' in data) || isValidId(data.senderUid))
-        && (!('senderName' in data) || (data.senderName is string && data.senderName.size() <= 140))
+        && optId(data, 'senderUid')
+        && optStr(data, 'senderName', 140)
         && data.isDemo is bool
         && data.category in ['matchingJobs', 'nearbyJobs', 'applicationUpdates', 'bookingNotifications', 'announcements']
-        && (!('eventType' in data) || (data.eventType is string && data.eventType.size() <= 60))
+        && optStr(data, 'eventType', 60)
         && (!('toneType' in data) || data.toneType in ['new_job', 'new_offer', 'deal_accepted', 'deal_completed', 'deal_cancelled', 'general'])
         && (!('dealStatus' in data) || isValidDealStatus(data.dealStatus))
-        && data.title is string && data.title.size() >= 2 && data.title.size() <= 160
-        && data.body is string && data.body.size() >= 2 && data.body.size() <= 500
-        && (!('voiceScript' in data) || (data.voiceScript is string && data.voiceScript.size() <= 700))
-        && (!('approxLocationLabel' in data) || (data.approxLocationLabel is string && data.approxLocationLabel.size() <= 160))
-        && (!('distanceKm' in data) || (data.distanceKm is number && data.distanceKm >= 0 && data.distanceKm <= 5000))
-        && (!('customerName' in data) || (data.customerName is string && data.customerName.size() <= 160))
-        && (!('jobCategory' in data) || (data.jobCategory is string && data.jobCategory.size() <= 80))
-        && (!('playSound' in data) || data.playSound is bool)
-        && (!('speakVoice' in data) || data.speakVoice is bool)
-        && (!('metadataLabel' in data) || (data.metadataLabel is string && data.metadataLabel.size() <= 240))
+        && isStr(data.title, 2, 160)
+        && isStr(data.body, 2, 500)
+        && optStr(data, 'voiceScript', 700)
+        && optStr(data, 'approxLocationLabel', 160)
+        && optNum(data, 'distanceKm', 0, 5000)
+        && optStr(data, 'customerName', 160)
+        && optStr(data, 'jobCategory', 80)
+        && optBool(data, 'playSound')
+        && optBool(data, 'speakVoice')
+        && optStr(data, 'metadataLabel', 240)
         && data.language in ['en', 'hi', 'mr']
-        && data.targetRoute is string && data.targetRoute.size() >= 2 && data.targetRoute.size() <= 60
-        && (!('targetJobId' in data) || isValidId(data.targetJobId))
-        && (!('targetApplicationId' in data) || isValidId(data.targetApplicationId))
-        && (!('targetDemoJobId' in data) || isValidId(data.targetDemoJobId))
+        && isStr(data.targetRoute, 2, 60)
+        && optId(data, 'targetJobId')
+        && optId(data, 'targetApplicationId')
+        && optId(data, 'targetDemoJobId')
         && isValidId(data.dedupeKey)
         && data.deliveryStatus in ['sent', 'failed', 'in_app_only']
-        && (!('errorMessage' in data) || (data.errorMessage is string && data.errorMessage.size() <= 400))
+        && optStr(data, 'errorMessage', 400)
         && data.read is bool
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -2652,7 +2656,7 @@ service cloud.firestore {
           'recordedByEmail', 'isDemo', 'createdAt'
         ])
         && data.entryType in [
-          'registration_payment', 'registration_refund',
+          'registration_payment', 'shopkeeper_registration_payment', 'registration_refund',
           'referral_reward_credit', 'referral_reward_reversal', 'withdrawal_payout'
         ]
         && data.direction in ['credit', 'debit']
@@ -3223,6 +3227,187 @@ service cloud.firestore {
         && incoming().slug == existing().slug
         && isValidTimestampOnUpdate();
       allow delete: if isValidId(professionId) && isAdmin();
+    }
+
+    // ============================================================
+    // VOCAL FOR LOCAL — SHOPKEEPER PROFILES & ₹500 PAYMENTS
+    // ============================================================
+
+    function isValidShopkeeperListing(data) {
+      return data.keys().hasAll([
+          'ownerUid', 'registrationId', 'shopName', 'ownerName', 'shopCategory', 'purpose',
+          'state', 'district', 'cityOrVillage', 'fullAddress', 'pincode', 'contactPhone',
+          'openingTime', 'closingTime', 'registrationFeeInr', 'registrationPaymentStatus',
+          'paidListingActive', 'verificationStatus', 'vocalForLocalPledge', 'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid', 'registrationId', 'shopName', 'ownerName', 'shopCategory',
+          'customCategoryName', 'purpose', 'description', 'state', 'district', 'cityOrVillage',
+          'fullAddress', 'pincode', 'approxLat', 'approxLng', 'contactPhone', 'whatsappNumber',
+          'openingTime', 'closingTime', 'weeklyOff', 'logoDataUrl', 'registrationFeeInr',
+          'registrationPaymentStatus', 'paidListingActive', 'paymentReceiptNo', 'verifiedAtIso',
+          'verificationStatus', 'vocalForLocalPledge', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerUid)
+        && isStr(data.registrationId, 4, 40)
+        && isStr(data.shopName, 2, 120)
+        && isStr(data.ownerName, 2, 120)
+        && isStr(data.shopCategory, 2, 80)
+        && optStr(data, 'customCategoryName', 80)
+        && data.purpose in ['hire_staff', 'promote_local_goods', 'both']
+        && optStr(data, 'description', 600)
+        && isStr(data.state, 2, 80)
+        && isStr(data.district, 2, 80)
+        && isStr(data.cityOrVillage, 2, 100)
+        && isStr(data.fullAddress, 5, 300)
+        && data.pincode is string && data.pincode.matches('^[0-9]{6}$')
+        && optNum(data, 'approxLat', -90, 90)
+        && optNum(data, 'approxLng', -180, 180)
+        && data.contactPhone is string && data.contactPhone.matches('^[6-9][0-9]{9}$')
+        && (!('whatsappNumber' in data) || (data.whatsappNumber is string && data.whatsappNumber.matches('^[6-9][0-9]{9}$')))
+        && isStr(data.openingTime, 4, 10)
+        && isStr(data.closingTime, 4, 10)
+        && optStr(data, 'weeklyOff', 40)
+        && (!('logoDataUrl' in data) || (isStr(data.logoDataUrl, 30, 160000) && data.logoDataUrl.matches('^data:image/(jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=]+$')))
+        && data.registrationFeeInr == 500
+        && data.registrationPaymentStatus in ['unpaid', 'pending', 'verified', 'failed', 'refunded']
+        && data.paidListingActive is bool
+        && optStr(data, 'paymentReceiptNo', 60)
+        && optStr(data, 'verifiedAtIso', 60)
+        && data.verificationStatus in ['pending', 'verified', 'suspended']
+        && data.vocalForLocalPledge is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function isValidShopkeeperPayment(data) {
+      return data.keys().hasAll([
+          'ownerUid', 'shopId', 'shopName', 'ownerName', 'shopCategory', 'shopLocation',
+          'contactPhoneMasked', 'registrationId', 'amountInr', 'paymentMethod', 'status',
+          'orderRef', 'utrOrGatewayRef', 'gatewaySignatureVerified', 'termsAccepted',
+          'createdAt', 'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerUid', 'shopId', 'shopName', 'ownerName', 'shopCategory', 'shopLocation',
+          'contactPhoneMasked', 'registrationId', 'amountInr', 'paymentMethod', 'status',
+          'orderRef', 'utrOrGatewayRef', 'payerUpiOrName', 'gatewayOrderId', 'gatewayPaymentId',
+          'gatewaySignatureVerified', 'receiptNo', 'verifiedByUid', 'verifiedAtIso',
+          'adminNotes', 'termsAccepted', 'createdAt', 'updatedAt'
+        ])
+        && isValidId(data.ownerUid)
+        && isValidId(data.shopId)
+        && isStr(data.shopName, 2, 120)
+        && isStr(data.ownerName, 2, 120)
+        && isStr(data.shopCategory, 2, 80)
+        && isStr(data.shopLocation, 2, 160)
+        && isStr(data.contactPhoneMasked, 4, 24)
+        && isStr(data.registrationId, 4, 40)
+        && data.amountInr == 500
+        && data.paymentMethod in ['gateway', 'upi_qr']
+        && data.status in ['pending', 'verified', 'failed', 'refunded']
+        && isStr(data.orderRef, 4, 80)
+        && isStr(data.utrOrGatewayRef, 4, 120)
+        && optStr(data, 'payerUpiOrName', 120)
+        && optStr(data, 'gatewayOrderId', 120)
+        && optStr(data, 'gatewayPaymentId', 120)
+        && data.gatewaySignatureVerified is bool
+        && optStr(data, 'receiptNo', 60)
+        && optStr(data, 'verifiedByUid', 128)
+        && optStr(data, 'verifiedAtIso', 60)
+        && optStr(data, 'adminNotes', 500)
+        && data.termsAccepted is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    match /shopkeeperListings/{shopId} {
+      allow get: if isValidId(shopId);
+      allow list: if true;
+      allow create: if isValidId(shopId)
+        && isOwner(shopId)
+        && isValidShopkeeperListing(incoming())
+        && incoming().ownerUid == request.auth.uid
+        && incoming().registrationFeeInr == 500
+        && incoming().verificationStatus == 'pending'
+        && incoming().registrationPaymentStatus in ['unpaid', 'pending']
+        && incoming().paidListingActive == false
+        && !('paymentReceiptNo' in incoming())
+        && !('verifiedAtIso' in incoming())
+        && isValidTimestampOnCreate();
+      allow update: if isValidId(shopId)
+        && isVerifiedUser()
+        && isValidShopkeeperListing(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().registrationId == existing().registrationId
+        && incoming().registrationFeeInr == existing().registrationFeeInr
+        && (
+          isAdmin() ||
+          (
+            isOwner(existing().ownerUid)
+            && existing().verificationStatus != 'suspended'
+            && incoming().verificationStatus == existing().verificationStatus
+            && incoming().paidListingActive == existing().paidListingActive
+            && (
+              incoming().registrationPaymentStatus == existing().registrationPaymentStatus ||
+              (existing().registrationPaymentStatus in ['unpaid', 'failed'] && incoming().registrationPaymentStatus == 'pending')
+            )
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'shopName', 'ownerName', 'shopCategory', 'customCategoryName', 'purpose',
+              'description', 'state', 'district', 'cityOrVillage', 'fullAddress', 'pincode',
+              'approxLat', 'approxLng', 'contactPhone', 'whatsappNumber', 'openingTime',
+              'closingTime', 'weeklyOff', 'logoDataUrl', 'vocalForLocalPledge',
+              'registrationPaymentStatus', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isValidId(shopId) && isAdmin();
+    }
+
+    match /shopkeeperPayments/{paymentId} {
+      allow get: if isValidId(paymentId)
+        && isVerifiedUser()
+        && (isAdmin() || existing().ownerUid == request.auth.uid);
+      allow list: if isVerifiedUser()
+        && (isAdmin() || existing().ownerUid == request.auth.uid);
+      allow create: if isValidId(paymentId)
+        && isVerifiedUser()
+        && isValidShopkeeperPayment(incoming())
+        && isValidTimestampOnCreate()
+        && (
+          isAdmin() ||
+          (
+            paymentId == request.auth.uid
+            && incoming().ownerUid == request.auth.uid
+            && incoming().shopId == request.auth.uid
+            && incoming().amountInr == 500
+            && incoming().status == 'pending'
+            && incoming().gatewaySignatureVerified == false
+            && !('receiptNo' in incoming())
+            && !('verifiedByUid' in incoming())
+          )
+        );
+      allow update: if isValidId(paymentId)
+        && isVerifiedUser()
+        && isValidShopkeeperPayment(incoming())
+        && isValidTimestampOnUpdate()
+        && incoming().ownerUid == existing().ownerUid
+        && incoming().shopId == existing().shopId
+        && (
+          isAdmin() ||
+          (
+            isOwner(existing().ownerUid)
+            && existing().status in ['pending', 'failed']
+            && incoming().status == 'pending'
+            && incoming().amountInr == existing().amountInr
+            && incoming().gatewaySignatureVerified == false
+            && incoming().diff(existing()).affectedKeys().hasOnly([
+              'paymentMethod', 'orderRef', 'utrOrGatewayRef', 'payerUpiOrName',
+              'gatewayOrderId', 'gatewayPaymentId', 'status', 'termsAccepted', 'updatedAt'
+            ])
+          )
+        );
+      allow delete: if isValidId(paymentId) && isAdmin();
     }
   }
 }

@@ -14,6 +14,7 @@ import {
   MapPin,
   Search,
   ShieldCheck,
+  Store,
   UserPlus,
   Users,
 } from 'lucide-react';
@@ -24,7 +25,13 @@ import {
   type SchemeAudience,
 } from '../data/govtSchemes';
 import { useLanguage } from '../i18n/LanguageContext';
-import type { JobPosting, Language, PageRoute, PublicWorkerProfile } from '../types/domain';
+import type {
+  JobPosting,
+  Language,
+  PageRoute,
+  PublicWorkerProfile,
+  ShopkeeperListing,
+} from '../types/domain';
 import { BrandSloganBanner } from './BrandSloganBanner';
 import { RojgarSetuLogo } from './RojgarSetuLogo';
 import gandhiPortrait from '../assets/images/gandhi_dignity_labour_1794635762419.jpg';
@@ -42,6 +49,7 @@ interface HomeIdentityHeroProps {
   openJobsCount: number;
   onFindWork: () => void;
   onFindWorkers: () => void;
+  onFindShops: () => void;
   onPostJob: () => void;
   onJumpToServices: () => void;
 }
@@ -51,6 +59,7 @@ export const HomeIdentityHero: React.FC<HomeIdentityHeroProps> = ({
   openJobsCount,
   onFindWork,
   onFindWorkers,
+  onFindShops,
   onPostJob,
   onJumpToServices,
 }) => {
@@ -104,23 +113,23 @@ export const HomeIdentityHero: React.FC<HomeIdentityHeroProps> = ({
               </div>
             </div>
 
-            {/* Section 4: Clear Primary Actions ("कामगार शोधा", "कामाची जाहिरात टाका", "काम शोधा") */}
+            {/* Section 4: Clear Primary Actions ("कामगार शोधा", "कामाची जाहिरात टाका", "काम शोधा", "दुकान शोधा") */}
             <div className="space-y-3.5">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 max-w-3xl">
+              <div className="grid grid-cols-2 xl:grid-cols-4 gap-2.5 max-w-4xl">
                 <button
                   type="button"
                   onClick={onJumpToServices}
-                  className="min-h-[50px] px-4 py-3 rounded-lg bg-[#E06D1B] hover:bg-[#c55b10] text-white font-display text-sm sm:text-base font-extrabold inline-flex items-center justify-center gap-2 shadow-sm transition-colors cursor-pointer"
+                  className="min-h-[50px] px-3 py-3 rounded-lg bg-[#E06D1B] hover:bg-[#c55b10] text-white font-display text-[13px] sm:text-sm font-extrabold inline-flex items-center justify-center gap-1.5 shadow-sm transition-colors cursor-pointer whitespace-nowrap"
                 >
                   <Search className="w-4 h-4 text-white shrink-0" />
                   <span>{tr(lang, 'Find Workers', 'कामगार खोजें', 'कामगार शोधा')}</span>
-                  <ArrowRight className="w-4 h-4 shrink-0" />
+                  <ArrowRight className="w-3.5 h-3.5 shrink-0" />
                 </button>
 
                 <button
                   type="button"
                   onClick={onPostJob}
-                  className="min-h-[50px] px-4 py-3 rounded-lg bg-[#15803D] hover:bg-[#116830] text-white font-display text-sm sm:text-base font-extrabold inline-flex items-center justify-center gap-2 shadow-sm transition-colors cursor-pointer"
+                  className="min-h-[50px] px-3 py-3 rounded-lg bg-[#15803D] hover:bg-[#116830] text-white font-display text-[13px] sm:text-sm font-extrabold inline-flex items-center justify-center gap-1.5 shadow-sm transition-colors cursor-pointer whitespace-nowrap"
                 >
                   <UserPlus className="w-4 h-4 text-emerald-100 shrink-0" />
                   <span>{tr(lang, 'Post a Job', 'काम पोस्ट करें', 'कामाची जाहिरात टाका')}</span>
@@ -129,10 +138,19 @@ export const HomeIdentityHero: React.FC<HomeIdentityHeroProps> = ({
                 <button
                   type="button"
                   onClick={onFindWork}
-                  className="min-h-[50px] px-4 py-3 rounded-lg bg-[#0B3B75] hover:bg-[#072A54] text-white font-display text-sm sm:text-base font-extrabold inline-flex items-center justify-center gap-2 shadow-sm transition-colors cursor-pointer"
+                  className="min-h-[50px] px-3 py-3 rounded-lg bg-[#0B3B75] hover:bg-[#072A54] text-white font-display text-[13px] sm:text-sm font-extrabold inline-flex items-center justify-center gap-1.5 shadow-sm transition-colors cursor-pointer whitespace-nowrap"
                 >
                   <Briefcase className="w-4 h-4 text-amber-300 shrink-0" />
                   <span>{tr(lang, 'Find Work', 'काम खोजें', 'काम शोधा')}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={onFindShops}
+                  className="min-h-[50px] px-3 py-3 rounded-lg bg-amber-50 hover:bg-amber-100 border-2 border-[#E06D1B] text-[#0B3B75] font-display text-[13px] sm:text-sm font-extrabold inline-flex items-center justify-center gap-1.5 shadow-sm transition-colors cursor-pointer whitespace-nowrap"
+                >
+                  <Store className="w-4 h-4 text-[#E06D1B] shrink-0" />
+                  <span>{tr(lang, 'Find Shops', 'दुकान खोजें', 'दुकान शोधा')}</span>
                 </button>
               </div>
 
@@ -265,11 +283,13 @@ export const HomeIdentityHero: React.FC<HomeIdentityHeroProps> = ({
 interface HomePublicPortalSectionsProps {
   jobs: JobPosting[];
   workers: PublicWorkerProfile[];
+  shops?: ShopkeeperListing[];
   onNavigate: (route: PageRoute, categoryFilter?: string, targetJobId?: string) => void;
 }
 
 export const HomePublicPortalSections: React.FC<HomePublicPortalSectionsProps> = ({
   jobs,
+  shops = [],
   onNavigate,
 }) => {
   const { lang } = useLanguage();
@@ -299,25 +319,25 @@ export const HomePublicPortalSections: React.FC<HomePublicPortalSectionsProps> =
             <h2 className="font-display text-2xl font-extrabold text-[#0B3B75] mt-0.5">
               {tr(
                 lang,
-                'Worker Registration & Employer Registration',
-                'कामगार पंजीकरण एवं नियोक्ता पंजीकरण',
-                'कामगार नोंदणी व नियोक्ता नोंदणी'
+                'Worker, Shopkeeper & Employer Registration',
+                'कामगार, दुकानदार एवं नियोक्ता पंजीकरण',
+                'कामगार, दुकानदार व नियोक्ता नोंदणी'
               )}
             </h2>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             {/* Worker Registration Card */}
             <div className="rounded-lg border border-slate-200 bg-[#F8FAFC] p-6 flex flex-col justify-between gap-5">
               <div className="space-y-2.5">
                 <div className="flex items-center gap-2 text-xs font-bold text-[#15803D]">
-                  <UserPlus className="w-4 h-4" />
+                  <UserPlus className="w-4 h-4 shrink-0" />
                   <span>
                     {tr(
                       lang,
-                      '₹250 One-Time · Digital Worker ID & Zero Hidden Charges',
-                      '₹250 एकमुश्त · डिजिटल आईडी कार्ड व कोई छिपा शुल्क नहीं',
-                      'फक्त ₹250 एकवेळ · डिजिटल ओळखपत्र व शून्य लपविलेले शुल्क'
+                      'Worker Fee ₹250 · Digital Worker ID & Zero Hidden Charges',
+                      'कामगार शुल्क ₹250 · डिजिटल आईडी कार्ड व कोई छिपा शुल्क नहीं',
+                      'कामगार नोंदणी ₹250 · डिजिटल ओळखपत्र व शून्य लपविलेले शुल्क'
                     )}
                   </span>
                 </div>
@@ -343,7 +363,7 @@ export const HomePublicPortalSections: React.FC<HomePublicPortalSectionsProps> =
                   </span>
                   <span className="inline-flex items-center gap-1">
                     <CheckCircle2 className="w-3.5 h-3.5 text-[#15803D]" />
-                    {tr(lang, '0% Commission · No Monthly Fee', '0% कमीशन · मासिक शुल्क नहीं', '0% कमिशन · मासिक शुल्क नाही')}
+                    {tr(lang, '0% Commission', '0% कमीशन', '0% कमिशन')}
                   </span>
                 </div>
               </div>
@@ -351,16 +371,81 @@ export const HomePublicPortalSections: React.FC<HomePublicPortalSectionsProps> =
                 <button
                   type="button"
                   onClick={() => onNavigate('register-worker')}
-                  className="px-5 py-2.5 rounded-md bg-[#0B3B75] hover:bg-[#072A54] text-white text-sm font-bold transition-colors cursor-pointer"
+                  className="px-4 py-2.5 rounded-md bg-[#0B3B75] hover:bg-[#072A54] text-white text-sm font-bold transition-colors cursor-pointer"
                 >
                   {tr(lang, 'Register as Worker', 'कामगार पंजीकरण करें', 'कामगार नोंदणी करा')}
                 </button>
                 <button
                   type="button"
                   onClick={() => onNavigate('register-vehicle')}
-                  className="px-4 py-2.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-[#0B3B75] text-sm font-bold transition-colors cursor-pointer"
+                  className="px-3.5 py-2.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-[#0B3B75] text-xs font-bold transition-colors cursor-pointer"
                 >
-                  {tr(lang, 'Register Bike / Auto / Tempo', 'बाइक / ऑटो / टेम्पो जोड़ें', 'बाईक / ऑटो / टेम्पो नोंदवा')}
+                  {tr(lang, 'Bike / Auto / Tempo', 'बाइक / ऑटो / टेम्पो', 'बाईक / ऑटो / टेम्पो')}
+                </button>
+              </div>
+            </div>
+
+            {/* Shopkeeper Registration Card (Vocal for Local · स्थानिककडून सामान) */}
+            <div className="rounded-lg border-2 border-[#E06D1B]/40 bg-amber-50/35 p-6 flex flex-col justify-between gap-5">
+              <div className="space-y-2.5">
+                <div className="flex items-center gap-2 text-xs font-bold text-[#C25E00]">
+                  <Store className="w-4 h-4 shrink-0" />
+                  <span>
+                    {tr(
+                      lang,
+                      'Vocal for Local · Buy from Local Shops',
+                      'वोकल फॉर लोकल · स्थानीय से सामान',
+                      'व्होकल फॉर लोकल · स्थानिककडून सामान'
+                    )}
+                  </span>
+                </div>
+                <h3 className="font-display text-xl font-bold text-[#0B3B75]">
+                  {tr(
+                    lang,
+                    'Register Your Local Shop',
+                    'अपनी स्थानीय दुकान जोड़ें',
+                    'तुमचे स्थानिक दुकान नोंदवा'
+                  )}
+                </h3>
+                <p className="text-sm text-slate-700 leading-relaxed">
+                  {tr(
+                    lang,
+                    'Promote your local shop and goods to nearby customers ("Buy from Local Shops") or hire local staff directly with pincode visibility and zero middlemen.',
+                    '“स्थानीय से सामान” अभियान के तहत अपने पिनकोड के ग्राहकों तक दुकान व सामान पहुंचाएं और सीधे स्थानीय स्टाफ हायर करें।',
+                    '“स्थानिककडून सामान” अभियानांतर्गत तुमच्या पिनकोडमधील ग्राहकांपर्यंत दुकान व वस्तू पोहोचवा किंवा थेट स्थानिक कामगार शोधा.'
+                  )}
+                </p>
+                <div className="flex flex-wrap gap-x-3 gap-y-1 pt-1 text-[11px] font-semibold text-slate-700">
+                  <span className="inline-flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-[#15803D]" />
+                    {tr(lang, 'Pincode Visibility', 'पिनकोड अनुसार खोज', 'पिनकोडनुसार शोध')}
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5 text-[#15803D]" />
+                    {tr(lang, 'Direct Call & WhatsApp', 'सीधा कॉल व WhatsApp', 'थेट कॉल व WhatsApp')}
+                  </span>
+                  {shops.length > 0 && (
+                    <span className="inline-flex items-center gap-1 font-mono-tabular text-[#0B3B75]">
+                      <CheckCircle2 className="w-3.5 h-3.5 text-[#E06D1B]" />
+                      {shops.length} {tr(lang, 'Local Shops Live', 'दुकानें लाइव', 'दुकाने लाइव्ह')}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-2.5">
+                <button
+                  type="button"
+                  onClick={() => onNavigate('register-shopkeeper')}
+                  className="px-4 py-2.5 rounded-md bg-[#E06D1B] hover:bg-[#c55b10] text-white text-sm font-bold transition-colors cursor-pointer"
+                >
+                  {tr(lang, 'Register Shop', 'दुकान पंजीकरण', 'दुकान नोंदवा')}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onNavigate('local-shops')}
+                  className="px-3.5 py-2.5 rounded-md border border-[#15803D] bg-white hover:bg-emerald-50 text-[#15803D] text-xs font-bold transition-colors cursor-pointer"
+                >
+                  {tr(lang, 'Browse Local Shops', 'स्थानीय दुकानें देखें', 'स्थानिक दुकाने पहा')}
                 </button>
               </div>
             </div>
@@ -368,9 +453,9 @@ export const HomePublicPortalSections: React.FC<HomePublicPortalSectionsProps> =
             {/* Employer Registration Card */}
             <div className="rounded-lg border border-slate-200 bg-[#F8FAFC] p-6 flex flex-col justify-between gap-5">
               <div className="space-y-2.5">
-                <div className="flex items-center gap-2 text-xs font-bold text-[#C25E00]">
-                  <Building2 className="w-4 h-4" />
-                  <span>{tr(lang, 'For Households, Shops, Contractors & MSMEs', 'परिवार, दुकान, ठेकेदार एवं MSME हेतु', 'कुटुंब, दुकानदार, कंत्राटदार व MSME साठी')}</span>
+                <div className="flex items-center gap-2 text-xs font-bold text-[#0B3B75]">
+                  <Building2 className="w-4 h-4 shrink-0" />
+                  <span>{tr(lang, 'For Households, Contractors & MSMEs', 'परिवार, ठेकेदार एवं MSME हेतु', 'कुटुंब, कंत्राटदार व MSME साठी')}</span>
                 </div>
                 <h3 className="font-display text-xl font-bold text-[#0B3B75]">
                   {tr(lang, 'Register as an Employer', 'नियोक्ता / ग्राहक पंजीकरण करें', 'नियोक्ता / ग्राहक नोंदणी करा')}
@@ -388,16 +473,16 @@ export const HomePublicPortalSections: React.FC<HomePublicPortalSectionsProps> =
                 <button
                   type="button"
                   onClick={() => onNavigate('register-employer')}
-                  className="px-5 py-2.5 rounded-md bg-[#E06D1B] hover:bg-[#c55b10] text-white text-sm font-bold transition-colors cursor-pointer"
+                  className="px-4 py-2.5 rounded-md bg-[#15803D] hover:bg-[#116830] text-white text-sm font-bold transition-colors cursor-pointer"
                 >
                   {tr(lang, 'Register as Employer', 'नियोक्ता पंजीकरण करें', 'नियोक्ता नोंदणी करा')}
                 </button>
                 <button
                   type="button"
                   onClick={() => onNavigate('post-job')}
-                  className="px-4 py-2.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-[#0B3B75] text-sm font-bold transition-colors cursor-pointer"
+                  className="px-3.5 py-2.5 rounded-md border border-slate-300 bg-white hover:bg-slate-50 text-[#0B3B75] text-xs font-bold transition-colors cursor-pointer"
                 >
-                  {tr(lang, 'Post a Job Opening', 'नौकरी / काम पोस्ट करें', 'कामाची जाहिरात टाका')}
+                  {tr(lang, 'Post a Job Opening', 'काम पोस्ट करें', 'कामाची जाहिरात टाका')}
                 </button>
               </div>
             </div>

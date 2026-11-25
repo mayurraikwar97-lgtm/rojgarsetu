@@ -22,6 +22,8 @@ const DEFAULT_PROJECT_ID = 'gen-lang-client-0174765083';
 const DEFAULT_FIRESTORE_DB_ID = 'ai-studio-7bd2ffb9-a189-4838-a21e-7da9c4e7b2b7';
 export const WORKER_REGISTRATION_FEE_INR = 250;
 export const WORKER_REGISTRATION_FEE_PAISE = WORKER_REGISTRATION_FEE_INR * 100;
+export const SHOPKEEPER_REGISTRATION_FEE_INR = 500;
+export const SHOPKEEPER_REGISTRATION_FEE_PAISE = SHOPKEEPER_REGISTRATION_FEE_INR * 100;
 export const SINGLE_LEVEL_REFERRAL_REWARD_INR = 50;
 
 const paymentRateBuckets = new Map<string, number[]>();
@@ -186,6 +188,7 @@ function buildServerReferralCode(name: string, uid: string): string {
 
 export interface PaymentGatewayPublicConfig {
   registrationFeeInr: number;
+  shopkeeperRegistrationFeeInr: number;
   referralRewardInr: number;
   gatewayConfigured: boolean;
   webhookConfigured: boolean;
@@ -244,6 +247,7 @@ export function getPaymentGatewayPublicConfig(): PaymentGatewayPublicConfig {
 
   return {
     registrationFeeInr: WORKER_REGISTRATION_FEE_INR,
+    shopkeeperRegistrationFeeInr: SHOPKEEPER_REGISTRATION_FEE_INR,
     referralRewardInr: SINGLE_LEVEL_REFERRAL_REWARD_INR,
     gatewayConfigured,
     webhookConfigured,
@@ -276,13 +280,15 @@ export function buildOfficialUpiIntentUri(params: {
   payeeName: string;
   amountInr: number;
   orderRef: string;
+  notePrefix?: string;
 }): string {
+  const prefix = params.notePrefix || 'Rojgar Setu Worker Reg';
   const search = new URLSearchParams({
     pa: params.upiId,
     pn: params.payeeName,
     am: String(params.amountInr),
     cu: 'INR',
-    tn: `Rojgar Setu Worker Reg ${params.orderRef}`,
+    tn: `${prefix} ${params.orderRef}`,
     tr: params.orderRef,
   });
   return `upi://pay?${search.toString()}`;
@@ -520,7 +526,7 @@ export async function fetchAndVerifyRazorpayCapturedPayment(params: {
       orderId,
       method: data.method,
       vpa: data.vpa,
-      reason: 'Razorpay Test Mode payment confirmed as captured for ₹250 INR.',
+      reason: `Razorpay Test Mode payment confirmed as captured for ₹${expectedPaise / 100} INR.`,
     };
   } catch (err) {
     return {
@@ -856,6 +862,164 @@ async function activateWorkerRegistrationOnServer(params: {
     referralCredited: false,
     referralMessage:
       '₹250 payment verified as PAID and sent to ROJGAR SETU Admin Dashboard. Worker ID Card, Certificate & any ₹50 referral reward activate after Admin approval.',
+  };
+}
+
+/**
+ * Server-side idempotent ₹500 Shopkeeper Registration activation
+ * (called ONLY after verified Razorpay HMAC signature + confirmed ₹500 capture or verified webhook).
+ */
+async function activateShopkeeperRegistrationOnServer(params: {
+  runtime: PaymentAdminRuntime;
+  ownerUid: string;
+  razorpayOrderId: string;
+  razorpayPaymentId: string;
+  orderRef?: string;
+  registrationId?: string;
+  shopName?: string;
+  ownerName?: string;
+  shopCategory?: string;
+  shopLocation?: string;
+  contactPhoneMasked?: string;
+  payerVpaOrMethod?: string;
+  source: 'verify_api' | 'razorpay_webhook';
+}): Promise<{
+  activated: boolean;
+  alreadyVerified: boolean;
+  registrationId: string;
+  receiptNo: string;
+}> {
+  const fallbackRegId =
+    params.registrationId || `RS-SHOP-${params.ownerUid.slice(0, 6).toUpperCase()}`;
+  const fallbackReceiptNo = buildServerReceiptNo(params.ownerUid).replace('RS-RCP-', 'RS-SHP-');
+
+  if (!params.runtime.hasFirestoreCredentials) {
+    return {
+      activated: false,
+      alreadyVerified: false,
+      registrationId: fallbackRegId,
+      receiptNo: fallbackReceiptNo,
+    };
+  }
+
+  const db = params.runtime.db;
+  const ownerUid = params.ownerUid;
+  const payRef = db.collection('shopkeeperPayments').doc(ownerUid);
+  const shopRef = db.collection('shopkeeperListings').doc(ownerUid);
+
+  const [paySnap, shopSnap] = await Promise.all([payRef.get(), shopRef.get()]);
+  const existingPay = paySnap.exists ? (paySnap.data() as Record<string, unknown>) : null;
+  const existingShop = shopSnap.exists ? (shopSnap.data() as Record<string, unknown>) : null;
+
+  if (existingPay?.status === 'verified') {
+    return {
+      activated: true,
+      alreadyVerified: true,
+      registrationId: String(existingPay.registrationId || existingShop?.registrationId || fallbackRegId),
+      receiptNo: String(existingPay.receiptNo || existingShop?.paymentReceiptNo || fallbackReceiptNo),
+    };
+  }
+
+  // Prevent replay of a Razorpay payment ID already used by a different shopkeeper
+  if (params.razorpayPaymentId) {
+    const dupPaySnap = await db
+      .collection('shopkeeperPayments')
+      .where('gatewayPaymentId', '==', params.razorpayPaymentId)
+      .limit(2)
+      .get();
+    const ownedByOther = dupPaySnap.docs.find(
+      (d) => d.id !== ownerUid && d.data()?.status === 'verified'
+    );
+    if (ownedByOther) {
+      throw new Error('DUPLICATE_PAYMENT_ID: This Razorpay Payment ID is already linked to another paid shopkeeper registration.');
+    }
+  }
+
+  const registrationId = String(
+    params.registrationId || existingPay?.registrationId || existingShop?.registrationId || fallbackRegId
+  ).slice(0, 40);
+  const receiptNo = String(existingPay?.receiptNo || '') || fallbackReceiptNo;
+  const verifiedAtIso = new Date().toISOString();
+  const shopName = String(params.shopName || existingPay?.shopName || existingShop?.shopName || 'Local Shop');
+  const ownerName = String(params.ownerName || existingPay?.ownerName || existingShop?.ownerName || 'Shopkeeper');
+  const shopCategory = String(params.shopCategory || existingPay?.shopCategory || existingShop?.shopCategory || 'General Store');
+  const shopLocation = String(
+    params.shopLocation ||
+      existingPay?.shopLocation ||
+      [existingShop?.cityOrVillage, existingShop?.district, existingShop?.pincode].filter(Boolean).join(', ') ||
+      'India'
+  );
+  const contactPhoneMasked = String(params.contactPhoneMasked || existingPay?.contactPhoneMasked || 'XXXXXX').slice(0, 24);
+
+  const batch = db.batch();
+  batch.set(
+    payRef,
+    {
+      ownerUid,
+      shopId: ownerUid,
+      shopName: shopName.slice(0, 120),
+      ownerName: ownerName.slice(0, 120),
+      shopCategory: shopCategory.slice(0, 80),
+      shopLocation: shopLocation.slice(0, 160),
+      contactPhoneMasked,
+      registrationId,
+      amountInr: SHOPKEEPER_REGISTRATION_FEE_INR,
+      paymentMethod: 'gateway',
+      status: 'verified',
+      orderRef: (params.orderRef || String(existingPay?.orderRef || params.razorpayOrderId)).slice(0, 80),
+      utrOrGatewayRef: params.razorpayPaymentId.slice(0, 120),
+      gatewayOrderId: params.razorpayOrderId.slice(0, 120),
+      gatewayPaymentId: params.razorpayPaymentId.slice(0, 120),
+      ...(params.payerVpaOrMethod ? { payerUpiOrName: params.payerVpaOrMethod.slice(0, 120) } : {}),
+      gatewaySignatureVerified: true,
+      receiptNo,
+      verifiedByUid: params.source,
+      verifiedAtIso,
+      termsAccepted: true,
+      adminNotes:
+        '₹500 Shopkeeper Registration Fee PAID via Razorpay (signature & capture verified). Vocal for Local shop profile activated.',
+      updatedAt: FieldValue.serverTimestamp(),
+      ...(paySnap.exists ? {} : { createdAt: FieldValue.serverTimestamp() }),
+    },
+    { merge: true }
+  );
+
+  if (shopSnap.exists) {
+    batch.update(shopRef, {
+      registrationPaymentStatus: 'verified',
+      paidListingActive: true,
+      verificationStatus: 'verified',
+      paymentReceiptNo: receiptNo,
+      verifiedAtIso,
+      updatedAt: FieldValue.serverTimestamp(),
+    });
+  }
+
+  const shopLedgerRef = db.collection('financialLedger').doc(`led_shop_${ownerUid}`);
+  const shopLedgerSnap = await shopLedgerRef.get();
+  if (!shopLedgerSnap.exists) {
+    batch.set(shopLedgerRef, {
+      entryType: 'shopkeeper_registration_payment',
+      direction: 'credit',
+      amountInr: SHOPKEEPER_REGISTRATION_FEE_INR,
+      workerUid: ownerUid,
+      workerName: `${shopName} (${ownerName})`.slice(0, 120),
+      referenceId: ownerUid,
+      paymentOrUtrRef: params.razorpayPaymentId.slice(0, 120),
+      description: `Razorpay PAID ₹${SHOPKEEPER_REGISTRATION_FEE_INR} shopkeeper registration (${registrationId} · Receipt ${receiptNo})`,
+      recordedByUid: params.source,
+      recordedByEmail: 'system@rojgarsetu',
+      createdAt: FieldValue.serverTimestamp(),
+    });
+  }
+
+  await batch.commit();
+
+  return {
+    activated: true,
+    alreadyVerified: false,
+    registrationId,
+    receiptNo,
   };
 }
 
@@ -1383,6 +1547,16 @@ export async function handleCreatePaymentOrder(params: {
     };
   }
 
+  const paymentType: 'worker_registration' | 'shopkeeper_registration' =
+    params.body?.paymentType === 'shopkeeper_registration'
+      ? 'shopkeeper_registration'
+      : 'worker_registration';
+  const isShopkeeper = paymentType === 'shopkeeper_registration';
+  const fixedFeeInr = isShopkeeper ? SHOPKEEPER_REGISTRATION_FEE_INR : WORKER_REGISTRATION_FEE_INR;
+  const fixedFeePaise = isShopkeeper
+    ? SHOPKEEPER_REGISTRATION_FEE_PAISE
+    : WORKER_REGISTRATION_FEE_PAISE;
+  const shopName = String(params.body?.shopName || '').trim().slice(0, 120);
   const registrationId = String(params.body?.registrationId || params.body?.provisionalAppId || '')
     .trim()
     .slice(0, 40);
@@ -1391,27 +1565,46 @@ export async function handleCreatePaymentOrder(params: {
   const runtime = params.runtimeOverride ?? getPaymentAdminRuntime(params.rootDir);
   if (runtime.hasFirestoreCredentials) {
     try {
-      const [paySnap, pubSnap] = await Promise.all([
-        runtime.db.collection('workerRegistrationPayments').doc(uid).get(),
-        runtime.db.collection('publicWorkers').doc(uid).get(),
-      ]);
-      if (paySnap.exists && paySnap.data()?.status === 'verified') {
-        return {
-          httpStatus: 409,
-          payload: {
-            errorCode: 'ALREADY_VERIFIED',
-            error: 'Your ₹250 worker registration payment is already PAID. Duplicate payment is blocked.',
-          },
-        };
-      }
-      if (pubSnap.exists && pubSnap.data()?.registrationPaymentStatus === 'verified') {
-        return {
-          httpStatus: 409,
-          payload: {
-            errorCode: 'ALREADY_VERIFIED',
-            error: 'Your ₹250 worker registration fee is already PAID. Duplicate payment is blocked.',
-          },
-        };
+      if (isShopkeeper) {
+        const [paySnap, shopSnap] = await Promise.all([
+          runtime.db.collection('shopkeeperPayments').doc(uid).get(),
+          runtime.db.collection('shopkeeperListings').doc(uid).get(),
+        ]);
+        if (
+          (paySnap.exists && paySnap.data()?.status === 'verified') ||
+          (shopSnap.exists && shopSnap.data()?.registrationPaymentStatus === 'verified')
+        ) {
+          return {
+            httpStatus: 409,
+            payload: {
+              errorCode: 'ALREADY_VERIFIED',
+              error: 'Your ₹500 shopkeeper registration fee is already PAID. Duplicate payment is blocked.',
+            },
+          };
+        }
+      } else {
+        const [paySnap, pubSnap] = await Promise.all([
+          runtime.db.collection('workerRegistrationPayments').doc(uid).get(),
+          runtime.db.collection('publicWorkers').doc(uid).get(),
+        ]);
+        if (paySnap.exists && paySnap.data()?.status === 'verified') {
+          return {
+            httpStatus: 409,
+            payload: {
+              errorCode: 'ALREADY_VERIFIED',
+              error: 'Your ₹250 worker registration payment is already PAID. Duplicate payment is blocked.',
+            },
+          };
+        }
+        if (pubSnap.exists && pubSnap.data()?.registrationPaymentStatus === 'verified') {
+          return {
+            httpStatus: 409,
+            payload: {
+              errorCode: 'ALREADY_VERIFIED',
+              error: 'Your ₹250 worker registration fee is already PAID. Duplicate payment is blocked.',
+            },
+          };
+        }
       }
     } catch {
       // Proceed if Firestore check is unavailable
@@ -1430,13 +1623,15 @@ export async function handleCreatePaymentOrder(params: {
     };
   }
 
-  const orderRef = `RS-ORD-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
-  const orderToken = signOrderRef(orderRef, uid, cfg.registrationFeeInr);
+  const orderPrefix = isShopkeeper ? 'RS-SHOP-ORD' : 'RS-ORD';
+  const orderRef = `${orderPrefix}-${Date.now().toString(36).toUpperCase()}-${crypto.randomBytes(2).toString('hex').toUpperCase()}`;
+  const orderToken = signOrderRef(orderRef, uid, fixedFeeInr);
   const upiUri = buildOfficialUpiIntentUri({
     upiId: cfg.officialUpiId,
     payeeName: cfg.officialUpiPayeeName,
-    amountInr: cfg.registrationFeeInr,
+    amountInr: fixedFeeInr,
     orderRef,
+    notePrefix: isShopkeeper ? 'Rojgar Setu Shopkeeper Reg' : 'Rojgar Setu Worker Reg',
   });
 
   if (cfg.gatewayConfigured && cfg.razorpayKeyId && cfg.razorpayMode === 'test') {
@@ -1451,15 +1646,20 @@ export async function handleCreatePaymentOrder(params: {
           Authorization: `Basic ${authBasic}`,
         },
         body: JSON.stringify({
-          amount: WORKER_REGISTRATION_FEE_PAISE,
+          amount: fixedFeePaise,
           currency: 'INR',
           receipt: orderRef,
           notes: {
+            paymentType,
             workerUid: uid,
+            ...(isShopkeeper ? { shopkeeperUid: uid } : {}),
+            ...(shopName ? { shopName } : {}),
             ...(registrationId ? { registrationId } : {}),
             orderRef,
             mode: 'test',
-            purpose: 'ROJGAR SETU Worker Registration Fee (ID Card & Certificate)',
+            purpose: isShopkeeper
+              ? 'ROJGAR SETU Shopkeeper Registration Fee (Vocal for Local Profile)'
+              : 'ROJGAR SETU Worker Registration Fee (ID Card & Certificate)',
           },
         }),
       });
@@ -1468,30 +1668,54 @@ export async function handleCreatePaymentOrder(params: {
         if (gwData.id) {
           // Record pending order reference on server if Admin Firestore is configured
           if (runtime.hasFirestoreCredentials) {
-            await runtime.db
-              .collection('workerRegistrationPayments')
-              .doc(uid)
-              .set(
-                {
-                  workerUid: uid,
-                  ...(registrationId ? { provisionalAppId: registrationId } : {}),
-                  amountInr: cfg.registrationFeeInr,
-                  paymentMethod: 'gateway',
-                  status: 'pending',
-                  orderRef,
-                  gatewayOrderId: gwData.id,
-                  gatewaySignatureVerified: false,
-                  updatedAt: FieldValue.serverTimestamp(),
-                },
-                { merge: true }
-              )
-              .catch(() => undefined);
+            if (isShopkeeper) {
+              await runtime.db
+                .collection('shopkeeperPayments')
+                .doc(uid)
+                .set(
+                  {
+                    ownerUid: uid,
+                    shopId: uid,
+                    ...(shopName ? { shopName } : {}),
+                    ...(registrationId ? { registrationId } : {}),
+                    amountInr: fixedFeeInr,
+                    paymentMethod: 'gateway',
+                    status: 'pending',
+                    orderRef,
+                    gatewayOrderId: gwData.id,
+                    gatewaySignatureVerified: false,
+                    updatedAt: FieldValue.serverTimestamp(),
+                  },
+                  { merge: true }
+                )
+                .catch(() => undefined);
+            } else {
+              await runtime.db
+                .collection('workerRegistrationPayments')
+                .doc(uid)
+                .set(
+                  {
+                    workerUid: uid,
+                    ...(registrationId ? { provisionalAppId: registrationId } : {}),
+                    amountInr: fixedFeeInr,
+                    paymentMethod: 'gateway',
+                    status: 'pending',
+                    orderRef,
+                    gatewayOrderId: gwData.id,
+                    gatewaySignatureVerified: false,
+                    updatedAt: FieldValue.serverTimestamp(),
+                  },
+                  { merge: true }
+                )
+                .catch(() => undefined);
+            }
           }
 
           return {
             httpStatus: 200,
             payload: {
               mode: 'gateway',
+              paymentType,
               gatewayProvider: 'razorpay',
               gatewayConfigured: true,
               razorpayMode: 'test',
@@ -1500,8 +1724,8 @@ export async function handleCreatePaymentOrder(params: {
               gatewayOrderId: gwData.id,
               orderRef,
               orderToken,
-              amountInr: cfg.registrationFeeInr,
-              amountPaise: WORKER_REGISTRATION_FEE_PAISE,
+              amountInr: fixedFeeInr,
+              amountPaise: fixedFeePaise,
               officialUpiId: cfg.officialUpiId,
               officialUpiPayeeName: cfg.officialUpiPayeeName,
               upiUri,
@@ -1535,6 +1759,7 @@ export async function handleCreatePaymentOrder(params: {
     httpStatus: 200,
     payload: {
       mode: 'upi_qr',
+      paymentType,
       gatewayProvider: 'upi_qr',
       gatewayConfigured: false,
       razorpayMode: cfg.razorpayMode,
@@ -1543,7 +1768,7 @@ export async function handleCreatePaymentOrder(params: {
       missingGatewayEnvVars: cfg.missingGatewayEnvVars,
       orderRef,
       orderToken,
-      amountInr: cfg.registrationFeeInr,
+      amountInr: fixedFeeInr,
       officialUpiId: cfg.officialUpiId,
       officialUpiPayeeName: cfg.officialUpiPayeeName,
       upiUri,
@@ -1581,6 +1806,18 @@ export async function handleVerifyGatewayPayment(params: {
     };
   }
 
+  const paymentType: 'worker_registration' | 'shopkeeper_registration' =
+    params.body.paymentType === 'shopkeeper_registration'
+      ? 'shopkeeper_registration'
+      : 'worker_registration';
+  const isShopkeeper = paymentType === 'shopkeeper_registration';
+  const expectedAmountPaise = isShopkeeper
+    ? SHOPKEEPER_REGISTRATION_FEE_PAISE
+    : WORKER_REGISTRATION_FEE_PAISE;
+  const expectedAmountInr = isShopkeeper
+    ? SHOPKEEPER_REGISTRATION_FEE_INR
+    : WORKER_REGISTRATION_FEE_INR;
+
   const razorpayOrderId = String(params.body.razorpayOrderId || '').trim();
   const razorpayPaymentId = String(params.body.razorpayPaymentId || '').trim();
   const razorpaySignature = String(params.body.razorpaySignature || '').trim();
@@ -1590,6 +1827,11 @@ export async function handleVerifyGatewayPayment(params: {
   const workerSkill = String(params.body.workerSkill || '').trim();
   const workerLocation = String(params.body.workerLocation || '').trim();
   const workerMobileMasked = String(params.body.workerMobileMasked || '').trim();
+  const shopName = String(params.body.shopName || '').trim();
+  const ownerName = String(params.body.ownerName || '').trim();
+  const shopCategory = String(params.body.shopCategory || '').trim();
+  const shopLocation = String(params.body.shopLocation || '').trim();
+  const contactPhoneMasked = String(params.body.contactPhoneMasked || '').trim();
 
   // Step 1: Cryptographic HMAC-SHA256 signature verification
   const sigResult = verifyRazorpayPaymentSignature({
@@ -1604,11 +1846,11 @@ export async function handleVerifyGatewayPayment(params: {
     };
   }
 
-  // Step 2: Confirm actual captured payment status, owner binding & exact ₹250 amount directly from Razorpay API
+  // Step 2: Confirm actual captured payment status, owner binding & exact fee amount directly from Razorpay API
   const captureCheck = await fetchAndVerifyRazorpayCapturedPayment({
     razorpayPaymentId,
     expectedOrderId: razorpayOrderId,
-    expectedAmountPaise: WORKER_REGISTRATION_FEE_PAISE,
+    expectedAmountPaise,
     expectedWorkerUid: workerUid,
     fetchImpl: params.fetchImpl,
   });
@@ -1627,8 +1869,71 @@ export async function handleVerifyGatewayPayment(params: {
     };
   }
 
-  // Step 3: Record PAID status in DB & queue registration for ROJGAR SETU Admin Dashboard approval
   const runtime = params.runtimeOverride ?? getPaymentAdminRuntime(params.rootDir);
+
+  if (isShopkeeper) {
+    let shopActivation: Awaited<ReturnType<typeof activateShopkeeperRegistrationOnServer>>;
+    try {
+      shopActivation = await activateShopkeeperRegistrationOnServer({
+        runtime,
+        ownerUid: workerUid,
+        razorpayOrderId,
+        razorpayPaymentId,
+        orderRef: orderRef || razorpayOrderId,
+        registrationId: registrationId || undefined,
+        shopName: shopName || undefined,
+        ownerName: ownerName || undefined,
+        shopCategory: shopCategory || undefined,
+        shopLocation: shopLocation || undefined,
+        contactPhoneMasked: contactPhoneMasked || undefined,
+        payerVpaOrMethod: captureCheck.vpa || captureCheck.method,
+        source: 'verify_api',
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Unable to record paid shopkeeper registration.';
+      if (msg.includes('DUPLICATE_PAYMENT_ID')) {
+        return {
+          httpStatus: 409,
+          payload: { verified: false, errorCode: 'DUPLICATE_PAYMENT_ID', error: msg },
+        };
+      }
+      return {
+        httpStatus: 503,
+        payload: { verified: false, errorCode: 'ACTIVATION_DB_ERROR', error: msg },
+      };
+    }
+
+    const verificationReceiptToken = crypto
+      .createHmac('sha256', getOrderHmacSecret())
+      .update(`verified_shop|${workerUid}|${razorpayPaymentId}`)
+      .digest('hex')
+      .slice(0, 32);
+
+    return {
+      httpStatus: 200,
+      payload: {
+        verified: true,
+        captured: true,
+        paymentType: 'shopkeeper_registration',
+        razorpayMode: 'test',
+        paymentStatus: 'PAID',
+        amountInr: expectedAmountInr,
+        gatewayOrderId: razorpayOrderId,
+        gatewayPaymentId: razorpayPaymentId,
+        registrationId: shopActivation.registrationId,
+        receiptNo: shopActivation.receiptNo,
+        verifiedAtIso: new Date().toISOString(),
+        verificationReceiptToken,
+        activatedOnServer: shopActivation.activated,
+        alreadyVerified: shopActivation.alreadyVerified,
+        reason: shopActivation.alreadyVerified
+          ? '₹500 shopkeeper registration payment was already recorded as PAID (idempotent).'
+          : 'Razorpay signature and ₹500 capture verified. Your Vocal for Local shop profile is now active.',
+      },
+    };
+  }
+
+  // Step 3 (Worker): Record PAID status in DB & queue registration for ROJGAR SETU Admin Dashboard approval
   let activation: Awaited<ReturnType<typeof activateWorkerRegistrationOnServer>>;
   try {
     activation = await activateWorkerRegistrationOnServer({
@@ -1670,9 +1975,10 @@ export async function handleVerifyGatewayPayment(params: {
     payload: {
       verified: true,
       captured: true,
+      paymentType: 'worker_registration',
       razorpayMode: 'test',
       paymentStatus: 'PAID',
-      amountInr: WORKER_REGISTRATION_FEE_INR,
+      amountInr: expectedAmountInr,
       gatewayOrderId: razorpayOrderId,
       gatewayPaymentId: razorpayPaymentId,
       provisionalAppId: activation.provisionalAppId,
@@ -1748,7 +2054,61 @@ export async function handleRecordGatewayAttempt(params: {
     };
   }
 
+  const isShopkeeper = params.body.paymentType === 'shopkeeper_registration';
   try {
+    if (isShopkeeper) {
+      const shopPayRef = runtime.db.collection('shopkeeperPayments').doc(workerUid);
+      const snap = await shopPayRef.get();
+      if (snap.exists && snap.data()?.status === 'verified') {
+        return {
+          httpStatus: 200,
+          payload: {
+            ok: true,
+            ignored: true,
+            status: 'verified',
+            reason: 'Shopkeeper registration is already verified and cannot be downgraded.',
+          },
+        };
+      }
+      await shopPayRef.set(
+        {
+          ownerUid: workerUid,
+          shopId: workerUid,
+          amountInr: SHOPKEEPER_REGISTRATION_FEE_INR,
+          paymentMethod: 'gateway',
+          status: nextStatus,
+          ...(orderRef ? { orderRef } : {}),
+          ...(gatewayOrderId ? { gatewayOrderId } : {}),
+          ...(gatewayPaymentId ? { gatewayPaymentId, utrOrGatewayRef: gatewayPaymentId } : {}),
+          gatewaySignatureVerified: false,
+          adminNotes: reason,
+          updatedAt: FieldValue.serverTimestamp(),
+          ...(snap.exists ? {} : { createdAt: FieldValue.serverTimestamp() }),
+        },
+        { merge: true }
+      );
+      if (nextStatus === 'failed') {
+        const shopRef = runtime.db.collection('shopkeeperListings').doc(workerUid);
+        const shopSnap = await shopRef.get();
+        if (shopSnap.exists && shopSnap.data()?.paidListingActive !== true) {
+          await shopRef.update({
+            registrationPaymentStatus: 'failed',
+            paidListingActive: false,
+            updatedAt: FieldValue.serverTimestamp(),
+          });
+        }
+      }
+      return {
+        httpStatus: 200,
+        payload: {
+          ok: true,
+          recordedInDb: true,
+          status: nextStatus,
+          gatewayOrderId,
+        },
+      };
+    }
+
     const payRef = runtime.db.collection('workerRegistrationPayments').doc(workerUid);
     const snap = await payRef.get();
     if (snap.exists && snap.data()?.status === 'verified') {
@@ -1958,8 +2318,62 @@ export async function handleRazorpayWebhook(params: {
     };
 
     if (eventName === 'payment.captured' || eventName === 'order.paid') {
+      const notesPaymentType = String(
+        (paymentEntity?.notes as Record<string, unknown> | undefined)?.paymentType ||
+          (orderEntity?.notes as Record<string, unknown> | undefined)?.paymentType ||
+          ''
+      );
+      const notesShopkeeperUid = String(
+        (paymentEntity?.notes as Record<string, unknown> | undefined)?.shopkeeperUid ||
+          (orderEntity?.notes as Record<string, unknown> | undefined)?.shopkeeperUid ||
+          ''
+      ).trim();
       const amountPaise = Number(paymentEntity?.amount ?? WORKER_REGISTRATION_FEE_PAISE);
       const currency = String(paymentEntity?.currency || 'INR').toUpperCase();
+
+      if (
+        (notesPaymentType === 'shopkeeper_registration' ||
+          (amountPaise === SHOPKEEPER_REGISTRATION_FEE_PAISE && Boolean(notesShopkeeperUid))) &&
+        currency === 'INR'
+      ) {
+        if (amountPaise !== SHOPKEEPER_REGISTRATION_FEE_PAISE) {
+          return {
+            httpStatus: 200,
+            payload: { ok: true, ignored: true, reason: 'Shopkeeper webhook payment amount did not match ₹500 INR.' },
+          };
+        }
+        const shopUid = notesShopkeeperUid || notesWorkerUid;
+        if (!shopUid) {
+          return {
+            httpStatus: 200,
+            payload: { ok: true, event: eventName, processed: false, reason: 'Shopkeeper UID could not be resolved for order.' },
+          };
+        }
+        const shopActivation = await activateShopkeeperRegistrationOnServer({
+          runtime,
+          ownerUid: shopUid,
+          razorpayOrderId: gatewayOrderId || `order_shop_webhook_${shopUid}`,
+          razorpayPaymentId: gatewayPaymentId || `pay_shop_webhook_${Date.now()}`,
+          orderRef: String(paymentEntity?.notes?.orderRef || orderEntity?.receipt || gatewayOrderId),
+          payerVpaOrMethod: paymentEntity?.vpa || paymentEntity?.method,
+          source: 'razorpay_webhook',
+        });
+        await markWebhookProcessed();
+        return {
+          httpStatus: 200,
+          payload: {
+            ok: true,
+            event: eventName,
+            paymentType: 'shopkeeper_registration',
+            processed: true,
+            activated: shopActivation.activated,
+            alreadyVerified: shopActivation.alreadyVerified,
+            registrationId: shopActivation.registrationId,
+            receiptNo: shopActivation.receiptNo,
+          },
+        };
+      }
+
       if (amountPaise !== WORKER_REGISTRATION_FEE_PAISE || currency !== 'INR') {
         return {
           httpStatus: 200,

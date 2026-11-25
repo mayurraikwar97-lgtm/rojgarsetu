@@ -96,8 +96,18 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
                 </button>
               </li>
               <li>
+                <button type="button" onClick={() => go('local-shops')} className="hover:text-amber-300 font-semibold text-emerald-200 cursor-pointer">
+                  {tr(lang, 'Local Shops (Vocal for Local)', 'स्थानीय दुकानें (वोकल फॉर लोकल)', 'स्थानिक दुकाने (व्होकल फॉर लोकल)')}
+                </button>
+              </li>
+              <li>
                 <button type="button" onClick={() => go('register-worker')} className="hover:text-amber-300 cursor-pointer">
-                  {tr(lang, 'Free Worker Registration', 'निःशुल्क कामगार पंजीकरण', 'मोफत कामगार नोंदणी')}
+                  {tr(lang, 'Worker Registration (₹250)', 'कामगार पंजीकरण (₹250)', 'कामगार नोंदणी (₹250)')}
+                </button>
+              </li>
+              <li>
+                <button type="button" onClick={() => go('register-shopkeeper')} className="hover:text-amber-300 font-semibold text-amber-200 cursor-pointer">
+                  {tr(lang, 'Shopkeeper Registration', 'दुकानदार पंजीकरण', 'दुकानदार नोंदणी')}
                 </button>
               </li>
               <li>
