@@ -383,7 +383,7 @@ export const TRANSLATIONS: Record<Language, TranslationBundle> = {
       subheading: 'ROJGAR SETU connects workers, skilled professionals, job seekers, businesses and employers through one digital employment platform.',
       ctaWorker: 'REGISTER AS A WORKER',
       ctaEmployer: 'HIRE A WORKER',
-      campaignNote: 'Free Worker Registration During the Initial Registration Campaign.',
+      campaignNote: 'Registration Campaign Live — Registrations are open now; bookings & transactions start from 1 January.',
       imageCaption: 'Skilled trades, artisans, and technical workers across India building livelihoods with dignity.',
     },
     mission: {
@@ -811,7 +811,7 @@ export const TRANSLATIONS: Record<Language, TranslationBundle> = {
       subheading: 'रोजगार सेतु एक ही डिजिटल मंच के माध्यम से कामगारों, कुशल पेशेवरों, रोजगार चाहने वालों, व्यवसायों और नियोक्ताओं को जोड़ता है।',
       ctaWorker: 'कामगार के रूप में पंजीकरण करें',
       ctaEmployer: 'कामगार नियुक्त करें',
-      campaignNote: 'प्रारंभिक पंजीकरण अभियान के दौरान कामगारों का पंजीकरण निःशुल्क है।',
+      campaignNote: 'अभी केवल पंजीकरण शुरू है — 1 जनवरी से सभी व्यवहार और बुकिंग शुरू होंगी।',
       imageCaption: 'भारत भर के कुशल कारीगर, तकनीशियन और श्रमिक सम्मानजनक आजीविका का निर्माण करते हुए।',
     },
     mission: {
@@ -1238,7 +1238,7 @@ export const TRANSLATIONS: Record<Language, TranslationBundle> = {
       subheading: 'रोजगार सेतु एकाच डिजिटल रोजगार व्यासपीठाद्वारे कामगार, कुशल व्यावसायिक, नोकरी शोधणारे, व्यवसाय आणि नियोक्त्यांना जोडते.',
       ctaWorker: 'कामगार म्हणून नोंदणी करा',
       ctaEmployer: 'कामगार नियुक्त करा',
-      campaignNote: 'प्रारंभिक नोंदणी मोहिमेदरम्यान कामगार नोंदणी मोफत आहे.',
+      campaignNote: 'सध्या फक्त नोंदणी सुरू आहे — १ जानेवारीपासून व्यवहार व बुकिंग सुरू होतील.',
       imageCaption: 'भारतभरातील कुशल कारागीर, तंत्रज्ञ आणि कामगार सन्मानाने उपजीविका घडवताना.',
     },
     mission: {

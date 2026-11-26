@@ -66,8 +66,8 @@ service cloud.firestore {
 
     function isVerifiedUser() {
       return isSignedIn() && (
-        request.auth.token.email_verified == true ||
-        request.auth.token.firebase.sign_in_provider == 'google.com'
+        ('email_verified' in request.auth.token && request.auth.token.email_verified == true) ||
+        ('firebase' in request.auth.token && 'sign_in_provider' in request.auth.token.firebase && request.auth.token.firebase.sign_in_provider == 'google.com')
       );
     }
 
@@ -78,7 +78,7 @@ service cloud.firestore {
     function isAdmin() {
       return isVerifiedUser() && (
         exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
-        (request.auth.token.email_verified == true && request.auth.token.email == 'mayurraikwar97@gmail.com')
+        ('email_verified' in request.auth.token && request.auth.token.email_verified == true && 'email' in request.auth.token && request.auth.token.email == 'mayurraikwar97@gmail.com')
       );
     }
 

@@ -26,6 +26,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { useLanguage } from '../i18n/LanguageContext';
+import { formatUiError } from '../lib/firebase';
 import {
   getOtpFraudWarningLocalized,
   isWorkerRegistrationOtpEnabled,
@@ -281,7 +282,18 @@ export const WorkerPaymentCheckoutCard: React.FC<WorkerPaymentCheckoutCardProps>
       });
       setQrDataUrl(dataUrl);
     } catch (err) {
-      setOrderError(err instanceof Error ? err.message : 'Unable to initialize registration payment order.');
+      setOrderError(
+        formatUiError(
+          err,
+          tr(
+            lang,
+            'Unable to initialize registration payment order. Please retry.',
+            'पंजीकरण भुगतान ऑर्डर शुरू नहीं हो सका। कृपया पुनः प्रयास करें।',
+            'नोंदणी पेमेंट ऑर्डर सुरू होऊ शकला नाही. कृपया पुन्हा प्रयत्न करा.'
+          ),
+          lang
+        )
+      );
     } finally {
       setLoadingOrder(false);
     }
@@ -416,9 +428,16 @@ export const WorkerPaymentCheckoutCard: React.FC<WorkerPaymentCheckoutCardProps>
             onPaymentSubmitted?.();
           } catch (verifyErr) {
             setSubmitError(
-              verifyErr instanceof Error
-                ? verifyErr.message
-                : 'Backend payment verification failed. If money was debited, Razorpay webhook will reconcile automatically.'
+              formatUiError(
+                verifyErr,
+                tr(
+                  lang,
+                  'Backend payment verification failed. If money was debited, Razorpay webhook will reconcile automatically.',
+                  'बैकएंड भुगतान सत्यापन विफल रहा। यदि राशि कट गई है, तो Razorpay वेबहुक स्वतः समन्वय करेगा।',
+                  'बॅकएंड पेमेंट सत्यापन अयशस्वी झाले. पैसे कापले असल्यास Razorpay वेबहुक आपोआप तपासणी करेल.'
+                ),
+                lang
+              )
             );
           } finally {
             verifyingRef.current = false;
@@ -450,7 +469,18 @@ export const WorkerPaymentCheckoutCard: React.FC<WorkerPaymentCheckoutCardProps>
       rzp.open();
     } catch (err) {
       setLaunchingRazorpay(false);
-      setSubmitError(err instanceof Error ? err.message : 'Unable to launch Razorpay Checkout.');
+      setSubmitError(
+        formatUiError(
+          err,
+          tr(
+            lang,
+            'Unable to launch Razorpay Checkout. Please retry.',
+            'Razorpay चेकआउट शुरू नहीं हो सका। कृपया पुनः प्रयास करें।',
+            'Razorpay चेकआउट सुरू होऊ शकला नाही. कृपया पुन्हा प्रयत्न करा.'
+          ),
+          lang
+        )
+      );
     }
   };
 
@@ -490,7 +520,18 @@ export const WorkerPaymentCheckoutCard: React.FC<WorkerPaymentCheckoutCardProps>
       );
       onPaymentSubmitted?.();
     } catch (err) {
-      setSubmitError(err instanceof Error ? err.message : 'Unable to submit payment details.');
+      setSubmitError(
+        formatUiError(
+          err,
+          tr(
+            lang,
+            'Unable to submit payment details. Please retry.',
+            'भुगतान विवरण जमा नहीं हो सका। कृपया पुनः प्रयास करें।',
+            'पेमेंट तपशील सादर होऊ शकले नाहीत. कृपया पुन्हा प्रयत्न करा.'
+          ),
+          lang
+        )
+      );
     } finally {
       setSubmitting(false);
     }

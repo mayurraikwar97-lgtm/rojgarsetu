@@ -14,6 +14,7 @@ import {
 import { INDIA_STATES_DISTRICTS } from '../data/indiaLocations';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../i18n/LanguageContext';
+import { formatUiError } from '../lib/firebase';
 import { submitGrievanceReport, submitPartnershipEnquiry } from '../lib/firestoreService';
 import type { GrievanceReport, Language, PageRoute } from '../types/domain';
 import { RojgarSetuLogo } from './RojgarSetuLogo';
@@ -364,7 +365,18 @@ export const PartnershipsView: React.FC = () => {
       setMessage('');
       setAttachmentName('');
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Submission failed.');
+      setErrorMsg(
+        formatUiError(
+          err,
+          tr(
+            lang,
+            'Unable to submit partnership enquiry. Please try again.',
+            'साझेदारी पूछताछ जमा नहीं हो सकी। कृपया पुनः प्रयास करें।',
+            'भागीदारी चौकशी सादर होऊ शकली नाही. कृपया पुन्हा प्रयत्न करा.'
+          ),
+          lang
+        )
+      );
     } finally {
       setSubmitting(false);
     }
@@ -863,7 +875,18 @@ export const TrustSafetyView: React.FC = () => {
       setSubject('');
       setDescription('');
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Submission failed.');
+      setErrorMsg(
+        formatUiError(
+          err,
+          tr(
+            lang,
+            'Unable to submit grievance report. Please try again.',
+            'शिकायत रिपोर्ट जमा नहीं हो सकी। कृपया पुनः प्रयास करें।',
+            'तक्रार अहवाल सादर होऊ शकला नाही. कृपया पुन्हा प्रयत्न करा.'
+          ),
+          lang
+        )
+      );
     } finally {
       setSubmitting(false);
     }

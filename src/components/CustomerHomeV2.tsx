@@ -735,7 +735,7 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
         employerPrivate?.businessAddress?.trim() ||
         effectiveLoc.label ||
         approxLocationLabel
-      ).slice(0, 320);
+      ).slice(0, 300);
       const hasExactVault = trimmedExactAddress.length >= 4;
 
       // WAIT for Firestore write confirmation BEFORE transitioning UI to success/searching state

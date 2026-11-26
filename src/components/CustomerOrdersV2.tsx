@@ -30,6 +30,7 @@ import {
   SIX_STEP_STAGE_ORDER,
   toSixStepDealStage,
 } from '../lib/dealWorkflow';
+import { formatUiError } from '../lib/firebase';
 import {
   cancelDeal,
   cancelOpenJobByCustomer,
@@ -226,7 +227,13 @@ export const CustomerOrdersV2: React.FC<CustomerOrdersV2Props> = ({
         )
       );
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Unable to confirm worker.');
+      setErrorMsg(
+        formatUiError(
+          err,
+          tr(lang, 'Unable to confirm worker.', 'कामगार कन्फर्म नहीं किया जा सका।', 'कामगार निश्चित करता आला नाही.'),
+          lang
+        )
+      );
     } finally {
       setBusyId(null);
     }
@@ -243,7 +250,13 @@ export const CustomerOrdersV2: React.FC<CustomerOrdersV2Props> = ({
         jobLocationLabel: job.approxLocationLabel || job.district,
       });
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Unable to decline offer.');
+      setErrorMsg(
+        formatUiError(
+          err,
+          tr(lang, 'Unable to decline offer.', 'ऑफ़र अस्वीकार नहीं किया जा सका।', 'ऑफर नाकारता आला नाही.'),
+          lang
+        )
+      );
     } finally {
       setBusyId(null);
     }
@@ -263,7 +276,13 @@ export const CustomerOrdersV2: React.FC<CustomerOrdersV2Props> = ({
         )
       );
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Unable to request revised quote.');
+      setErrorMsg(
+        formatUiError(
+          err,
+          tr(lang, 'Unable to request revised quote.', 'संशोधित दर का अनुरोध नहीं भेजा जा सका।', 'सुधारित दराची विनंती पाठवता आली नाही.'),
+          lang
+        )
+      );
     } finally {
       setBusyId(null);
     }
@@ -303,7 +322,13 @@ export const CustomerOrdersV2: React.FC<CustomerOrdersV2Props> = ({
         );
       }
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Unable to notify next batch.');
+      setErrorMsg(
+        formatUiError(
+          err,
+          tr(lang, 'Unable to notify next batch.', 'अगले बैच को सूचना नहीं भेजी जा सकी।', 'पुढील बॅचला अलर्ट पाठवता आला नाही.'),
+          lang
+        )
+      );
     } finally {
       setBusyId(null);
     }
@@ -343,7 +368,13 @@ export const CustomerOrdersV2: React.FC<CustomerOrdersV2Props> = ({
         );
       }
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Unable to retry job dispatch.');
+      setErrorMsg(
+        formatUiError(
+          err,
+          tr(lang, 'Unable to retry job dispatch.', 'रिक्वेस्ट फिर से नहीं भेजी जा सकी।', 'रिक्वेस्ट पुन्हा पाठवता आली नाही.'),
+          lang
+        )
+      );
     } finally {
       setBusyId(null);
     }
@@ -417,7 +448,13 @@ export const CustomerOrdersV2: React.FC<CustomerOrdersV2Props> = ({
             )
       );
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Unable to expand search radius.');
+      setErrorMsg(
+        formatUiError(
+          err,
+          tr(lang, 'Unable to expand search radius.', 'खोज दायरा बढ़ाया नहीं जा सका।', 'शोध अंतर वाढवता आले नाही.'),
+          lang
+        )
+      );
     } finally {
       setBusyId(null);
     }
@@ -429,7 +466,13 @@ export const CustomerOrdersV2: React.FC<CustomerOrdersV2Props> = ({
     try {
       await cancelOpenJobByCustomer(job.id);
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Unable to cancel request.');
+      setErrorMsg(
+        formatUiError(
+          err,
+          tr(lang, 'Unable to cancel request.', 'रिक्वेस्ट रद्द नहीं की जा सकी।', 'रिक्वेस्ट रद्द करता आली नाही.'),
+          lang
+        )
+      );
     } finally {
       setBusyId(null);
     }
@@ -457,7 +500,13 @@ export const CustomerOrdersV2: React.FC<CustomerOrdersV2Props> = ({
         )
       );
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Unable to submit rating.');
+      setErrorMsg(
+        formatUiError(
+          err,
+          tr(lang, 'Unable to submit rating.', 'रेटिंग जमा नहीं हो सकी।', 'रेटिंग सबमिट करता आली नाही.'),
+          lang
+        )
+      );
     } finally {
       setBusyId(null);
     }
@@ -488,7 +537,13 @@ export const CustomerOrdersV2: React.FC<CustomerOrdersV2Props> = ({
         });
       }
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Unable to update order.');
+      setErrorMsg(
+        formatUiError(
+          err,
+          tr(lang, 'Unable to update order.', 'ऑर्डर अपडेट नहीं किया जा सका।', 'ऑर्डर अपडेट करता आले नाही.'),
+          lang
+        )
+      );
     } finally {
       setBusyId(null);
     }
@@ -746,15 +801,36 @@ export const CustomerOrdersV2: React.FC<CustomerOrdersV2Props> = ({
                   {/* Order Top Info */}
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div className="space-y-1">
-                      <div className="text-[11px] font-bold uppercase tracking-wider text-[#E06D1B]">
-                        {getLocalizedCategoryLabel(job.category, lang)}
+                      <div className="flex flex-wrap items-center gap-2 text-[11px] font-bold">
+                        <span className="uppercase tracking-wider text-[#E06D1B]">
+                          {getLocalizedCategoryLabel(job.category, lang)}
+                        </span>
+                        <span className="font-mono-tabular text-slate-500">
+                          #{job.id.slice(0, 8)}
+                        </span>
+                        <span className="px-2 py-0.5 rounded bg-amber-50 border border-amber-200 text-[#C25E00] text-[10px] font-extrabold uppercase">
+                          {job.requestStatus || (confirmedApp ? 'ASSIGNED' : 'PENDING')}
+                        </span>
                       </div>
                       <h3 className="font-display text-lg sm:text-xl font-extrabold text-[#0B3B75]">
                         {job.subService || job.title}
                       </h3>
-                      <div className="text-xs text-slate-500 flex items-center gap-1.5">
-                        <MapPin className="w-3.5 h-3.5 text-[#E06D1B]" />
-                        <span>{job.workLocationLabel || job.approxLocationLabel}</span>
+                      <div className="text-xs text-slate-500 flex flex-wrap items-center gap-x-3 gap-y-1">
+                        <span className="inline-flex items-center gap-1">
+                          <MapPin className="w-3.5 h-3.5 text-[#E06D1B]" />
+                          <span>{job.workLocationLabel || job.approxLocationLabel}</span>
+                        </span>
+                        {job.pincode && (
+                          <span className="font-mono-tabular font-semibold text-slate-600">
+                            PIN: {job.pincode}
+                          </span>
+                        )}
+                        {getTimestampMs(job.createdAt) > 0 && (
+                          <span className="inline-flex items-center gap-1 text-slate-400">
+                            <Clock className="w-3 h-3" />
+                            <span>{new Date(getTimestampMs(job.createdAt)).toLocaleString()}</span>
+                          </span>
+                        )}
                       </div>
                     </div>
 

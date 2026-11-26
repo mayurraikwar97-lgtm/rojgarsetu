@@ -770,7 +770,17 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
         setShowSuccessScreen(true);
         window.scrollTo({ top: 0, behavior: 'smooth' });
       } catch (err) {
-        setErrorMsg(formatUiError(err, 'Unable to update worker profile. Please try again.'));
+        setErrorMsg(
+          formatUiError(
+            err,
+            lang === 'mr'
+              ? 'कामगार प्रोफाइल अपडेट करता आली नाही. कृपया पुन्हा प्रयत्न करा.'
+              : lang === 'hi'
+                ? 'कामगार प्रोफ़ाइल अपडेट नहीं हो सकी। कृपया पुनः प्रयास करें।'
+                : 'Unable to update worker profile. Please try again.',
+            lang
+          )
+        );
       } finally {
         setSaving(false);
       }
@@ -903,9 +913,15 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
             window.scrollTo({ top: 0, behavior: 'smooth' });
           } catch (verifyErr) {
             setPaymentErrorMsg(
-              verifyErr instanceof Error
-                ? verifyErr.message
-                : 'Server payment verification failed. Please retry or contact ROJGAR SETU support.'
+              formatUiError(
+                verifyErr,
+                lang === 'mr'
+                  ? 'सर्व्हरवर पेमेंट पडताळणी अयशस्वी झाली. कृपया पुन्हा प्रयत्न करा.'
+                  : lang === 'hi'
+                    ? 'सर्वर पर भुगतान सत्यापन विफल रहा। कृपया पुनः प्रयास करें।'
+                    : 'Server payment verification failed. Please retry or contact ROJGAR SETU support.',
+                lang
+              )
             );
           } finally {
             verifyingPaymentRef.current = false;
@@ -932,7 +948,17 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
       rzp.open();
     } catch (err) {
       setPayingRazorpay(false);
-      setPaymentErrorMsg(formatUiError(err, 'Unable to initiate ₹250 Razorpay payment. Please try again.'));
+      setPaymentErrorMsg(
+        formatUiError(
+          err,
+          lang === 'mr'
+            ? '₹250 Razorpay पेमेंट सुरू करता आले नाही. कृपया पुन्हा प्रयत्न करा.'
+            : lang === 'hi'
+              ? '₹250 Razorpay भुगतान शुरू नहीं हो सका। कृपया पुनः प्रयास करें।'
+              : 'Unable to initiate ₹250 Razorpay payment. Please try again.',
+          lang
+        )
+      );
       window.setTimeout(() => {
         errorBoxRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }, 20);

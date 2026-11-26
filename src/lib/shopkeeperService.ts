@@ -159,7 +159,7 @@ export async function saveShopkeeperProfile(params: {
     vocalForLocalPledge: Boolean(params.vocalForLocalPledge),
   };
 
-  try {
+  const runShopWrite = async () => {
     const existingSnap = await getDoc(ref);
     if (existingSnap.exists()) {
       const existingData = existingSnap.data() as ShopkeeperListing;
@@ -186,7 +186,30 @@ export async function saveShopkeeperProfile(params: {
       updatedAt: serverTimestamp(),
     });
     return { shopId, registrationId };
+  };
+
+  try {
+    if (!auth.currentUser?.uid) {
+      throw new Error('AUTH_REQUIRED: Please sign in with Google before saving your shop profile.');
+    }
+    try {
+      return await runShopWrite();
+    } catch (writeErr) {
+      const code =
+        writeErr && typeof writeErr === 'object' && 'code' in writeErr
+          ? String((writeErr as { code?: unknown }).code).toLowerCase()
+          : '';
+      if (code.includes('permission-denied') || code.includes('unauthenticated')) {
+        await auth.currentUser.getIdToken(true).catch(() => undefined);
+        await new Promise((r) => setTimeout(r, 250));
+        return await runShopWrite();
+      }
+      throw writeErr;
+    }
   } catch (err) {
+    if (err instanceof Error && err.message.startsWith('AUTH_REQUIRED:')) {
+      throw err;
+    }
     handleFirestoreError(err, OperationType.WRITE, `shopkeeperListings/${shopId}`);
   }
 }

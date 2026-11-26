@@ -11,6 +11,7 @@ import {
 import { useAuth } from '../contexts/AuthContext';
 import { getShopCategoryLabel } from '../data/shopCategories';
 import { useLanguage } from '../i18n/LanguageContext';
+import { formatUiError } from '../lib/firebase';
 import {
   SHOPKEEPER_REGISTRATION_FEE_INR,
   adminApproveShopkeeperPayment,
@@ -78,7 +79,9 @@ export const AdminShopkeepersPanel: React.FC = () => {
         `Approved ₹500 registration for ${payment.shopName} (Receipt ${res.receiptNo}). Shop is now verified & live.`
       );
     } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : 'Failed to approve shopkeeper payment.');
+      setErrorMessage(
+        formatUiError(err, 'Failed to approve shopkeeper payment.', lang)
+      );
     } finally {
       setBusyUid(null);
     }
@@ -96,7 +99,9 @@ export const AdminShopkeepersPanel: React.FC = () => {
       });
       setStatusMessage(`Marked ₹500 payment as failed for ${payment.shopName}.`);
     } catch (err) {
-      setErrorMessage(err instanceof Error ? err.message : 'Failed to reject shopkeeper payment.');
+      setErrorMessage(
+        formatUiError(err, 'Failed to reject shopkeeper payment.', lang)
+      );
     } finally {
       setBusyUid(null);
     }

@@ -254,7 +254,17 @@ export const EmployerRegistrationForm: React.FC<EmployerRegistrationFormProps> =
       setShowSuccessScreen(true);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (err) {
-      setErrorMsg(formatUiError(err, 'Failed to save customer / employer registration. Please review your details and retry.'));
+      setErrorMsg(
+        formatUiError(
+          err,
+          lang === 'mr'
+            ? 'ग्राहक / नियोक्ता नोंदणी जतन करता आली नाही. कृपया तपशील तपासून पुन्हा प्रयत्न करा.'
+            : lang === 'hi'
+              ? 'ग्राहक / नियोक्ता पंजीकरण सहेजा नहीं जा सका। कृपया विवरण जाँचकर पुनः प्रयास करें।'
+              : 'Failed to save customer / employer registration. Please review your details and retry.',
+          lang
+        )
+      );
       window.setTimeout(() => {
         errorBoxRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }, 20);

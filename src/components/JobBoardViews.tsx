@@ -192,7 +192,17 @@ export const FindWorkView: React.FC<FindWorkViewProps> = ({
         onClearHighlightedJob();
       }
     } catch (err) {
-      setErrorMsg(err instanceof Error ? err.message : 'Unable to send offer.');
+      setErrorMsg(
+        formatUiError(
+          err,
+          lang === 'mr'
+            ? 'ऑफर पाठवता आला नाही. कृपया पुन्हा प्रयत्न करा.'
+            : lang === 'hi'
+              ? 'ऑफ़र भेजा नहीं जा सका। कृपया पुनः प्रयास करें।'
+              : 'Unable to send offer. Please try again.',
+          lang
+        )
+      );
     } finally {
       setSubmitting(false);
     }

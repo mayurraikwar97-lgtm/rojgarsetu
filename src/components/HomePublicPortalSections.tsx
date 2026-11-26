@@ -113,6 +113,19 @@ export const HomeIdentityHero: React.FC<HomeIdentityHeroProps> = ({
               </div>
             </div>
 
+            {/* Registration Campaign Notice (Marathi / Hindi / English) */}
+            <div className="rounded-lg border border-amber-300 bg-amber-50/90 px-3.5 py-2.5 flex items-start gap-2.5 max-w-4xl">
+              <Info className="w-4 h-4 text-[#C25E00] shrink-0 mt-0.5" />
+              <p className="text-xs sm:text-[13px] font-bold text-[#7C2D12] leading-snug">
+                {tr(
+                  lang,
+                  'Registration Campaign Live — Registrations are open now; live bookings & transactions begin from 1 January.',
+                  'अभी केवल पंजीकरण शुरू है — 1 जनवरी से सभी व्यवहार और बुकिंग शुरू होंगी।',
+                  'सध्या फक्त नोंदणी सुरू आहे — १ जानेवारीपासून व्यवहार व बुकिंग सुरू होतील.'
+                )}
+              </p>
+            </div>
+
             {/* Section 4: Clear Primary Actions ("कामगार शोधा", "कामाची जाहिरात टाका", "काम शोधा", "दुकान शोधा") */}
             <div className="space-y-3.5">
               <div className="grid grid-cols-2 xl:grid-cols-4 gap-2.5 max-w-4xl">

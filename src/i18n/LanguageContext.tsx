@@ -23,7 +23,7 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     } catch {
       // Ignore storage access errors
     }
-    return 'en';
+    return 'mr';
   });
 
   const setLang = (next: Language) => {

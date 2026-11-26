@@ -150,15 +150,36 @@ export const VehicleRegistrationForm: React.FC<VehicleRegistrationFormProps> = (
       return;
     }
     if (!isAuthenticatedUser(user)) {
-      setErrorMsg('Please sign in with Google to register a vehicle.');
+      setErrorMsg(
+        tr(
+          lang,
+          'Please sign in with Google to register a vehicle.',
+          'वाहन पंजीकृत करने के लिए कृपया गूगल खाते से लॉगिन करें।',
+          'वाहन नोंदणी करण्यासाठी कृपया गुगल खात्याने लॉगिन करा.'
+        )
+      );
       return;
     }
     if (ownerDisplayName.trim().length < 2) {
-      setErrorMsg('Please enter Owner / Driver Name (minimum 2 characters).');
+      setErrorMsg(
+        tr(
+          lang,
+          'Please enter Owner / Driver Name (minimum 2 characters).',
+          'कृपया मालिक / ड्राइवर का नाम दर्ज करें (कम से कम 2 अक्षर)।',
+          'कृपया मालक / चालकाचे नाव लिहा (किमान २ अक्षरे).'
+        )
+      );
       return;
     }
     if (vehicleTitle.trim().length < 2 || vehicleNumberMasked.trim().length < 4) {
-      setErrorMsg('Please enter Vehicle Model Name and Vehicle Plate Number.');
+      setErrorMsg(
+        tr(
+          lang,
+          'Please enter Vehicle Model Name and Vehicle Plate Number.',
+          'कृपया वाहन का मॉडल नाम और नंबर प्लेट दर्ज करें।',
+          'कृपया वाहनाचे मॉडेल नाव व नंबर प्लेट क्रमांक लिहा.'
+        )
+      );
       return;
     }
     if (!/^[6-9]\d{9}$/.test(mobile.trim())) {
@@ -229,7 +250,13 @@ export const VehicleRegistrationForm: React.FC<VehicleRegistrationFormProps> = (
       );
       setSuccessRegId(regId);
     } catch (err) {
-      setErrorMsg(formatUiError(err, 'Unable to register vehicle.'));
+      setErrorMsg(
+        formatUiError(
+          err,
+          tr(lang, 'Unable to register vehicle.', 'वाहन पंजीकृत नहीं किया जा सका।', 'वाहन नोंदणी करता आली नाही.'),
+          lang
+        )
+      );
     } finally {
       setSubmitting(false);
     }

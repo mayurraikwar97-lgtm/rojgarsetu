@@ -867,10 +867,17 @@ export async function createJobPosting(
     }
 
     try {
-      await currentUser.getIdToken(false);
+      const tokenResult = await currentUser.getIdTokenResult(false);
+      const expiresAtMs = Date.parse(tokenResult.expirationTime);
+      const isNearExpiry = Number.isFinite(expiresAtMs) && expiresAtMs - Date.now() < 120_000;
+      if (isNearExpiry) {
+        await currentUser.getIdToken(true);
+        await new Promise((r) => setTimeout(r, 150));
+      }
     } catch {
       try {
         await currentUser.getIdToken(true);
+        await new Promise((r) => setTimeout(r, 150));
       } catch (tokenErr) {
         const tokenMsg = tokenErr instanceof Error ? tokenErr.message.toLowerCase() : '';
         if (tokenMsg.includes('network') || tokenMsg.includes('offline') || tokenMsg.includes('unavailable')) {
@@ -1028,8 +1035,9 @@ export async function createJobPosting(
         writeCode.includes('unauthenticated') ||
         writeMsg.includes('missing or insufficient permissions')
       ) {
-        // Retry once after forcing a fresh Firebase Auth ID token in case the session just refreshed
+        // Retry once after forcing a fresh Firebase Auth ID token and allowing Firestore WebChannel propagation
         await currentUser.getIdToken(true).catch(() => undefined);
+        await new Promise((r) => setTimeout(r, 250));
         return await executeJobWrite();
       }
       throw writeErr;
@@ -3452,6 +3460,17 @@ export async function saveVehicleListing(
     await batch.commit();
     return pubRef.id;
   } catch (err) {
+    const code = err && typeof err === 'object' && 'code' in err ? String((err as { code?: unknown }).code).toLowerCase() : '';
+    if ((code.includes('permission-denied') || code.includes('unauthenticated')) && auth.currentUser) {
+      try {
+        await auth.currentUser.getIdToken(true);
+        await new Promise((r) => setTimeout(r, 250));
+        await batch.commit();
+        return pubRef.id;
+      } catch (retryErr) {
+        handleFirestoreError(retryErr, OperationType.CREATE, `vehicleListings/${pubRef.id}`);
+      }
+    }
     handleFirestoreError(err, OperationType.CREATE, `vehicleListings/${pubRef.id}`);
   }
 }
@@ -4247,32 +4266,40 @@ export async function callNotificationApi<T = Record<string, unknown>>(
   body?: Record<string, unknown>,
   timeoutMs = 10000
 ): Promise<{ status: number; data: T }> {
-  const idToken = auth.currentUser ? await auth.currentUser.getIdToken() : '';
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
-  if (idToken) {
-    headers.Authorization = `Bearer ${idToken}`;
-  }
-  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-  const timer =
-    controller && timeoutMs > 0
-      ? globalThis.setTimeout(() => controller.abort(), timeoutMs)
-      : null;
-  try {
-    const response = await fetch(endpoint, {
-      method: body ? 'POST' : 'GET',
-      headers,
-      ...(body ? { body: JSON.stringify(body) } : {}),
-      ...(controller ? { signal: controller.signal } : {}),
-    });
-    const data = (await response.json().catch(() => ({}))) as T;
-    return { status: response.status, data };
-  } finally {
-    if (timer !== null) {
-      globalThis.clearTimeout(timer);
+  const executeFetch = async (forceRefreshToken: boolean): Promise<{ status: number; data: T }> => {
+    const idToken = auth.currentUser ? await auth.currentUser.getIdToken(forceRefreshToken) : '';
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+    if (idToken) {
+      headers.Authorization = `Bearer ${idToken}`;
     }
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    const timer =
+      controller && timeoutMs > 0
+        ? globalThis.setTimeout(() => controller.abort(), timeoutMs)
+        : null;
+    try {
+      const response = await fetch(endpoint, {
+        method: body ? 'POST' : 'GET',
+        headers,
+        ...(body ? { body: JSON.stringify(body) } : {}),
+        ...(controller ? { signal: controller.signal } : {}),
+      });
+      const data = (await response.json().catch(() => ({}))) as T;
+      return { status: response.status, data };
+    } finally {
+      if (timer !== null) {
+        globalThis.clearTimeout(timer);
+      }
+    }
+  };
+
+  const firstRes = await executeFetch(false);
+  if (firstRes.status === 401 && auth.currentUser) {
+    return executeFetch(true);
   }
+  return firstRes;
 }
 
 // ============================================================

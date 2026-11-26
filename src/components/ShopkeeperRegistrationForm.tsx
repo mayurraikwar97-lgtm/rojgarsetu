@@ -400,7 +400,13 @@ export const ShopkeeperRegistrationForm: React.FC<ShopkeeperRegistrationFormProp
       });
       return saved;
     } catch (err) {
-      setErrorMsg(formatUiError(err, 'Could not save shopkeeper profile.'));
+      setErrorMsg(
+        formatUiError(
+          err,
+          tr(lang, 'Could not save shopkeeper profile.', 'दुकानदार प्रोफ़ाइल सेव नहीं हो सकी।', 'दुकानदार प्रोफाइल जतन करता आली नाही.'),
+          lang
+        )
+      );
       return null;
     } finally {
       setSavingProfile(false);
@@ -506,7 +512,13 @@ export const ShopkeeperRegistrationForm: React.FC<ShopkeeperRegistrationFormProp
                 )
               );
             } catch (verErr) {
-              setErrorMsg(formatUiError(verErr, 'Payment signature verification failed.'));
+              setErrorMsg(
+                formatUiError(
+                  verErr,
+                  tr(lang, 'Payment signature verification failed.', 'भुगतान सत्यापन विफल रहा।', 'पेमेंट पडताळणी अयशस्वी झाली.'),
+                  lang
+                )
+              );
             } finally {
               setPaying(false);
             }
@@ -550,7 +562,13 @@ export const ShopkeeperRegistrationForm: React.FC<ShopkeeperRegistrationFormProp
         )
       );
     } catch (err) {
-      setErrorMsg(formatUiError(err, 'Unable to initiate ₹500 shopkeeper payment.'));
+      setErrorMsg(
+        formatUiError(
+          err,
+          tr(lang, 'Unable to initiate ₹500 shopkeeper payment.', '₹500 दुकानदार भुगतान शुरू नहीं हो सका।', '₹500 दुकानदार पेमेंट सुरू करता आले नाही.'),
+          lang
+        )
+      );
     } finally {
       setPaying(false);
     }
@@ -600,7 +618,13 @@ export const ShopkeeperRegistrationForm: React.FC<ShopkeeperRegistrationFormProp
         )
       );
     } catch (err) {
-      setErrorMsg(formatUiError(err, 'Unable to submit UPI payment reference.'));
+      setErrorMsg(
+        formatUiError(
+          err,
+          tr(lang, 'Unable to submit UPI payment reference.', 'UPI भुगतान संदर्भ जमा नहीं हो सका।', 'UPI पेमेंट संदर्भ सबमिट करता आला नाही.'),
+          lang
+        )
+      );
     } finally {
       setSubmittingUtr(false);
     }

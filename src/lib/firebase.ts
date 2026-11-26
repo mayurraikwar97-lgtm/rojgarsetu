@@ -50,6 +50,7 @@ export enum OperationType {
 }
 
 export interface FirestoreErrorInfo {
+  code?: string;
   error: string;
   operationType: OperationType;
   path: string | null;
@@ -66,12 +67,49 @@ export interface FirestoreErrorInfo {
   };
 }
 
+export function extractFirebaseErrorCode(error: unknown): string {
+  if (error && typeof error === 'object' && 'code' in error) {
+    const rawCode = (error as { code?: unknown }).code;
+    if (typeof rawCode === 'string' && rawCode.trim()) {
+      return rawCode.trim().toLowerCase();
+    }
+  }
+  const msg = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  const parenMatch = msg.match(/\((?:firestore|auth|functions|storage)\/([a-z0-9-]+)\)/i);
+  if (parenMatch?.[1]) {
+    return parenMatch[1].toLowerCase();
+  }
+  const lower = msg.toLowerCase();
+  if (lower.includes('unauthenticated') || lower.includes('id-token-expired') || lower.includes('user-token-expired')) {
+    return 'unauthenticated';
+  }
+  if (lower.includes('permission-denied') || lower.includes('missing or insufficient permissions')) {
+    return 'permission-denied';
+  }
+  if (lower.includes('invalid-argument') || lower.includes('unsupported field value') || lower.includes('exceeds the maximum allowed size')) {
+    return 'invalid-argument';
+  }
+  if (lower.includes('failed-precondition') || lower.includes('requires an index')) {
+    return 'failed-precondition';
+  }
+  if (lower.includes('unavailable') || lower.includes('client is offline') || lower.includes('network-request-failed')) {
+    return 'unavailable';
+  }
+  if (lower.includes('deadline-exceeded')) return 'deadline-exceeded';
+  if (lower.includes('resource-exhausted') || lower.includes('quota exceeded')) return 'resource-exhausted';
+  if (lower.includes('aborted')) return 'aborted';
+  if (lower.includes('internal server error') || lower.includes('firestore/internal')) return 'internal';
+  return 'unknown';
+}
+
 export function handleFirestoreError(
   error: unknown,
   operationType: OperationType,
   path: string | null
 ): never {
+  const errCode = extractFirebaseErrorCode(error);
   const errInfo: FirestoreErrorInfo = {
+    code: errCode,
     error: error instanceof Error ? error.message : String(error),
     authInfo: {
       userId: auth.currentUser?.uid,
@@ -88,7 +126,7 @@ export function handleFirestoreError(
     operationType,
     path,
   };
-  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  console.error(`Firestore Error [${errCode}] (${operationType} ${path || ''}):`, errInfo);
   throw new Error(JSON.stringify(errInfo));
 }
 
@@ -127,7 +165,7 @@ function resolveActiveUiLang(explicitLang?: UiLang): UiLang {
   } catch {
     // Ignore storage/DOM access issues
   }
-  return 'en';
+  return 'mr';
 }
 
 function pickLocalized(lang: UiLang, en: string, hi: string, mr: string): string {
@@ -152,19 +190,30 @@ export function formatUiError(
     );
 
   const errObj = err && typeof err === 'object' ? (err as { code?: unknown; message?: unknown }) : null;
-  const errCode = typeof errObj?.code === 'string' ? errObj.code.toLowerCase() : '';
-  const raw = err instanceof Error ? err.message : typeof err === 'string' ? err : typeof errObj?.message === 'string' ? errObj.message : '';
+  let errCode = typeof errObj?.code === 'string' ? errObj.code.toLowerCase().trim() : '';
+  const raw =
+    err instanceof Error
+      ? err.message
+      : typeof err === 'string'
+        ? err
+        : typeof errObj?.message === 'string'
+          ? errObj.message
+          : '';
   if (!raw && !errCode) return resolvedFallback;
 
   let effectiveMsg = raw;
   let errorPath = '';
   let emailVerified: boolean | null | undefined;
+  let userId: string | null | undefined;
   let parsedStructuredJson = false;
 
   if (raw.trim().startsWith('{')) {
     try {
       const parsed = JSON.parse(raw) as Partial<FirestoreErrorInfo>;
       parsedStructuredJson = true;
+      if (typeof parsed.code === 'string' && parsed.code.trim()) {
+        errCode = parsed.code.trim().toLowerCase();
+      }
       if (typeof parsed.error === 'string' && parsed.error) {
         effectiveMsg = parsed.error;
       }
@@ -172,6 +221,7 @@ export function formatUiError(
         errorPath = parsed.path;
       }
       emailVerified = parsed.authInfo?.emailVerified;
+      userId = parsed.authInfo?.userId;
     } catch {
       // Never leak malformed raw JSON to the UI
       return resolvedFallback;
@@ -257,12 +307,11 @@ export function formatUiError(
     );
   }
 
+  const normalizedCode = errCode.replace(/^(firestore|auth|functions|storage)\//, '');
   const lower = `${errCode} ${effectiveMsg}`.toLowerCase();
 
-  if (
-    lower.includes('auth/popup-closed-by-user') ||
-    lower.includes('popup-closed-by-user')
-  ) {
+  // 1. Popup / Google Auth client errors
+  if (lower.includes('popup-closed-by-user')) {
     return pickLocalized(
       lang,
       'Google sign-in window was closed before completion. Click Sign In again to continue.',
@@ -271,7 +320,7 @@ export function formatUiError(
     );
   }
 
-  if (lower.includes('auth/popup-blocked') || lower.includes('popup-blocked')) {
+  if (lower.includes('popup-blocked')) {
     return pickLocalized(
       lang,
       'Your browser blocked the Google Sign-In popup. Please allow popups for this site and try again.',
@@ -280,7 +329,7 @@ export function formatUiError(
     );
   }
 
-  if (lower.includes('auth/unauthorized-domain')) {
+  if (lower.includes('unauthorized-domain')) {
     return pickLocalized(
       lang,
       'This domain is not yet authorized in Firebase Authentication settings.',
@@ -289,7 +338,45 @@ export function formatUiError(
     );
   }
 
+  // 2. UNAUTHENTICATED (expired / missing / invalid auth token)
   if (
+    normalizedCode === 'unauthenticated' ||
+    normalizedCode === 'id-token-expired' ||
+    normalizedCode === 'user-token-expired' ||
+    normalizedCode === 'user-token-revoked' ||
+    lower.includes('unauthenticated') ||
+    lower.includes('id-token-expired') ||
+    lower.includes('user-token-expired') ||
+    (parsedStructuredJson && !userId && lower.includes('permission'))
+  ) {
+    return pickLocalized(
+      lang,
+      'Your Google sign-in session has expired or is missing. Please sign out and sign in with Google again, then retry.',
+      'आपका गूगल लॉगिन सत्र समाप्त हो गया है या उपलब्ध नहीं है। कृपया फिर से गूगल लॉगिन करें और पुनः प्रयास करें।',
+      'तुमचे गुगल लॉगिन सेशन संपले आहे किंवा उपलब्ध नाही. कृपया लॉग आउट करून पुन्हा गुगल लॉगिन करा आणि प्रयत्न करा.'
+    );
+  }
+
+  // 3. INVALID-ARGUMENT (bad field value / data type / oversized payload)
+  if (
+    normalizedCode === 'invalid-argument' ||
+    lower.includes('invalid-argument') ||
+    lower.includes('unsupported field value') ||
+    lower.includes('exceeds the maximum allowed size') ||
+    lower.includes('invalid data')
+  ) {
+    return pickLocalized(
+      lang,
+      'Some form values or attached photos have an invalid format or exceed size limits. Please review your category, PIN code, and photos, then retry.',
+      'फॉर्म के कुछ विवरण या संलग्न फ़ोटो का प्रारूप अमान्य है या आकार सीमा से अधिक है। कृपया श्रेणी, पिनकोड और फ़ोटो जाँचकर पुनः प्रयास करें।',
+      'फॉर्ममधील काही माहिती किंवा जोडलेले फोटो चुकीच्या स्वरूपात आहेत किंवा आकार मर्यादेपेक्षा मोठे आहेत. कृपया श्रेणी, पिनकोड व फोटो तपासून पुन्हा प्रयत्न करा.'
+    );
+  }
+
+  // 4. UNAVAILABLE (network offline or Firestore service temporarily unreachable)
+  if (
+    normalizedCode === 'unavailable' ||
+    normalizedCode === 'network-request-failed' ||
     lower.includes('auth/network-request-failed') ||
     lower.includes('client is offline') ||
     lower.includes('unavailable') ||
@@ -300,13 +387,29 @@ export function formatUiError(
   ) {
     return pickLocalized(
       lang,
-      'Network unavailable while contacting ROJGAR SETU servers. Please check your internet connection and try again.',
-      'रोजगार सेतु सर्वर से जुड़ने में नेटवर्क समस्या आ रही है। कृपया अपना इंटरनेट कनेक्शन जाँचें और पुनः प्रयास करें।',
-      'रोजगार सेतू सर्व्हरशी संपर्क साधताना इंटरनेटची अडचण येत आहे. कृपया नेटवर्क तपासून पुन्हा प्रयत्न करा.'
+      'Service or internet connection is temporarily unavailable. Please check your network and try again in a moment.',
+      'इंटरनेट या सर्वर सेवा अस्थायी रूप से उपलब्ध नहीं है। कृपया अपना नेटवर्क जाँचें और कुछ क्षण बाद पुनः प्रयास करें।',
+      'इंटरनेट किंवा सर्व्हर सेवा तात्पुरती उपलब्ध नाही. कृपया नेटवर्क तपासून थोड्या वेळाने पुन्हा प्रयत्न करा.'
     );
   }
 
+  // 5. FAILED-PRECONDITION (index/state mismatch)
   if (
+    normalizedCode === 'failed-precondition' ||
+    lower.includes('failed-precondition') ||
+    lower.includes('requires an index')
+  ) {
+    return pickLocalized(
+      lang,
+      'This action could not be completed because a required database condition or index is not ready. Please refresh the page and try again.',
+      'आवश्यक डेटाबेस शर्त या इंडेक्स तैयार न होने के कारण यह अनुरोध पूरा नहीं हो सका। कृपया पेज रीफ़्रेश करें और पुनः प्रयास करें।',
+      'आवश्यक डेटाबेस अट किंवा इंडेक्स तयार नसल्यामुळे ही प्रक्रिया पूर्ण होऊ शकली नाही. कृपया पेज रीफ्रेश करून पुन्हा प्रयत्न करा.'
+    );
+  }
+
+  // 6. INTERNAL / HTTP 5xx server error
+  if (
+    normalizedCode === 'internal' ||
     lower.includes('http 500') ||
     lower.includes('http 502') ||
     lower.includes('http 503') ||
@@ -317,13 +420,44 @@ export function formatUiError(
   ) {
     return pickLocalized(
       lang,
-      'Server error while processing your request. Please wait a moment and try again.',
-      'आपकी रिक्वेस्ट प्रोसेस करते समय सर्वर त्रुटि हुई। कृपया कुछ क्षण बाद पुनः प्रयास करें।',
-      'तुमची रिक्वेस्ट प्रक्रिया करताना सर्व्हर त्रुटी आली आहे. कृपया थोड्या वेळाने पुन्हा प्रयत्न करा.'
+      'An internal server error occurred while processing your request. Please wait a moment and try again.',
+      'आपकी रिक्वेस्ट प्रोसेस करते समय आंतरिक सर्वर त्रुटि हुई। कृपया कुछ क्षण बाद पुनः प्रयास करें।',
+      'तुमची रिक्वेस्ट प्रक्रिया करताना अंतर्गत सर्व्हर त्रुटी आली आहे. कृपया थोड्या वेळाने पुन्हा प्रयत्न करा.'
     );
   }
 
+  // 7. QUOTA / RESOURCE-EXHAUSTED
   if (
+    normalizedCode === 'resource-exhausted' ||
+    lower.includes('resource-exhausted') ||
+    lower.includes('quota exceeded')
+  ) {
+    return pickLocalized(
+      lang,
+      'Daily database usage limit has been temporarily reached. Please try again shortly.',
+      'दैनिक डेटाबेस उपयोग सीमा अस्थायी रूप से पूरी हो गई है। कृपया थोड़ी देर बाद पुनः प्रयास करें।',
+      'दैनिक डेटाबेस वापर मर्यादा तात्पुरती पूर्ण झाली आहे. कृपया थोड्या वेळाने पुन्हा प्रयत्न करा.'
+    );
+  }
+
+  // 8. TIMEOUT / ABORTED
+  if (
+    normalizedCode === 'deadline-exceeded' ||
+    normalizedCode === 'aborted' ||
+    lower.includes('deadline-exceeded') ||
+    lower.includes('aborted')
+  ) {
+    return pickLocalized(
+      lang,
+      'The database request timed out or was interrupted. Please try submitting again.',
+      'डेटाबेस अनुरोध का समय समाप्त हो गया या बाधा आई। कृपया दोबारा प्रयास करें।',
+      'डेटाबेस रिक्वेस्टचा वेळ संपला किंवा अडथळा आला. कृपया पुन्हा प्रयत्न करा.'
+    );
+  }
+
+  // 9. PERMISSION-DENIED (Firestore security rules / ownership check)
+  if (
+    normalizedCode === 'permission-denied' ||
     lower.includes('permission-denied') ||
     lower.includes('missing or insufficient permissions') ||
     lower.includes('insufficient permissions')
@@ -347,38 +481,24 @@ export function formatUiError(
     if (errorPath.includes('profilePhotos')) {
       return pickLocalized(
         lang,
-        'Unable to save profile photo due to size or security checks. Please try a JPG/PNG/WebP image under 5 MB or submit without a photo.',
+        'Unable to save profile photo due to size or permission checks. Please try a JPG/PNG/WebP image under 5 MB or submit without a photo.',
         'सुरक्षा या आकार सीमा के कारण फ़ोटो सहेजी नहीं जा सकी। कृपया 5 MB से कम की JPG/PNG/WebP फ़ोटो चुनें या बिना फ़ोटो सबमिट करें।',
-        'आकार किंवा सुरक्षा तपासणीमुळे फोटो जतन करता आला नाही. कृपया 5 MB पेक्षा लहान JPG/PNG/WebP फोटो निवडा किंवा फोटोशिवाय पुढे जा.'
+        'आकार किंवा परवानगी तपासणीमुळे फोटो जतन करता आला नाही. कृपया 5 MB पेक्षा लहान JPG/PNG/WebP फोटो निवडा किंवा फोटोशिवाय पुढे जा.'
       );
     }
     if (errorPath.includes('jobs') || errorPath.includes('applications')) {
       return pickLocalized(
         lang,
-        'Database write failed due to security validation on your work request. Please sign out and sign back in with Google, verify your work category and 6-digit PIN code, and try again.',
-        'आपकी काम की रिक्वेस्ट की सुरक्षा जाँच में डेटाबेस लेखन विफल रहा। कृपया गूगल से दोबारा लॉगिन करें, काम की श्रेणी व 6 अंकों का पिनकोड जाँचें और पुनः प्रयास करें।',
-        'तुमच्या कामाच्या रिक्वेस्टची डेटाबेस सुरक्षा तपासणी पूर्ण होऊ शकली नाही. कृपया गुगल खात्याने पुन्हा लॉगिन करून कामाची श्रेणी व ६ अंकी पिनकोड तपासा आणि पुन्हा प्रयत्न करा.'
+        'Permission denied by Firestore rules while saving this work request. Please ensure you are signed in with your Google account and all required fields (category, location/PIN) are valid, then retry.',
+        'इस काम की रिक्वेस्ट को सहेजते समय Firestore अनुमति नियम से अस्वीकृति मिली। कृपया सत्यापित गूगल खाते से लॉगिन और श्रेणी व स्थान/पिनकोड जाँचकर पुनः प्रयास करें।',
+        'ही कामाची रिक्वेस्ट जतन करताना Firestore परवानगी नियमाने अडवले. कृपया गुगल खात्याने लॉगिन केल्याची व कामाची श्रेणी, ठिकाण/पिनकोड अचूक असल्याची खात्री करून पुन्हा प्रयत्न करा.'
       );
     }
     return pickLocalized(
       lang,
-      'Database write rejected due to account permissions or validation rules. Please verify your Google sign-in and required fields, then try again.',
-      'खाता अनुमति या सत्यापन नियमों के कारण डेटाबेस लेखन अस्वीकार हुआ। कृपया गूगल लॉगिन व आवश्यक विवरण जाँचकर पुनः प्रयास करें।',
-      'खाते परवानगी किंवा डेटा तपासणीमुळे डेटाबेस जतन अयशस्वी झाले. कृपया गुगल लॉगिन व सर्व आवश्यक माहिती तपासून पुन्हा प्रयत्न करा.'
-    );
-  }
-
-  if (
-    lower.includes('deadline-exceeded') ||
-    lower.includes('resource-exhausted') ||
-    lower.includes('aborted') ||
-    lower.includes('failed-precondition')
-  ) {
-    return pickLocalized(
-      lang,
-      'Database write timed out or was interrupted. Please try submitting your request again.',
-      'डेटाबेस में रिक्वेस्ट सहेजते समय समय समाप्त हो गया या बाधा आई। कृपया दोबारा प्रयास करें।',
-      'डेटाबेसमध्ये रिक्वेस्ट जतन करताना वेळ संपला किंवा अडथळा आला. कृपया पुन्हा प्रयत्न करा.'
+      'Permission denied for this account or document. Please verify your Google sign-in and try again.',
+      'इस खाते या रिकॉर्ड के लिए अनुमति नहीं है। कृपया अपना गूगल लॉगिन जाँचें और पुनः प्रयास करें।',
+      'या खात्यासाठी किंवा नोंदीसाठी परवानगी नाकारली गेली आहे. कृपया तुमचे गुगल लॉगिन तपासून पुन्हा प्रयत्न करा.'
     );
   }
 
