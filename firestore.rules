@@ -66,6 +66,7 @@ service cloud.firestore {
 
     function isVerifiedUser() {
       return isSignedIn() && (
+        ('email_verified' in request.auth.token && request.auth.token.email_verified == true) ||
         !('firebase' in request.auth.token) ||
         !('sign_in_provider' in request.auth.token.firebase) ||
         request.auth.token.firebase.sign_in_provider != 'anonymous'

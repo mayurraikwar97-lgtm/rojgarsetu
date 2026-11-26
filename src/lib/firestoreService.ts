@@ -1036,6 +1036,17 @@ export async function createJobPosting(
         .slice(0, 100);
     }
 
+    const finalApproxWithPin =
+      sanitizedPincode.length === 6 && !approxLocationLabel.includes(sanitizedPincode)
+        ? `${approxLocationLabel} (${sanitizedPincode})`.slice(0, 160)
+        : approxLocationLabel;
+    const finalWorkLocWithPin =
+      sanitizedPincode.length === 6 && !finalWorkLocationLabel.includes(sanitizedPincode)
+        ? `${finalWorkLocationLabel} (${sanitizedPincode})`.slice(0, 160)
+        : finalWorkLocationLabel;
+    baseDoc.approxLocationLabel = finalApproxWithPin;
+    baseDoc.workLocationLabel = finalWorkLocWithPin;
+
     debugDocMeta = {
       path,
       docId: safeKey && safeKey.length >= 8 ? safeKey : '(auto-id)',
@@ -1054,38 +1065,59 @@ export async function createJobPosting(
       payloadKeys: Object.keys(baseDoc).sort(),
     };
 
-    const executeJobWrite = async (): Promise<string> => {
+    const executeJobWrite = async (docData: Record<string, unknown>): Promise<string> => {
       if (safeKey && safeKey.length >= 8) {
         const targetRef = doc(db, path, safeKey);
         const existingSnap = await getDoc(targetRef);
         if (existingSnap.exists()) {
           return existingSnap.id;
         }
-        await setDoc(targetRef, baseDoc);
+        await setDoc(targetRef, docData);
         return safeKey;
       }
 
-      const ref = await addDoc(collection(db, path), baseDoc);
+      const ref = await addDoc(collection(db, path), docData);
       return ref.id;
     };
 
-    try {
-      return await executeJobWrite();
-    } catch (writeErr) {
-      const writeCode =
-        writeErr && typeof writeErr === 'object' && 'code' in writeErr
-          ? String((writeErr as { code?: unknown }).code).toLowerCase()
+    const isPermErr = (e: unknown): boolean => {
+      const c =
+        e && typeof e === 'object' && 'code' in e
+          ? String((e as { code?: unknown }).code).toLowerCase()
           : '';
-      const writeMsg = writeErr instanceof Error ? writeErr.message.toLowerCase() : '';
-      if (
-        writeCode.includes('permission-denied') ||
-        writeCode.includes('unauthenticated') ||
-        writeMsg.includes('missing or insufficient permissions')
-      ) {
-        // Retry once after forcing a fresh Firebase Auth ID token and allowing Firestore WebChannel propagation
+      const m = e instanceof Error ? e.message.toLowerCase() : '';
+      return (
+        c.includes('permission-denied') ||
+        c.includes('unauthenticated') ||
+        m.includes('missing or insufficient permissions')
+      );
+    };
+
+    try {
+      return await executeJobWrite(baseDoc);
+    } catch (writeErr) {
+      if (isPermErr(writeErr)) {
+        // Retry 1: force fresh Firebase Auth ID token and allow WebChannel token propagation
         await currentUser.getIdToken(true).catch(() => undefined);
         await new Promise((r) => setTimeout(r, 250));
-        return await executeJobWrite();
+        try {
+          return await executeJobWrite(baseDoc);
+        } catch (retryErr) {
+          if (isPermErr(retryErr)) {
+            // Retry 2: strip optional extension fields (customerUid, pincode, requestStatus)
+            // in case an older ruleset revision is still active while preserving employerUid and PIN in labels
+            const compatDoc: Record<string, unknown> = { ...baseDoc };
+            delete compatDoc.customerUid;
+            delete compatDoc.pincode;
+            delete compatDoc.requestStatus;
+            console.warn('[ROJGAR SETU][jobs.create] Retrying with canonical compatible job payload:', {
+              removedKeys: ['customerUid', 'pincode', 'requestStatus'],
+              keys: Object.keys(compatDoc).sort(),
+            });
+            return await executeJobWrite(compatDoc);
+          }
+          throw retryErr;
+        }
       }
       throw writeErr;
     }
