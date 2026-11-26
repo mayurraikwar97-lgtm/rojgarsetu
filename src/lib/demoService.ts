@@ -15,7 +15,7 @@ import {
 } from 'firebase/firestore';
 import { calculateDistanceKm } from '../data/indiaLocations';
 import { getFirebaseVapidKey } from './appConfig';
-import { db, handleFirestoreError, OperationType } from './firebase';
+import { db, handleFirestoreError, logFirestoreListenerError, OperationType } from './firebase';
 import { callNotificationApi } from './firestoreService';
 import {
   deleteProfilePhotoRecord,
@@ -151,7 +151,10 @@ export function subscribeDemoUsers(
       list.sort((a, b) => a.uniqueUserId.localeCompare(b.uniqueUserId));
       onData(list);
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      onData([]);
+    }
   );
 }
 
@@ -167,7 +170,10 @@ export function subscribeDemoWorkOrders(
       (snap) => {
         onData(sortByCreatedAtDesc(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DemoWorkOrder))));
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, path)
+      (err) => {
+        logFirestoreListenerError(err, OperationType.LIST, path);
+        onData([]);
+      }
     );
   }
 
@@ -192,7 +198,11 @@ export function subscribeDemoWorkOrders(
       snap.docs.forEach((d) => buckets.owned.set(d.id, { id: d.id, ...d.data() } as DemoWorkOrder));
       emit();
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      buckets.owned.clear();
+      emit();
+    }
   );
 
   const u2 = onSnapshot(
@@ -202,7 +212,11 @@ export function subscribeDemoWorkOrders(
       snap.docs.forEach((d) => buckets.matched.set(d.id, { id: d.id, ...d.data() } as DemoWorkOrder));
       emit();
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      buckets.matched.clear();
+      emit();
+    }
   );
 
   const u3 = onSnapshot(
@@ -212,7 +226,11 @@ export function subscribeDemoWorkOrders(
       snap.docs.forEach((d) => buckets.accepted.set(d.id, { id: d.id, ...d.data() } as DemoWorkOrder));
       emit();
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      buckets.accepted.clear();
+      emit();
+    }
   );
 
   return () => {
@@ -237,7 +255,10 @@ export function subscribeDemoLocationShares(
     (snap) => {
       onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DemoLiveLocationShare)));
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      onData([]);
+    }
   );
 }
 
@@ -253,7 +274,10 @@ export function subscribeDemoNotifications(
       (snap) => {
         onData(sortByCreatedAtDesc(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DemoNotificationRecord))));
       },
-      (err) => handleFirestoreError(err, OperationType.LIST, path)
+      (err) => {
+        logFirestoreListenerError(err, OperationType.LIST, path);
+        onData([]);
+      }
     );
   }
 
@@ -274,7 +298,11 @@ export function subscribeDemoNotifications(
       snap.docs.forEach((d) => received.set(d.id, { id: d.id, ...d.data() } as DemoNotificationRecord));
       emit();
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      received.clear();
+      emit();
+    }
   );
 
   const u2 = onSnapshot(
@@ -284,7 +312,11 @@ export function subscribeDemoNotifications(
       snap.docs.forEach((d) => sent.set(d.id, { id: d.id, ...d.data() } as DemoNotificationRecord));
       emit();
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      sent.clear();
+      emit();
+    }
   );
 
   return () => {

@@ -575,10 +575,12 @@ Return concise, practical JSON.`;
 
   if (!IS_PROD) {
     const { createServer: createViteServer } = await import('vite');
+    const enableHmr = process.env.DISABLE_HMR !== 'true';
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
-        ws: { server: httpServer },
+        hmr: enableHmr ? { server: httpServer } : false,
+        ...(enableHmr ? {} : { ws: false }),
       },
       appType: 'spa',
     });

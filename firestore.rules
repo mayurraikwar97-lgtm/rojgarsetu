@@ -346,7 +346,7 @@ service cloud.firestore {
           'biddingEnabled', 'status', 'applicationsCount', 'createdAt', 'updatedAt'
         ])
         && data.keys().hasOnly([
-          'employerUid', 'employerName', 'customerGenderProtected', 'customerLastName', 'hasExactAddressVault',
+          'employerUid', 'customerUid', 'employerName', 'customerGenderProtected', 'customerLastName', 'hasExactAddressVault',
           'title', 'category', 'description',
           'workersRequired', 'requiredSkills', 'state', 'district', 'cityOrVillage', 'pincode',
           'workLocationLabel', 'lat', 'lng', 'jobDate', 'startTime', 'duration',
@@ -363,6 +363,7 @@ service cloud.firestore {
           'applicationsCount', 'createdAt', 'updatedAt'
         ])
         && isValidId(data.employerUid)
+        && optId(data, 'customerUid')
         && isStr(data.employerName, 1, 160)
         && optBool(data, 'customerGenderProtected')
         && optStr(data, 'customerLastName', 60)
@@ -1464,6 +1465,7 @@ service cloud.firestore {
         && isVerifiedUser()
         && isValidJob(incoming())
         && incoming().employerUid == request.auth.uid
+        && (!('customerUid' in incoming()) || incoming().customerUid == request.auth.uid)
         && incoming().status == 'open'
         && (!('requestStatus' in incoming()) || incoming().requestStatus == 'PENDING')
         && incoming().applicationsCount == 0
@@ -1473,6 +1475,8 @@ service cloud.firestore {
         && isValidJob(incoming())
         && isValidTimestampOnUpdate()
         && incoming().employerUid == existing().employerUid
+        && (!('customerUid' in existing()) || ('customerUid' in incoming() && incoming().customerUid == existing().customerUid))
+        && (!('customerUid' in incoming()) || incoming().customerUid == existing().employerUid)
         && (
           isAdmin() ||
           (

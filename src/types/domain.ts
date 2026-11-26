@@ -262,6 +262,7 @@ export type JobRequestStatus =
 export interface JobPosting {
   id: string;
   employerUid: string;
+  customerUid?: string;
   employerName: string;
   customerGenderProtected?: boolean;
   customerLastName?: string;

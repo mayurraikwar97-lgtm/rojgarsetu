@@ -57,7 +57,7 @@ import {
   isFemaleCustomerProtected,
 } from '../lib/customerPrivacy';
 import { getSixStepLabel, toSixStepDealStage } from '../lib/dealWorkflow';
-import { formatUiError, isAuthenticatedUser } from '../lib/firebase';
+import { extractFirebaseErrorCode, formatUiError, isAuthenticatedUser } from '../lib/firebase';
 import {
   callNotificationApi,
   createInstantHireRequest,
@@ -588,11 +588,17 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
 
     try {
       let activeUser = user;
+      let signedInJustNow = false;
       if (!activeUser) {
         try {
           activeUser = await signInWithGoogleStrict();
+          signedInJustNow = true;
         } catch (authErr) {
-          setFormError(
+          console.error('[ROJGAR SETU][CustomerHomeV2] Google sign-in failed during submit:', {
+            code: extractFirebaseErrorCode(authErr),
+            error: authErr,
+          });
+          showFormError(
             formatUiError(
               authErr,
               formatUiError(new Error('AUTH_REQUIRED: Google login required'), undefined, lang),
@@ -604,7 +610,7 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
       }
 
       if (!activeUser?.uid) {
-        setFormError(formatUiError(new Error('AUTH_REQUIRED: Google login required'), undefined, lang));
+        showFormError(formatUiError(new Error('AUTH_REQUIRED: Google login required'), undefined, lang));
         return;
       }
 
@@ -616,19 +622,23 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
           // Ignore reload errors and re-check below
         }
         if (!isAuthenticatedUser(activeUser)) {
-          setFormError(formatUiError(new Error('EMAIL_UNVERIFIED: Email not verified'), undefined, lang));
+          showFormError(formatUiError(new Error('EMAIL_UNVERIFIED: Email not verified'), undefined, lang));
           return;
         }
       }
 
       // Refresh Firebase Auth token so freshly signed-in or resumed sessions pass Firestore rules reliably
       try {
-        await activeUser.getIdToken(false);
+        await activeUser.getIdToken(signedInJustNow);
+        if (signedInJustNow) {
+          await new Promise((r) => setTimeout(r, 150));
+        }
       } catch {
         try {
           await activeUser.getIdToken(true);
+          await new Promise((r) => setTimeout(r, 150));
         } catch {
-          // Proceed; createJobPosting also refreshes before write
+          // Proceed; createJobPosting also refreshes and surfaces exact token errors before write
         }
       }
 
@@ -703,8 +713,11 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
           ? `${trimmedManualArea}, ${trimmedManualCity}`
           : trimmedManualCity || effectiveLoc.cityOrVillage || effDistrict
       ).slice(0, 100);
-      const resolvedPincode =
-        cleanPin || effectiveLoc.pincode || extractSixDigitPincode(effectiveLoc.label);
+      const geocodedPinCandidate = (effectiveLoc.pincode || extractSixDigitPincode(effectiveLoc.label) || '')
+        .replace(/\D/g, '')
+        .slice(0, 6);
+      const validGeocodedPin = /^[1-9]\d{5}$/.test(geocodedPinCandidate) ? geocodedPinCandidate : '';
+      const resolvedPincode = cleanPin || validGeocodedPin;
       const finalDescription =
         cleanedDesc.length >= 10
           ? cleanedDesc.slice(0, 2000)
@@ -742,6 +755,7 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
       const res = await createInstantHireRequest(
         {
           employerUid: activeUser.uid,
+          customerUid: activeUser.uid,
           employerName: customerName.length >= 2 ? customerName : 'Customer',
           customerGenderProtected: genderProtected,
           ...(resolvedLastName && resolvedLastName !== 'Customer'
@@ -922,7 +936,18 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
         })
         .catch(() => undefined);
     } catch (err) {
-      setFormError(
+      const errorCode = extractFirebaseErrorCode(err);
+      console.error('[ROJGAR SETU][CustomerHomeV2.handleSubmitOrder] Work request submission failed:', {
+        code: errorCode,
+        uid: user?.uid ?? null,
+        emailVerified: user?.emailVerified ?? null,
+        providerIds: user?.providerData?.map((p) => p.providerId) ?? [],
+        category: selectedCategory?.canonicalCategory ?? null,
+        pincode: cleanPin || location.pincode || null,
+        rawMessage: err instanceof Error ? err.message : String(err),
+        error: err,
+      });
+      showFormError(
         formatUiError(
           err,
           tr(

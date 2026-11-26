@@ -672,13 +672,13 @@ const AppShell: React.FC = () => {
   }, [isAdmin]);
 
   useEffect(() => {
-    if (!user?.uid) {
+    if (!isAuthenticatedUser(user)) {
       setCustomerApplications([]);
       return;
     }
     const u = subscribeEmployerApplications(user.uid, setCustomerApplications);
     return () => u();
-  }, [user?.uid]);
+  }, [user]);
 
   // Global real-time in-app notification subscription + WhatsApp-style top banner & voice alert
   useEffect(() => {

@@ -22,7 +22,7 @@ import type {
   Language,
   WageUnit,
 } from '../types/domain';
-import { db, handleFirestoreError, OperationType } from './firebase';
+import { db, handleFirestoreError, logFirestoreListenerError, OperationType } from './firebase';
 
 export const OTHER_PROFESSION_OPTION_VALUE = '__OTHER_CUSTOM_PROFESSION__';
 
@@ -367,7 +367,8 @@ export function subscribeAllProfessionsAdmin(
       callback(items);
     },
     (err) => {
-      handleFirestoreError(err, OperationType.LIST, 'customProfessions');
+      logFirestoreListenerError(err, OperationType.LIST, 'customProfessions');
+      callback([]);
     }
   );
 }

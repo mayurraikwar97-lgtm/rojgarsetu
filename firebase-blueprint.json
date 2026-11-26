@@ -186,6 +186,7 @@
       "type": "object",
       "properties": {
         "employerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "customerUid": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
         "employerName": { "type": "string", "minLength": 1, "maxLength": 160 },
         "customerGenderProtected": { "type": "boolean" },
         "customerLastName": { "type": "string", "maxLength": 60 },

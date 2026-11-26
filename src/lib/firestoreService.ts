@@ -17,7 +17,15 @@ import {
   where,
   writeBatch,
 } from 'firebase/firestore';
-import { auth, db, handleFirestoreError, isAuthenticatedUser, OperationType } from './firebase';
+import {
+  auth,
+  db,
+  extractFirebaseErrorCode,
+  handleFirestoreError,
+  isAuthenticatedUser,
+  logFirestoreListenerError,
+  OperationType,
+} from './firebase';
 import { grantAcceptedCustomerPhoto } from './photoStorageService';
 import { normalizeTenDigitIndianMobile } from './pinAuth';
 import {
@@ -92,7 +100,10 @@ export function subscribePublicWorkers(onData: (items: PublicWorkerProfile[]) =>
     (snap) => {
       onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as PublicWorkerProfile)));
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      onData([]);
+    }
   );
 }
 
@@ -104,7 +115,10 @@ export function subscribePublicEmployers(onData: (items: PublicEmployerProfile[]
     (snap) => {
       onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as PublicEmployerProfile)));
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      onData([]);
+    }
   );
 }
 
@@ -116,7 +130,10 @@ export function subscribeJobs(onData: (items: JobPosting[]) => void): () => void
     (snap) => {
       onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as JobPosting)));
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      onData([]);
+    }
   );
 }
 
@@ -128,7 +145,10 @@ export function subscribeAnnouncements(onData: (items: PlatformAnnouncement[]) =
     (snap) => {
       onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as PlatformAnnouncement)));
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      onData([]);
+    }
   );
 }
 
@@ -143,7 +163,10 @@ export function subscribeWorkerApplications(
     (snap) => {
       onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as JobApplication)));
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      onData([]);
+    }
   );
 }
 
@@ -158,7 +181,10 @@ export function subscribeEmployerApplications(
     (snap) => {
       onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as JobApplication)));
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      onData([]);
+    }
   );
 }
 
@@ -169,7 +195,10 @@ export function subscribeAllApplicationsAdmin(onData: (items: JobApplication[]) 
     (snap) => {
       onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as JobApplication)));
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      onData([]);
+    }
   );
 }
 
@@ -180,7 +209,10 @@ export function subscribeAdminEnquiries(onData: (items: PartnershipEnquiry[]) =>
     (snap) => {
       onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as PartnershipEnquiry)));
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      onData([]);
+    }
   );
 }
 
@@ -191,7 +223,10 @@ export function subscribeAdminGrievances(onData: (items: GrievanceReport[]) => v
     (snap) => {
       onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as GrievanceReport)));
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      onData([]);
+    }
   );
 }
 
@@ -202,7 +237,10 @@ export function subscribeAdminAuditLogs(onData: (items: AuditLog[]) => void): ()
     (snap) => {
       onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as AuditLog)));
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      onData([]);
+    }
   );
 }
 
@@ -879,9 +917,15 @@ export async function createJobPosting(
         await currentUser.getIdToken(true);
         await new Promise((r) => setTimeout(r, 150));
       } catch (tokenErr) {
-        const tokenMsg = tokenErr instanceof Error ? tokenErr.message.toLowerCase() : '';
-        if (tokenMsg.includes('network') || tokenMsg.includes('offline') || tokenMsg.includes('unavailable')) {
-          throw new Error('NETWORK_ERROR: Failed to verify Firebase auth token due to network error.');
+        const tokenCode = extractFirebaseErrorCode(tokenErr);
+        console.error('[ROJGAR SETU][jobs.create] Auth ID token refresh failed:', {
+          uid: currentUser.uid,
+          emailVerified: currentUser.emailVerified,
+          code: tokenCode,
+          message: tokenErr instanceof Error ? tokenErr.message : String(tokenErr),
+        });
+        if (tokenCode !== 'unknown') {
+          throw tokenErr;
         }
         throw new Error('AUTH_REQUIRED: Failed to obtain valid Firebase ID token.');
       }
@@ -892,6 +936,7 @@ export async function createJobPosting(
 
     const baseDoc: Record<string, unknown> = {
       employerUid: resolvedEmployerUid,
+      customerUid: resolvedEmployerUid,
       employerName: finalEmployerName,
       title: finalTitle,
       category: finalCategory,
@@ -996,7 +1041,9 @@ export async function createJobPosting(
       docId: safeKey && safeKey.length >= 8 ? safeKey : '(auto-id)',
       authUid: auth.currentUser?.uid ?? null,
       emailVerified: auth.currentUser?.emailVerified ?? null,
+      providerIds: auth.currentUser?.providerData?.map((p) => p.providerId) ?? [],
       employerUid: baseDoc.employerUid,
+      customerUid: baseDoc.customerUid,
       category: baseDoc.category,
       status: baseDoc.status,
       requestStatus: baseDoc.requestStatus,
@@ -3381,7 +3428,10 @@ export function subscribeVehicleListings(onData: (items: VehicleListing[]) => vo
     (snap) => {
       onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as VehicleListing)));
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      onData([]);
+    }
   );
 }
 
@@ -3396,7 +3446,10 @@ export function subscribeOwnerVehicles(
     (snap) => {
       onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as VehicleListing)));
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      onData([]);
+    }
   );
 }
 
@@ -3411,7 +3464,10 @@ export function subscribeCustomerVehicleBookings(
     (snap) => {
       onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as VehicleBooking)));
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      onData([]);
+    }
   );
 }
 
@@ -3426,7 +3482,10 @@ export function subscribeOwnerVehicleBookings(
     (snap) => {
       onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as VehicleBooking)));
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      onData([]);
+    }
   );
 }
 
@@ -3536,7 +3595,10 @@ export function subscribeCustomerPreference(
         onData(null);
       }
     },
-    (err) => handleFirestoreError(err, OperationType.GET, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.GET, path);
+      onData(null);
+    }
   );
 }
 
@@ -3677,7 +3739,10 @@ export function subscribeNotificationPreferences(
     (snap) => {
       onData(snap.exists() ? ({ id: snap.id, ...snap.data() } as NotificationPreferences) : null);
     },
-    (err) => handleFirestoreError(err, OperationType.GET, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.GET, path);
+      onData(null);
+    }
   );
 }
 
@@ -3771,7 +3836,10 @@ export function subscribeUserDeviceTokens(
     (snap) => {
       onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DeviceTokenRecord)));
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      onData([]);
+    }
   );
 }
 
@@ -3784,7 +3852,10 @@ export function subscribeAllDeviceTokensAdmin(
     (snap) => {
       onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DeviceTokenRecord)));
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      onData([]);
+    }
   );
 }
 
@@ -3805,7 +3876,10 @@ export function subscribeUserNotifications(
       });
       onData(list);
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      onData([]);
+    }
   );
 }
 
@@ -3854,7 +3928,10 @@ export function subscribeDealMessages(
       });
       onData(list);
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      onData([]);
+    }
   );
 }
 
@@ -3887,7 +3964,10 @@ export function subscribeOrderMessagesForParticipant(params: {
       });
       params.onData(list);
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      params.onData([]);
+    }
   );
 }
 
@@ -3908,7 +3988,10 @@ export function subscribeAllCustomerOrderMessages(
       });
       onData(list);
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      onData([]);
+    }
   );
 }
 
@@ -4011,7 +4094,10 @@ export function subscribeDealLocationShares(
     (snap) => {
       onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DealLocationShare)));
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      onData([]);
+    }
   );
 }
 
@@ -4129,7 +4215,10 @@ export function subscribeDeliveryLogsAdmin(
     (snap) => {
       onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as NotificationDeliveryLog)));
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      onData([]);
+    }
   );
 }
 
@@ -4143,7 +4232,10 @@ export function subscribeDemoAccounts(
     (snap) => {
       onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DemoWorkerAccount)));
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      onData([]);
+    }
   );
 }
 
@@ -4183,7 +4275,10 @@ export function subscribeDemoJobs(
     (snap) => {
       onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DemoJobPosting)));
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      onData([]);
+    }
   );
 }
 
@@ -4217,7 +4312,10 @@ export function subscribeDemoApplicationsByUser(
     (snap) => {
       onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DemoJobApplication)));
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      onData([]);
+    }
   );
 }
 
@@ -4231,7 +4329,10 @@ export function subscribeAllDemoApplicationsAdmin(
     (snap) => {
       onData(snap.docs.map((d) => ({ id: d.id, ...d.data() } as DemoJobApplication)));
     },
-    (err) => handleFirestoreError(err, OperationType.LIST, path)
+    (err) => {
+      logFirestoreListenerError(err, OperationType.LIST, path);
+      onData([]);
+    }
   );
 }
 

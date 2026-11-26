@@ -21,7 +21,7 @@ import { SERVICE_CATALOG_V2, getServiceCategoryLabel } from '../data/serviceCata
 import { getDistrictCoordinates, INDIA_STATES_DISTRICTS } from '../data/indiaLocations';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../i18n/LanguageContext';
-import { formatUiError, isAuthenticatedUser } from '../lib/firebase';
+import { extractFirebaseErrorCode, formatUiError, isAuthenticatedUser } from '../lib/firebase';
 import {
   extractLastName,
   getApproximateCoordinates,
@@ -1386,6 +1386,7 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
 
       const jobPayload = {
         employerUid: user.uid,
+        customerUid: user.uid,
         employerName: workerVisibleName,
         customerGenderProtected: genderProtected,
         ...(resolvedLastName && resolvedLastName !== 'Customer'
@@ -1533,6 +1534,16 @@ export const PostJobView: React.FC<PostJobViewProps> = ({ workers = [], onNaviga
           // Non-blocking: job is already saved and in-app alerts already dispatched
         });
     } catch (err) {
+      console.error('[ROJGAR SETU][PostJobView.handleSubmit] Work request submission failed:', {
+        code: extractFirebaseErrorCode(err),
+        uid: user?.uid ?? null,
+        emailVerified: user?.emailVerified ?? null,
+        providerIds: user?.providerData?.map((p) => p.providerId) ?? [],
+        category: cleanCategory,
+        pincode: cleanPin || null,
+        rawMessage: err instanceof Error ? err.message : String(err),
+        error: err,
+      });
       setErrorMsg(
         formatUiError(
           err,
