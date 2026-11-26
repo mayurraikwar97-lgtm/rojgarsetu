@@ -5,18 +5,24 @@ import {
   Building2,
   CheckCircle2,
   Clock,
+  ExternalLink,
   Eye,
   Image as ImageIcon,
   Loader2,
+  MapPin,
   Megaphone,
+  MessageCircle,
   MousePointerClick,
+  Phone,
   PlusCircle,
+  Search,
   ShieldCheck,
   Upload,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../i18n/LanguageContext';
 import { INDIA_STATES_DISTRICTS } from '../data/indiaLocations';
+import { isAuthenticatedUser } from '../lib/firebase';
 import { uploadAdBannerImage } from '../lib/workPhotoService';
 import {
   DEFAULT_AD_TARGET_CATEGORIES,
@@ -24,9 +30,11 @@ import {
   getTodayIsoDate,
   saveAdvertiserProfile,
   submitAdvertisementForApproval,
+  subscribeActiveAdvertisements,
   subscribeAdvertisementCategories,
   subscribeAdvertiserProfile,
   subscribeOwnerAdvertisements,
+  recordAdvertisementClick,
 } from '../lib/adsReferralService';
 import { getCustomProfessionLabel, subscribeApprovedProfessions } from '../lib/customProfessionService';
 import type {
@@ -51,6 +59,11 @@ function tr(lang: Language, en: string, hi: string, mr: string): string {
 export const AdvertiserDashboardView: React.FC<AdvertiserDashboardViewProps> = ({ onNavigate }) => {
   const { lang } = useLanguage();
   const { user, signInWithGoogle } = useAuth();
+
+  const [panelTab, setPanelTab] = useState<'browse' | 'post'>('browse');
+  const [publicAds, setPublicAds] = useState<AdvertisementRecord[]>([]);
+  const [adAreaFilter, setAdAreaFilter] = useState('');
+  const [adCategoryFilter, setAdCategoryFilter] = useState('all');
 
   const [profile, setProfile] = useState<AdvertiserProfile | null>(null);
   const [myAds, setMyAds] = useState<AdvertisementRecord[]>([]);
@@ -95,14 +108,16 @@ export const AdvertiserDashboardView: React.FC<AdvertiserDashboardViewProps> = (
   useEffect(() => {
     const uCat = subscribeAdvertisementCategories(setCustomCategories);
     const uProf = subscribeApprovedProfessions(setApprovedProfessions);
+    const uPublic = subscribeActiveAdvertisements(setPublicAds);
     return () => {
       uCat();
       uProf();
+      uPublic();
     };
   }, []);
 
   useEffect(() => {
-    if (!user?.emailVerified) {
+    if (!isAuthenticatedUser(user)) {
       setProfile(null);
       setMyAds([]);
       return;
@@ -136,7 +151,7 @@ export const AdvertiserDashboardView: React.FC<AdvertiserDashboardViewProps> = (
       u1();
       u2();
     };
-  }, [user?.uid, user?.emailVerified]);
+  }, [user]);
 
   const districtsForState = useMemo(() => {
     const found = INDIA_STATES_DISTRICTS.find((st) => st.name === stateName);
@@ -217,7 +232,7 @@ export const AdvertiserDashboardView: React.FC<AdvertiserDashboardViewProps> = (
 
   const handleSaveBusinessProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user?.emailVerified) return;
+    if (!isAuthenticatedUser(user)) return;
     setErrorMsg('');
     setFeedback('');
 
@@ -262,7 +277,7 @@ export const AdvertiserDashboardView: React.FC<AdvertiserDashboardViewProps> = (
 
   const handleSubmitAd = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user?.emailVerified) return;
+    if (!isAuthenticatedUser(user)) return;
     setErrorMsg('');
     setFeedback('');
 
@@ -435,18 +450,247 @@ export const AdvertiserDashboardView: React.FC<AdvertiserDashboardViewProps> = (
         </div>
       </section>
 
-      {!user ? (
+      {/* Dedicated Advertisement Panel Switcher: Browse Local Shop Ads vs Post Shop Ad */}
+      <div className="flex flex-wrap items-center gap-2 bg-white border border-slate-200 rounded-xl p-2 shadow-2xs">
+        <button
+          type="button"
+          onClick={() => setPanelTab('browse')}
+          className={`flex-1 sm:flex-none px-4 py-2.5 rounded-lg text-xs sm:text-sm font-extrabold inline-flex items-center justify-center gap-2 cursor-pointer transition-colors ${
+            panelTab === 'browse'
+              ? 'bg-[#0B3B75] text-white'
+              : 'text-slate-700 hover:bg-slate-100'
+          }`}
+        >
+          <Megaphone className="w-4 h-4" />
+          <span>
+            {tr(
+              lang,
+              `Local Area Ads (${publicAds.length})`,
+              `स्थानीय क्षेत्र के विज्ञापन (${publicAds.length})`,
+              `स्थानिक परिसरातील जाहिराती (${publicAds.length})`
+            )}
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setPanelTab('post')}
+          className={`flex-1 sm:flex-none px-4 py-2.5 rounded-lg text-xs sm:text-sm font-extrabold inline-flex items-center justify-center gap-2 cursor-pointer transition-colors ${
+            panelTab === 'post'
+              ? 'bg-[#E06D1B] text-white'
+              : 'text-slate-700 hover:bg-slate-100'
+          }`}
+        >
+          <PlusCircle className="w-4 h-4" />
+          <span>
+            {tr(lang, 'Post Your Shop Ad', 'अपनी दुकान का विज्ञापन दें', 'तुमच्या दुकानाची जाहिरात टाका')}
+          </span>
+        </button>
+      </div>
+
+      {panelTab === 'browse' && (() => {
+        const areaQ = adAreaFilter.trim().toLowerCase();
+        const filteredPublicAds = publicAds.filter((ad) => {
+          if (adCategoryFilter !== 'all') {
+            const cats = (ad.targetCategories || []).map((c) => c.toLowerCase());
+            if (!cats.includes(adCategoryFilter.toLowerCase())) return false;
+          }
+          if (!areaQ) return true;
+          const locBlob = [
+            ad.title,
+            ad.description,
+            ad.advertiserName,
+            ...(ad.targetDistricts || []),
+            ...(ad.targetCities || []),
+            ...(ad.targetAreas || []),
+          ]
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase();
+          return ad.allLocations || locBlob.includes(areaQ);
+        });
+        return (
+          <section className="space-y-4">
+            <div className="bg-white border border-slate-200 rounded-xl p-4 flex flex-col sm:flex-row gap-3">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                <input
+                  type="text"
+                  value={adAreaFilter}
+                  onChange={(e) => setAdAreaFilter(e.target.value)}
+                  placeholder={tr(
+                    lang,
+                    'Filter local ads by area, city, 6-digit PIN or shop name...',
+                    'क्षेत्र, शहर, पिनकोड या दुकान के नाम से विज्ञापन खोजें...',
+                    'परिसर, शहर, ६-अंकी पिनकोड किंवा दुकानाच्या नावाने शोधा...'
+                  )}
+                  className="w-full h-10 pl-9 pr-3 rounded-lg border border-slate-300 bg-slate-50 focus:bg-white text-sm text-slate-900 focus:outline-none focus:border-[#0B3B75]"
+                />
+              </div>
+              <select
+                value={adCategoryFilter}
+                onChange={(e) => setAdCategoryFilter(e.target.value)}
+                className="h-10 px-3 rounded-lg border border-slate-300 bg-white text-xs sm:text-sm font-semibold text-slate-700"
+              >
+                <option value="all">{tr(lang, 'All Categories', 'सभी श्रेणियाँ', 'सर्व श्रेण्या')}</option>
+                {allCategoryChoices.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {filteredPublicAds.length === 0 ? (
+              <div className="bg-white border border-slate-200 rounded-xl p-8 text-center space-y-3">
+                <Megaphone className="w-9 h-9 text-slate-300 mx-auto" />
+                <h2 className="font-display text-lg font-extrabold text-[#0B3B75]">
+                  {tr(
+                    lang,
+                    'No active local shop advertisements in this area yet',
+                    'इस क्षेत्र में अभी कोई सक्रिय स्थानीय विज्ञापन नहीं है',
+                    'या परिसरात सध्या कोणतीही सक्रिय स्थानिक जाहिरात नाही'
+                  )}
+                </h2>
+                <p className="text-xs sm:text-sm text-slate-600 max-w-md mx-auto">
+                  {tr(
+                    lang,
+                    'Local shopkeepers and businesses can post area promotions directly here for Admin approval.',
+                    'स्थानीय दुकानदार और व्यवसायी यहाँ अपना विज्ञापन पोस्ट कर सकते हैं।',
+                    'स्थानिक दुकानदार व व्यावसायिक येथे त्यांच्या दुकानाची जाहिरात टाकू शकतात.'
+                  )}
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setPanelTab('post')}
+                  className="px-5 py-2.5 rounded-lg bg-[#E06D1B] hover:bg-[#c55b10] text-white text-xs sm:text-sm font-extrabold cursor-pointer"
+                >
+                  {tr(lang, 'Post Your Shop Ad', 'दुकान का विज्ञापन पोस्ट करें', 'तुमच्या दुकानाची जाहिरात टाका')}
+                </button>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {filteredPublicAds.map((ad) => (
+                  <article
+                    key={ad.id}
+                    className="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-2xs flex flex-col justify-between"
+                  >
+                    {ad.bannerImageUrl && (
+                      <div className="aspect-[16/7] w-full bg-slate-100 overflow-hidden border-b border-slate-100">
+                        <img
+                          src={ad.bannerImageUrl}
+                          alt={ad.title}
+                          className="w-full h-full object-cover"
+                        />
+                      </div>
+                    )}
+                    <div className="p-4 space-y-2.5 flex-1 flex flex-col justify-between">
+                      <div className="space-y-1.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                          <span className="font-extrabold uppercase tracking-wider text-[#C25E00]">
+                            {ad.advertiserName}
+                          </span>
+                          <span className="inline-flex items-center gap-1 text-slate-500 font-semibold">
+                            <MapPin className="w-3 h-3 text-[#E06D1B]" />
+                            {ad.allLocations
+                              ? tr(lang, 'All Areas', 'सभी क्षेत्र', 'सर्व परिसर')
+                              : [...(ad.targetCities || []), ...(ad.targetDistricts || [])]
+                                  .filter(Boolean)
+                                  .slice(0, 2)
+                                  .join(', ') || tr(lang, 'Local Area', 'स्थानीय क्षेत्र', 'स्थानिक परिसर')}
+                          </span>
+                        </div>
+                        <h3 className="font-display text-base sm:text-lg font-extrabold text-[#0B3B75]">
+                          {ad.title}
+                        </h3>
+                        <p className="text-xs sm:text-sm text-slate-600 leading-relaxed">
+                          {ad.description}
+                        </p>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100">
+                        {ad.callNumber && (
+                          <a
+                            href={`tel:${ad.callNumber}`}
+                            onClick={() =>
+                              void recordAdvertisementClick({
+                                ad,
+                                category: ad.targetCategories?.[0] || 'other_services',
+                                state: ad.targetStates?.[0] || 'All',
+                                district: ad.targetDistricts?.[0] || 'All',
+                                placement: 'homepage',
+                                actionType: 'call',
+                              })
+                            }
+                            className="px-3.5 py-2 rounded-lg bg-[#15803D] hover:bg-[#116830] text-white text-xs font-extrabold inline-flex items-center gap-1.5"
+                          >
+                            <Phone className="w-3.5 h-3.5" />
+                            <span>{tr(lang, 'Call Shop', 'कॉल करें', 'कॉल करा')}</span>
+                          </a>
+                        )}
+                        {ad.whatsappNumber && (
+                          <a
+                            href={`https://wa.me/91${ad.whatsappNumber.replace(/\D/g, '').slice(-10)}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={() =>
+                              void recordAdvertisementClick({
+                                ad,
+                                category: ad.targetCategories?.[0] || 'other_services',
+                                state: ad.targetStates?.[0] || 'All',
+                                district: ad.targetDistricts?.[0] || 'All',
+                                placement: 'homepage',
+                                actionType: 'whatsapp',
+                              })
+                            }
+                            className="px-3.5 py-2 rounded-lg bg-emerald-50 border border-emerald-300 hover:bg-emerald-100 text-[#15803D] text-xs font-extrabold inline-flex items-center gap-1.5"
+                          >
+                            <MessageCircle className="w-3.5 h-3.5" />
+                            <span>WhatsApp</span>
+                          </a>
+                        )}
+                        {ad.websiteUrl && (
+                          <a
+                            href={ad.websiteUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            onClick={() =>
+                              void recordAdvertisementClick({
+                                ad,
+                                category: ad.targetCategories?.[0] || 'other_services',
+                                state: ad.targetStates?.[0] || 'All',
+                                district: ad.targetDistricts?.[0] || 'All',
+                                placement: 'homepage',
+                                actionType: 'website',
+                              })
+                            }
+                            className="px-3.5 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-[#0B3B75] text-xs font-bold inline-flex items-center gap-1.5"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                            <span>{tr(lang, 'Visit', 'वेबसाइट', 'वेबसाईट')}</span>
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
+          </section>
+        );
+      })()}
+
+      {panelTab === 'post' && (!user ? (
         <div className="bg-white border border-slate-200 rounded-xl p-8 text-center space-y-4">
           <Building2 className="w-10 h-10 text-[#0B3B75] mx-auto" />
           <h2 className="font-display text-xl font-bold text-[#0B3B75]">
-            {tr(lang, 'Sign in to Open Advertiser Portal', 'विज्ञापनदाता पोर्टल के लिए साइन इन करें', 'जाहिरातदार पोर्टलसाठी साइन इन करा')}
+            {tr(lang, 'Sign in to Post a Local Shop Advertisement', 'विज्ञापन पोस्ट करने के लिए साइन इन करें', 'जाहिरात टाकण्यासाठी साइन इन करा')}
           </h2>
           <p className="text-sm text-slate-600 max-w-md mx-auto">
             {tr(
               lang,
-              'Sign in with your verified Google account to register your local shop or company, submit category advertisements, and track aggregate performance.',
-              'अपनी दुकान या कंपनी पंजीकृत करने और विज्ञापन सबमिट करने के लिए Google खाते से साइन इन करें।',
-              'तुमचे दुकान किंवा कंपनी नोंदणी करण्यासाठी आणि जाहिराती पाठवण्यासाठी Google खात्याने साइन इन करा.'
+              'Sign in with Google to register your local shop or business and submit area advertisements for Admin approval.',
+              'अपनी दुकान या व्यवसाय का विज्ञापन सबमिट करने के लिए Google खाते से साइन इन करें।',
+              'तुमच्या दुकानाची किंवा व्यवसायाची जाहिरात सबमिट करण्यासाठी Google खात्याने साइन इन करा.'
             )}
           </p>
           <button
@@ -1037,7 +1281,7 @@ export const AdvertiserDashboardView: React.FC<AdvertiserDashboardViewProps> = (
             )}
           </section>
         </>
-      )}
+      ))}
     </div>
   );
 };

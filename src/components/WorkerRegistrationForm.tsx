@@ -61,7 +61,6 @@ import type {
 import { AddProfessionModal } from './AddProfessionModal';
 import { LocationPinModal } from './LocationPinModal';
 import { NotificationOptInButton } from './NotificationOptInButton';
-import { OtpVerificationBox } from './OtpVerificationBox';
 import { ProfessionThumbnail } from './ProfessionThumbnail';
 import { ProfilePhotoUploader, type SelectedProfilePhoto } from './ProfilePhotoUploader';
 import { PWAInstallButton } from './PWAControls';
@@ -448,12 +447,6 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
       failValidation('Please enter a valid 10-digit Indian mobile number starting with 6–9.');
       return null;
     }
-    if (workerOtpRequired && !mobileVerified) {
-      failValidation(
-        'Please complete mobile OTP verification before submitting. (If live SMS is unavailable, use authorized Demo Registration Mode for pre-launch testing.)'
-      );
-      return null;
-    }
     if (cityOrVillage.trim().length < 2) {
       failValidation('Please enter your city, town, or village (minimum 2 characters).');
       return null;
@@ -505,10 +498,6 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
     }
     if (!privacyConsent) {
       failValidation('Please accept the privacy and worker guidelines consent.');
-      return null;
-    }
-    if (!refundPolicyAccepted) {
-      failValidation('Please read and accept the ₹250 Registration Fee Refund Policy before proceeding.');
       return null;
     }
 
@@ -699,7 +688,7 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
       preferredWorkLocation: preferredWorkLocation.trim().slice(0, 160),
       liveLocationConsent,
       privacyConsent,
-      refundPolicyAccepted,
+      refundPolicyAccepted: true,
       noEmploymentGuaranteeAccepted: true,
       idVerificationStatus,
       certificateNotes: certificateNotes.trim().slice(0, 500),
@@ -755,213 +744,41 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
   };
 
   const handlePayAndCompleteRegistration = async () => {
-    if (payingRazorpay || saving) return;
+    if (saving) return;
     setErrorMsg('');
     setPaymentErrorMsg('');
     setPaymentStatusMsg('');
-
-    // Prevent duplicate payment if already PAID
-    if (isAlreadyPaid) {
-      setSaving(true);
-      try {
-        const saved = await validateAndPersistRegistration();
-        if (!saved) return;
-        await refreshUserProfiles();
-        setShowSuccessScreen(true);
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-      } catch (err) {
-        setErrorMsg(
-          formatUiError(
-            err,
-            lang === 'mr'
-              ? 'कामगार प्रोफाइल अपडेट करता आली नाही. कृपया पुन्हा प्रयत्न करा.'
-              : lang === 'hi'
-                ? 'कामगार प्रोफ़ाइल अपडेट नहीं हो सकी। कृपया पुनः प्रयास करें।'
-                : 'Unable to update worker profile. Please try again.',
-            lang
-          )
-        );
-      } finally {
-        setSaving(false);
-      }
-      return;
-    }
-
-    setPayingRazorpay(true);
+    setSaving(true);
     try {
-      // 1. Validate & save worker registration details linked to this user's UID
       const saved = await validateAndPersistRegistration();
-      if (!saved || !user) {
-        setPayingRazorpay(false);
-        return;
-      }
-
-      // 2. Create ₹250 (25000 paise) Razorpay order securely on backend
-      const order = await createServerRegistrationOrder({ registrationId: saved.regId });
-      if (order.mode !== 'gateway' || !order.razorpayKeyId || !order.gatewayOrderId) {
-        const missing = (order.missingGatewayEnvVars || gatewayConfig?.missingGatewayEnvVars || []).join(', ');
-        setPaymentErrorMsg(
-          order.configError ||
-            `Razorpay Test Mode checkout requires server payment gateway credentials${missing ? ` (${missing})` : ''}. Your registration draft (${saved.regId}) has been saved; complete payment below once gateway credentials are active.`
-        );
-        await refreshUserProfiles();
-        setShowSuccessScreen(true);
-        setPayingRazorpay(false);
-        window.scrollTo({ top: 0, behavior: 'smooth' });
-        return;
-      }
-
-      // 3. Load Razorpay Checkout script and open modal
-      const loaded = await loadRazorpayCheckoutScript();
-      type RazorpayCtorType = new (options: Record<string, unknown>) => {
-        open: () => void;
-        on: (
-          event: string,
-          cb: (resp: {
-            error?: { description?: string; reason?: string; metadata?: { order_id?: string; payment_id?: string } };
-          }) => void
-        ) => void;
-      };
-      const RazorpayCtor = (window as unknown as { Razorpay?: RazorpayCtorType }).Razorpay;
-      if (!loaded || !RazorpayCtor) {
-        setPaymentErrorMsg('Unable to load Razorpay Checkout. Please check your internet connection and retry.');
-        setPayingRazorpay(false);
-        return;
-      }
-
-      const rzp = new RazorpayCtor({
-        key: order.razorpayKeyId,
-        amount: 25000, // Exact ₹250 in paise
-        currency: 'INR',
-        name: 'ROJGAR SETU',
-        description: 'Worker Registration Fee — Worker ID Card & Registration Certificate',
-        order_id: order.gatewayOrderId,
-        prefill: {
-          name: fullName.trim(),
-          email: email.trim() || user.email || undefined,
-          contact: mobile.replace(/\D/g, '').slice(-10),
-        },
-        notes: {
-          workerUid: user.uid,
-          registrationId: saved.regId,
-          orderRef: order.orderRef,
-        },
-        theme: { color: '#0B3B75' },
-        modal: {
-          ondismiss: () => {
-            setPayingRazorpay(false);
-            setPaymentErrorMsg(
-              'Payment was cancelled before completion. Your registration is NOT marked PAID. Click "Pay ₹250 & Complete Registration" to retry.'
-            );
-            void recordGatewayAttemptOnServer({
-              outcome: 'cancelled',
-              gatewayOrderId: order.gatewayOrderId,
-              orderRef: order.orderRef,
-              reason: 'Worker closed Razorpay Checkout before payment completion.',
-            }).finally(() => void refreshUserProfiles());
-          },
-        },
-        handler: async (response: {
-          razorpay_payment_id: string;
-          razorpay_order_id: string;
-          razorpay_signature: string;
-        }) => {
-          if (verifyingPaymentRef.current) return;
-          verifyingPaymentRef.current = true;
-          try {
-            // 4. Verify signature + captured ₹250 status on server
-            const verification = await verifyGatewaySignatureOnServer({
-              razorpayOrderId: response.razorpay_order_id,
-              razorpayPaymentId: response.razorpay_payment_id,
-              razorpaySignature: response.razorpay_signature,
-              orderRef: order.orderRef,
-              registrationId: saved.regId,
-              workerName: fullName.trim().slice(0, 120),
-              workerSkill: saved.resolvedPrimarySkill,
-              workerLocation: saved.workerLocation,
-              workerMobileMasked: maskMobileNumber(mobile.trim()),
-            });
-
-            // Fallback sync to Firestore if backend server has no Firebase Admin service account configured
-            if (!verification.activatedOnServer) {
-              await submitWorkerRegistrationPaymentProof({
-                workerUid: user.uid,
-                workerName: fullName.trim().slice(0, 120),
-                workerSkill: saved.resolvedPrimarySkill,
-                workerLocation: saved.workerLocation,
-                workerMobile: mobile.trim(),
-                provisionalAppId: saved.regId,
-                paymentMethod: 'gateway',
-                orderRef: order.orderRef,
-                utrOrGatewayRef: response.razorpay_payment_id,
-                payerUpiOrName: 'Razorpay Server-Verified PAID',
-                gatewayOrderId: response.razorpay_order_id,
-                gatewayPaymentId: response.razorpay_payment_id,
-                refundPolicyAccepted: true,
-                noEmploymentGuaranteeAccepted: true,
-                otpVerified: mobileVerified,
-                referredByCode: workerProfile?.referredByCode || resolvedReferrer?.referralCode,
-                referredByUid: workerProfile?.referredByUid || resolvedReferrer?.ownerUid,
-              }).catch(() => undefined);
-            }
-
-            setPaymentStatusMsg(
-              `₹250 PAID & Verified! Payment ID: ${response.razorpay_payment_id}. Registration ${saved.regId} has been sent to the ROJGAR SETU Admin Dashboard for approval.`
-            );
-            await refreshUserProfiles();
-            setShowSuccessScreen(true);
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-          } catch (verifyErr) {
-            setPaymentErrorMsg(
-              formatUiError(
-                verifyErr,
-                lang === 'mr'
-                  ? 'सर्व्हरवर पेमेंट पडताळणी अयशस्वी झाली. कृपया पुन्हा प्रयत्न करा.'
-                  : lang === 'hi'
-                    ? 'सर्वर पर भुगतान सत्यापन विफल रहा। कृपया पुनः प्रयास करें।'
-                    : 'Server payment verification failed. Please retry or contact ROJGAR SETU support.',
-                lang
-              )
-            );
-          } finally {
-            verifyingPaymentRef.current = false;
-            setPayingRazorpay(false);
-          }
-        },
-      });
-
-      rzp.on('payment.failed', (failResp) => {
-        setPayingRazorpay(false);
-        const desc = failResp?.error?.description || failResp?.error?.reason || 'Payment failed at Razorpay.';
-        setPaymentErrorMsg(
-          `Payment Failed: ${desc}. Payment status has NOT been marked PAID. Please click "Retry Payment — Pay ₹250 & Complete Registration" to try again.`
-        );
-        void recordGatewayAttemptOnServer({
-          outcome: 'failed',
-          gatewayOrderId: failResp?.error?.metadata?.order_id || order.gatewayOrderId,
-          gatewayPaymentId: failResp?.error?.metadata?.payment_id,
-          orderRef: order.orderRef,
-          reason: desc,
-        }).finally(() => void refreshUserProfiles());
-      });
-
-      rzp.open();
+      if (!saved) return;
+      await refreshUserProfiles();
+      setPaymentStatusMsg(
+        lang === 'mr'
+          ? `नोंदणी यशस्वी (ID: ${saved.regId})! तुमची माहिती अ‍ॅडमिन मंजुरीसाठी पाठवली आहे.`
+          : lang === 'hi'
+          ? `पंजीकरण सफल (ID: ${saved.regId})! आपकी प्रोफ़ाइल एडमिन अनुमोदन के लिए भेजी गई है।`
+          : `Registration saved (ID: ${saved.regId})! Your profile has been sent to ROJGAR SETU Admin for approval.`
+      );
+      setShowSuccessScreen(true);
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     } catch (err) {
-      setPayingRazorpay(false);
-      setPaymentErrorMsg(
+      setErrorMsg(
         formatUiError(
           err,
           lang === 'mr'
-            ? '₹250 Razorpay पेमेंट सुरू करता आले नाही. कृपया पुन्हा प्रयत्न करा.'
+            ? 'कामगार नोंदणी जतन करता आली नाही. कृपया पुन्हा प्रयत्न करा.'
             : lang === 'hi'
-              ? '₹250 Razorpay भुगतान शुरू नहीं हो सका। कृपया पुनः प्रयास करें।'
-              : 'Unable to initiate ₹250 Razorpay payment. Please try again.',
+            ? 'कामगार पंजीकरण सेव नहीं हो सका। कृपया पुनः प्रयास करें।'
+            : 'Unable to save worker registration. Please try again.',
           lang
         )
       );
       window.setTimeout(() => {
         errorBoxRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }, 20);
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -1009,105 +826,41 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
         </div>
       )}
 
-      {/* Clear ₹250 Registration Fee & Benefits Disclosure Banner (Shown before payment) */}
-      {!isWorkerPaidBenefitsActive(workerProfile) && !showSuccessScreen && (
-        <div className="mb-6 bg-white border-2 border-[#0B3B75] rounded-xl overflow-hidden shadow-2xs">
-          <div className="h-1 flex">
-            <div className="flex-1 bg-[#E06D1B]" />
-            <div className="flex-1 bg-white" />
-            <div className="flex-1 bg-[#15803D]" />
-          </div>
-          <div className="p-4 sm:p-5 space-y-2.5">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <IndianRupee className="w-5 h-5 text-[#15803D]" />
-                <h2 className="font-display text-base sm:text-lg font-extrabold text-[#0B3B75]">
-                  {lang === 'mr'
-                    ? `एकवेळ कामगार नोंदणी शुल्क: ₹${WORKER_REGISTRATION_FEE_INR}`
-                    : lang === 'hi'
-                    ? `एकमुश्त कामगार पंजीकरण शुल्क: ₹${WORKER_REGISTRATION_FEE_INR}`
-                    : `One-Time Worker Registration Fee: ₹${WORKER_REGISTRATION_FEE_INR}`}
-                </h2>
-              </div>
-              <span className="text-xs font-extrabold text-[#15803D]">“कामगार नाही, आपलीच माणसं!”</span>
-            </div>
-            <p className="text-xs sm:text-sm text-slate-700 leading-relaxed">
-              {lang === 'mr'
-                ? 'तुमची प्रोफाईल जतन केल्यानंतर ₹250 एकवेळ शुल्क अधिकृत UPI QR किंवा पेमेंट गेटवेद्वारे भरा. पेमेंट सत्यापित झाल्यावरच तुमचा युनिक कामगार ID (RS-W-...), डिजिटल ओळखपत्र, नोंदणी प्रमाणपत्र, पेमेंट पावती आणि ₹50 सिंगल-लेव्हल रेफरल कोड सुरू होईल.'
-                : lang === 'hi'
-                ? 'प्रोफ़ाइल सहेजने के बाद आधिकारिक UPI QR या पेमेंट गेटवे से ₹250 एकमुश्त शुल्क जमा करें। भुगतान सत्यापित होने पर ही आपका अद्वितीय कामगार ID (RS-W-...), डिजिटल पहचान पत्र, पंजीकरण प्रमाणपत्र, भुगतान रसीद और ₹50 सिंगल-लेवल रेफरल कोड सक्रिय होगा।'
-                : 'After saving your details below, pay the one-time ₹250 registration fee via Official UPI QR or configured Payment Gateway. Your unique Verified Worker ID (RS-W-...), Digital Worker ID Card, Official Registration Certificate, Payment Receipt, and ₹50 Single-Level Referral Code activate only after payment verification.'}
-            </p>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 bg-slate-50 border border-slate-200 rounded-lg p-3 text-xs">
-              <div>
-                <div className="text-[11px] font-bold uppercase text-slate-500">Registration Fee</div>
-                <div className="font-mono-tabular text-sm font-extrabold text-[#0B3B75] mt-0.5">
-                  ₹{WORKER_REGISTRATION_FEE_INR}
-                </div>
-              </div>
-              <div>
-                <div className="text-[11px] font-bold uppercase text-slate-500">Payment Method</div>
-                <div className="font-extrabold text-[#0B3B75] mt-0.5">Razorpay</div>
-              </div>
-              <div>
-                <div className="text-[11px] font-bold uppercase text-slate-500">Payment Status</div>
-                <div className="mt-0.5">
-                  <PaymentStatusBadge
-                    status={ownPayment?.status || workerProfile?.registrationPaymentStatus || 'pending'}
-                    lang={lang}
-                  />
-                </div>
-              </div>
-              <div>
-                <div className="text-[11px] font-bold uppercase text-slate-500">Payment Receipt</div>
-                <div className="mt-0.5">
-                  {ownPayment && ownPayment.status === 'verified' ? (
-                    <button
-                      type="button"
-                      onClick={() => downloadOfficialPaymentReceipt(ownPayment)}
-                      className="text-xs font-extrabold text-[#15803D] underline cursor-pointer"
-                    >
-                      Download
-                    </button>
-                  ) : (
-                    <span className="text-[11px] font-semibold text-slate-500">After verification</span>
-                  )}
-                </div>
-              </div>
-            </div>
-            <div className="text-[11px] text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 flex items-start gap-2">
-              <AlertTriangle className="w-4 h-4 text-[#E06D1B] shrink-0 mt-0.5" />
-              <span>
-                <strong>Disclosure:</strong> Registration fee payment does not guarantee employment or job allocation. Refunds apply only to verified duplicate/failed transactions or valid cancellation before benefit activation within 7 days.
-              </span>
-            </div>
-          </div>
-        </div>
-      )}
-
       {savedId && showSuccessScreen && (
         <section className="mb-8 space-y-5">
           <div className="bg-white border-2 border-[#15803D] rounded-xl overflow-hidden shadow-sm">
             <div
               className={`px-6 py-4 flex items-start gap-3 text-white ${
-                isAdminApproved ? 'bg-[#15803D]' : isAlreadyPaid ? 'bg-[#0B3B75]' : 'bg-[#0B3B75]'
+                isAdminApproved ? 'bg-[#15803D]' : 'bg-[#0B3B75]'
               }`}
             >
               <CheckCircle2 className="w-7 h-7 text-amber-300 shrink-0 mt-0.5" />
               <div>
                 <h2 className="font-display text-xl sm:text-2xl font-extrabold">
                   {isAdminApproved
-                    ? 'Admin Approved ROJGAR SETU Worker!'
-                    : isAlreadyPaid
-                    ? '₹250 PAID — Registration Sent to ROJGAR SETU Admin Dashboard'
-                    : 'Registration Saved — Complete ₹250 Payment Below'}
+                    ? lang === 'mr'
+                      ? 'अ‍ॅडमिन मंजूर कामगार प्रोफाइल!'
+                      : lang === 'hi'
+                      ? 'एडमिन द्वारा सत्यापित कामगार प्रोफ़ाइल!'
+                      : 'Admin Approved ROJGAR SETU Worker!'
+                    : lang === 'mr'
+                    ? 'कामगार नोंदणी यशस्वी — अ‍ॅडमिन मंजुरी प्रलंबित'
+                    : lang === 'hi'
+                    ? 'कामगार पंजीकरण सफल — एडमिन अनुमोदन लंबित'
+                    : 'Worker Registration Saved — Pending Admin Approval'}
                 </h2>
                 <p className="text-sm text-blue-50 font-semibold mt-0.5">
                   {isAdminApproved
-                    ? 'आपकी कामगार प्रोफ़ाइल और ₹250 पंजीकरण सत्यापित है · “कामगार नाही, आपलीच माणसं!”'
-                    : isAlreadyPaid
-                    ? 'Your ₹250 fee is PAID and verified on our server. Your Worker ID Card & Registration Certificate will be generated automatically once ROJGAR SETU Admin approves your registration.'
-                    : 'तुमची माहिती जतन झाली आहे. नोंदणी पूर्ण करण्यासाठी खाली ₹250 पेमेंट करा.'}
+                    ? lang === 'mr'
+                      ? 'तुमची कामगार प्रोफाइल सक्रिय आहे — आता तुम्हाला जवळच्या कामांचे अलर्ट मिळतील.'
+                      : lang === 'hi'
+                      ? 'आपकी कामगार प्रोफ़ाइल सक्रिय है — अब आपको नजदीकी कामों के अलर्ट मिलेंगे।'
+                      : 'Your worker profile is verified and live — you can now receive nearby work requests.'
+                    : lang === 'mr'
+                    ? 'तुमची नोंदणी अ‍ॅडमिन पॅनेलमध्ये पाठवली आहे. अ‍ॅडमिनने मंजुरी दिल्यानंतर तुमची प्रोफाइल सत्यापित (Verified) दिसेल.'
+                    : lang === 'hi'
+                    ? 'आपका पंजीकरण एडमिन पैनल में भेज दिया गया है। एडमिन अनुमोदन के बाद आपकी प्रोफ़ाइल सत्यापित दिखाई देगी।'
+                    : 'Your registration has been submitted to the ROJGAR SETU Admin Dashboard. Once approved by Admin, your profile will show as Verified.'}
                 </p>
               </div>
             </div>
@@ -1143,12 +896,29 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
                   </div>
                 </div>
                 <div>
-                  <div className="text-slate-500 text-xs font-medium">Payment Status</div>
+                  <div className="text-slate-500 text-xs font-medium">
+                    {lang === 'mr' ? 'मंजुरी स्थिती' : lang === 'hi' ? 'सत्यापन स्थिति' : 'Approval Status'}
+                  </div>
                   <div className="mt-1">
-                    <PaymentStatusBadge
-                      status={ownPayment?.status || workerProfile?.registrationPaymentStatus || 'pending'}
-                      lang={lang}
-                    />
+                    <span
+                      className={`inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-xs font-bold ${
+                        isAdminApproved
+                          ? 'bg-emerald-100 text-[#15803D]'
+                          : 'bg-amber-100 text-[#9A3412]'
+                      }`}
+                    >
+                      {isAdminApproved
+                        ? lang === 'mr'
+                          ? 'सत्यापित (Approved)'
+                          : lang === 'hi'
+                          ? 'सत्यापित (Approved)'
+                          : 'Verified / Approved'
+                        : lang === 'mr'
+                        ? 'अ‍ॅडमिन मंजुरी प्रलंबित'
+                        : lang === 'hi'
+                        ? 'एडमिन अनुमोदन लंबित'
+                        : 'Pending Admin Approval'}
+                    </span>
                   </div>
                 </div>
                 <div>
@@ -1316,56 +1086,34 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
           <label className="block text-xs font-semibold text-slate-700 mb-1">
             {t.workerForm.mobile} *
           </label>
-          {workerOtpRequired ? (
-            <OtpVerificationBox
-              mobile={mobile}
-              allowTestPinFallback={false}
-              onOpenDemoMode={() => onNavigate('demo-testing')}
-              onMobileChange={(v) => {
-                setMobile(v);
-                setMobileVerified(false);
-                setVerificationMethod(undefined);
-                setTestPinHash('');
-              }}
-              verified={mobileVerified}
-              verifiedMethod={verificationMethod}
-              onVerified={(m, meta) => {
-                setMobile(m);
-                setMobileVerified(true);
-                setVerificationMethod(meta?.method);
-                setTestPinHash(meta?.testPinHash || '');
-              }}
-            />
-          ) : (
-            <div className="space-y-1.5">
-              <div className="relative">
-                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-mono-tabular font-semibold text-slate-500">
-                  +91
-                </span>
-                <input
-                  type="tel"
-                  inputMode="numeric"
-                  autoComplete="tel-national"
-                  maxLength={10}
-                  required
-                  value={mobile}
-                  onChange={(e) => {
-                    const digits = e.target.value.replace(/\D/g, '').slice(0, 10);
-                    setMobile(digits);
-                  }}
-                  placeholder="98XXXXXXXX"
-                  className="w-full pl-11 pr-3 py-2 border border-slate-300 rounded-md text-sm font-mono-tabular focus:outline-none focus:ring-2 focus:ring-[#0B3B75]"
-                />
-              </div>
-              <p className="text-[11px] text-slate-500">
-                {lang === 'mr'
-                  ? '१० अंकी मोबाईल क्रमांक टाका — नोंदणीसाठी कोणताही ओटीपी किंवा कॉल पडताळणी लागत नाही.'
-                  : lang === 'hi'
-                  ? '10 अंकों का मोबाइल नंबर दर्ज करें — पंजीकरण के लिए किसी OTP या कॉल सत्यापन की आवश्यकता नहीं है।'
-                  : 'Enter your 10-digit Indian mobile number — no OTP or call verification is required to register.'}
-              </p>
+          <div className="space-y-1.5">
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-mono-tabular font-semibold text-slate-500">
+                +91
+              </span>
+              <input
+                type="tel"
+                inputMode="numeric"
+                autoComplete="tel-national"
+                maxLength={10}
+                required
+                value={mobile}
+                onChange={(e) => {
+                  const digits = e.target.value.replace(/\D/g, '').slice(0, 10);
+                  setMobile(digits);
+                }}
+                placeholder="98XXXXXXXX"
+                className="w-full pl-11 pr-3 py-2 border border-slate-300 rounded-md text-sm font-mono-tabular focus:outline-none focus:ring-2 focus:ring-[#0B3B75]"
+              />
             </div>
-          )}
+            <p className="text-[11px] text-slate-500">
+              {lang === 'mr'
+                ? '१० अंकी मोबाईल क्रमांक टाका — नोंदणीसाठी कोणताही ओटीपी किंवा कॉल पडताळणी लागत नाही.'
+                : lang === 'hi'
+                ? '10 अंकों का मोबाइल नंबर दर्ज करें — पंजीकरण के लिए किसी OTP या कॉल सत्यापन की आवश्यकता नहीं है।'
+                : 'Enter your 10-digit Indian mobile number — no OTP or call verification is required to register.'}
+            </p>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -2313,252 +2061,89 @@ export const WorkerRegistrationForm: React.FC<WorkerRegistrationFormProps> = ({
             />
             <span>{t.workerForm.privacyConsent} *</span>
           </label>
-
-          <label className="flex items-start gap-2.5 text-sm text-slate-700 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={refundPolicyAccepted}
-              onChange={(e) => setRefundPolicyAccepted(e.target.checked)}
-              className="mt-1 h-4 w-4 rounded border-slate-300"
-            />
-            <span>
-              {lang === 'mr'
-                ? 'एकवेळ ₹250 नोंदणी शुल्काचे परतावा धोरण (फक्त सत्यापित दुहेरी/अयशस्वी पेमेंट किंवा लाभ सक्रिय होण्यापूर्वी ७ दिवसांत वैध रद्दबातल) मला मान्य आहे. *'
-                : lang === 'hi'
-                ? 'मैं ₹250 एकमुश्त पंजीकरण शुल्क की रिफंड नीति (केवल सत्यापित डुप्लिकेट/विफल लेनदेन या लाभ सक्रिय होने से पहले 7 दिनों में रद्दीकरण) स्वीकार करता/करती हूँ। *'
-                : 'I accept the ₹250 One-Time Registration Refund Policy (refunds apply only to verified duplicate/failed transactions or valid cancellation before benefit activation within 7 days; refunded registrations revoke paid benefits and reverse referral rewards). *'}
-            </span>
-          </label>
-
-          <label className="flex items-start gap-2.5 text-sm text-slate-700 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={liveLocationConsent}
-              onChange={(e) => setLiveLocationConsent(e.target.checked)}
-              className="mt-1 h-4 w-4 rounded border-slate-300"
-            />
-            <span>{t.workerForm.liveLocConsent}</span>
-          </label>
         </div>
 
-        {/* ================= VISIBLE ₹250 WORKER REGISTRATION PAYMENT SECTION ================= */}
         <section
-          aria-label="ROJGAR SETU Worker Registration Fee"
-          className="rounded-xl border-2 border-[#0B3B75] bg-slate-50/70 overflow-hidden shadow-xs"
+          aria-label="Submit Worker Registration"
+          className="rounded-xl border border-slate-200 bg-slate-50 p-5 space-y-4"
         >
-          <div className="h-1.5 flex">
-            <div className="flex-1 bg-[#E06D1B]" />
-            <div className="flex-1 bg-white" />
-            <div className="flex-1 bg-[#15803D]" />
-          </div>
-
-          <div className="p-5 space-y-4">
-            <div className="flex flex-wrap items-start justify-between gap-3 border-b border-slate-200 pb-3.5">
-              <div>
-                <div className="flex flex-wrap items-center gap-2">
-                  <h2 className="font-display text-base sm:text-lg font-extrabold text-[#0B3B75]">
-                    ROJGAR SETU – Worker Registration Fee
-                  </h2>
-                  {gatewayConfig?.razorpayMode === 'test' && (
-                    <span className="px-2 py-0.5 rounded bg-amber-100 border border-amber-300 text-[#9A3412] text-[10px] font-extrabold uppercase">
-                      Razorpay Test Mode
-                    </span>
-                  )}
-                </div>
-                <p className="text-xs text-slate-600 mt-0.5">
-                  Purpose: <strong className="text-[#0B3B75]">Worker ID Card &amp; Registration Certificate</strong> (generated after ROJGAR SETU Admin approval)
-                </p>
-              </div>
-              <div className="text-right">
-                <div className="text-[11px] font-bold uppercase text-slate-500">Amount</div>
-                <div className="font-mono-tabular text-2xl font-extrabold text-[#15803D]">
-                  ₹{WORKER_REGISTRATION_FEE_INR}
-                </div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 bg-white border border-slate-200 rounded-lg p-3.5 text-xs">
-              <div>
-                <div className="text-slate-500 font-semibold">
-                  {lang === 'mr' ? 'एकवेळ शुल्क' : lang === 'hi' ? 'एकमुश्त शुल्क' : 'Amount'}
-                </div>
-                <div className="font-mono-tabular font-extrabold text-[#0B3B75] mt-0.5">
-                  ₹250 ({lang === 'mr' ? 'एकदाच · कोणतेही लपविलेले शुल्क नाही' : lang === 'hi' ? 'एकमुश्त · कोई छिपा शुल्क नहीं' : 'One-Time · Zero Hidden Charges'})
-                </div>
-              </div>
-              <div>
-                <div className="text-slate-500 font-semibold">
-                  {lang === 'mr' ? 'समाविष्ट लाभ' : lang === 'hi' ? 'शामिल लाभ' : 'Included Value'}
-                </div>
-                <div className="font-bold text-[#0B3B75] mt-0.5">
-                  {lang === 'mr'
-                    ? 'डिजिटल कामगार ओळखपत्र व नोंदणी प्रमाणपत्र'
-                    : lang === 'hi'
-                    ? 'डिजिटल कामगार आईडी कार्ड व पंजीकरण प्रमाण-पत्र'
-                    : 'Digital Worker ID Card & Registration Certificate'}
-                </div>
-              </div>
-              <div>
-                <div className="text-slate-500 font-semibold">Payment Status</div>
-                <div className="mt-0.5">
-                  <PaymentStatusBadge
-                    status={ownPayment?.status || workerProfile?.registrationPaymentStatus || 'pending'}
-                    lang={lang}
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2 bg-emerald-50/70 border border-emerald-200/80 rounded-lg p-3 text-[11px] font-semibold text-emerald-950">
-              <div className="flex items-center gap-1.5">
-                <CheckCircle2 className="w-3.5 h-3.5 text-[#15803D] shrink-0" />
-                <span>
-                  {lang === 'mr'
-                    ? 'QR सत्यापित डिजिटल ओळखपत्र'
-                    : lang === 'hi'
-                    ? 'QR सत्यापित डिजिटल ID कार्ड'
-                    : 'QR-Verified Digital Worker ID'}
-                </span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <CheckCircle2 className="w-3.5 h-3.5 text-[#15803D] shrink-0" />
-                <span>
-                  {lang === 'mr'
-                    ? 'अधिकृत नोंदणी प्रमाणपत्र व पावती'
-                    : lang === 'hi'
-                    ? 'आधिकारिक प्रमाण-पत्र व रसीद'
-                    : 'Official Certificate & Receipt'}
-                </span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <CheckCircle2 className="w-3.5 h-3.5 text-[#15803D] shrink-0" />
-                <span>
-                  {lang === 'mr'
-                    ? '२–१० किमी जवळचे थेट काम अलर्ट'
-                    : lang === 'hi'
-                    ? '2–10 किमी नजदीकी काम अलर्ट'
-                    : 'Direct Nearby Job Alerts (2–10 km)'}
-                </span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <CheckCircle2 className="w-3.5 h-3.5 text-[#15803D] shrink-0" />
-                <span>
-                  {lang === 'mr'
-                    ? '0% कमिशन · कोणतेही मासिक शुल्क नाही'
-                    : lang === 'hi'
-                    ? '0% कमीशन · कोई मासिक शुल्क नहीं'
-                    : '0% Commission · No Hidden Fees'}
-                </span>
-              </div>
-            </div>
-
-            {paymentErrorMsg && (
-              <div
-                role="alert"
-                className="p-3.5 rounded-lg bg-red-50 border border-red-200 text-xs sm:text-sm font-semibold text-red-800 flex items-start gap-2"
-              >
-                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-700" />
-                <span>{paymentErrorMsg}</span>
-              </div>
-            )}
-
-            {paymentStatusMsg && (
-              <div className="p-3.5 rounded-lg bg-emerald-50 border border-emerald-200 text-xs sm:text-sm font-semibold text-emerald-900 flex items-start gap-2">
-                <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5 text-[#15803D]" />
-                <span>{paymentStatusMsg}</span>
-              </div>
-            )}
-
-            {isAlreadyPaid ? (
-              <div className="rounded-lg bg-emerald-50 border border-emerald-200 p-3.5 text-xs text-emerald-950 space-y-1">
-                <div className="font-extrabold text-[#15803D] flex items-center gap-1.5">
-                  <ShieldCheck className="w-4 h-4" />
-                  <span>₹250 Registration Fee Already PAID (Duplicate Payment Blocked)</span>
-                </div>
-                <p>
-                  {isAdminApproved
-                    ? `Approved Worker ID: ${workerProfile?.registrationId}. Your Worker ID Card & Registration Certificate are active.`
-                    : `Payment ID: ${ownPayment?.gatewayPaymentId || ownPayment?.utrOrGatewayRef || 'Verified'}. Your registration is queued in the ROJGAR SETU Admin Dashboard for approval.`}
-                </p>
-              </div>
-            ) : (
-              <p className="text-[11px] text-slate-600 leading-relaxed flex items-start gap-1.5">
-                <ShieldCheck className="w-4 h-4 text-[#15803D] shrink-0 mt-0.5" />
-                <span>
-                  Secured by <strong>Razorpay</strong>. Payment signature and ₹250 capture are verified on our server before marking your registration <strong>PAID</strong> and sending it to the ROJGAR SETU Admin Dashboard for approval. Registration fee payment does not guarantee employment or job allocation.
-                </span>
-              </p>
-            )}
-
-            <div
-              role="note"
-              className="rounded-lg bg-amber-50 border border-amber-300 px-3.5 py-2.5 text-xs text-amber-950 flex items-start gap-2"
-            >
-              <ShieldAlert className="w-4 h-4 text-[#B45309] shrink-0 mt-0.5" />
-              <div className="space-y-0.5 leading-relaxed">
-                <p className="font-bold text-amber-950">{fraudWarning.primaryMr}</p>
-                {fraudWarning.secondaryLocalized && (
-                  <p className="text-[11px] font-medium text-amber-900">{fraudWarning.secondaryLocalized}</p>
-                )}
-              </div>
-            </div>
-
-            {errorMsg && (
-              <div
-                ref={errorBoxRef}
-                role="alert"
-                className="p-3.5 rounded-md bg-red-50 border border-red-200 text-sm text-red-800 flex items-start gap-2"
-              >
-                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-700" />
-                <span>{errorMsg}</span>
-              </div>
-            )}
-
-            {!user && (
-              <div className="p-3.5 rounded-md bg-amber-50 border border-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-950">
-                <span>
-                  <strong>Sign-In Required:</strong> Sign in with Google before clicking Pay ₹250 &amp; Complete Registration so your payment and registration are linked securely to your worker account.
-                </span>
-                <button
-                  type="button"
-                  onClick={signInWithGoogle}
-                  className="px-4 py-2 rounded-md bg-[#0B3B75] text-white font-semibold hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
-                >
-                  {t.workerForm.signInBtn}
-                </button>
-              </div>
-            )}
-
-            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-3 pt-1">
-              {isAlreadyPaid ? (
-                <button
-                  type="submit"
-                  disabled={saving}
-                  className="px-6 py-3 rounded-lg bg-[#0B3B75] text-white text-sm font-bold hover:bg-slate-800 disabled:opacity-50 cursor-pointer"
-                >
-                  {saving ? t.common.loading : t.workerForm.updateBtn}
-                </button>
-              ) : (
-                <button
-                  type="submit"
-                  disabled={payingRazorpay || saving}
-                  className="w-full sm:w-auto px-7 py-3.5 rounded-xl bg-[#15803D] hover:bg-[#116830] disabled:opacity-60 text-white text-sm sm:text-base font-extrabold inline-flex items-center justify-center gap-2 shadow-sm cursor-pointer"
-                >
-                  {payingRazorpay || saving ? (
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                  ) : (
-                    <CreditCard className="w-5 h-5" />
-                  )}
-                  <span>
-                    {payingRazorpay
-                      ? 'Opening Razorpay Checkout...'
-                      : ownPayment?.status === 'failed'
-                      ? 'Retry — Pay ₹250 & Complete Registration'
-                      : 'Pay ₹250 & Complete Registration'}
-                  </span>
-                </button>
+          <div
+            role="note"
+            className="rounded-lg bg-amber-50 border border-amber-300 px-3.5 py-2.5 text-xs text-amber-950 flex items-start gap-2"
+          >
+            <ShieldAlert className="w-4 h-4 text-[#B45309] shrink-0 mt-0.5" />
+            <div className="space-y-0.5 leading-relaxed">
+              <p className="font-bold text-amber-950">{fraudWarning.primaryMr}</p>
+              {fraudWarning.secondaryLocalized && (
+                <p className="text-[11px] font-medium text-amber-900">{fraudWarning.secondaryLocalized}</p>
               )}
             </div>
+          </div>
+
+          <p className="text-xs text-slate-600 flex items-start gap-2">
+            <ShieldCheck className="w-4 h-4 text-[#15803D] shrink-0 mt-0.5" />
+            <span>
+              {lang === 'mr'
+                ? 'सध्या कामगार नोंदणी पूर्णपणे मोफत व सोपी आहे (कोणताही OTP किंवा पेमेंट नाही). नोंदणी केल्यानंतर अ‍ॅडमिन मंजुरी देताच तुमची प्रोफाइल सत्यापित दिसेल.'
+                : lang === 'hi'
+                ? 'अभी कामगार पंजीकरण पूरी तरह सरल और निःशुल्क है (कोई OTP या भुगतान नहीं)। पंजीकरण के बाद एडमिन अनुमोदन होते ही आपकी प्रोफ़ाइल सत्यापित दिखाई देगी।'
+                : 'Worker registration is currently direct and free (no OTP or payment required). Once submitted, ROJGAR SETU Admin can directly verify your profile.'}
+            </span>
+          </p>
+
+          {errorMsg && (
+            <div
+              ref={errorBoxRef}
+              role="alert"
+              className="p-3.5 rounded-md bg-red-50 border border-red-200 text-sm text-red-800 flex items-start gap-2"
+            >
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-red-700" />
+              <span>{errorMsg}</span>
+            </div>
+          )}
+
+          {!user && (
+            <div className="p-3.5 rounded-md bg-amber-50 border border-amber-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs text-amber-950">
+              <span>
+                {lang === 'mr'
+                  ? 'नोंदणी जतन करण्यासाठी आधी गुगल खात्याने लॉगिन करा.'
+                  : lang === 'hi'
+                  ? 'पंजीकरण सहेजने के लिए पहले गूगल खाते से लॉगिन करें।'
+                  : 'Sign in with Google before submitting your worker registration.'}
+              </span>
+              <button
+                type="button"
+                onClick={signInWithGoogle}
+                className="px-4 py-2 rounded-md bg-[#0B3B75] text-white font-semibold hover:bg-slate-800 whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                {t.workerForm.signInBtn}
+              </button>
+            </div>
+          )}
+
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-end gap-3 pt-1">
+            <button
+              type="submit"
+              disabled={saving}
+              className="w-full sm:w-auto px-7 py-3.5 rounded-xl bg-[#15803D] hover:bg-[#116830] disabled:opacity-60 text-white text-sm sm:text-base font-extrabold inline-flex items-center justify-center gap-2 shadow-sm cursor-pointer"
+            >
+              {saving ? (
+                <Loader2 className="w-5 h-5 animate-spin" />
+              ) : (
+                <CheckCircle2 className="w-5 h-5" />
+              )}
+              <span>
+                {saving
+                  ? t.common.loading
+                  : workerProfile
+                  ? t.workerForm.updateBtn
+                  : lang === 'mr'
+                  ? 'कामगार नोंदणी पूर्ण करा'
+                  : lang === 'hi'
+                  ? 'कामगार पंजीकरण पूरा करें'
+                  : 'Complete Worker Registration'}
+              </span>
+            </button>
           </div>
         </section>
       </form>

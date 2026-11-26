@@ -8,6 +8,7 @@ import {
   ChevronDown,
   ChevronUp,
   Clock,
+  ExternalLink,
   Gift,
   IndianRupee,
   Loader2,
@@ -18,6 +19,8 @@ import {
   Power,
   ShieldCheck,
   Star,
+  Volume2,
+  VolumeX,
   Wrench,
   X,
   XCircle,
@@ -42,6 +45,7 @@ import {
 import { getSafeCustomerLabelForJobOrApp } from '../lib/customerPrivacy';
 import {
   SERVICE_RADIUS_STAGES,
+  buildSmartJobVoiceScript,
   calculateValidDistanceKm,
   getLocalizedCategoryLabel,
   getPublicJobLocationText,
@@ -614,9 +618,9 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
         <p className="text-sm text-slate-600">
           {tr(
             lang,
-            'Complete your ₹250 one-time verified Worker Registration to receive your Unique Worker ID, Digital ID Card, Registration Certificate, and nearby job requests within 2 km – 10 km.',
-            '₹250 एकमुश्त सत्यापित कामगार पंजीकरण पूरा करें और अपना डिजिटल ID कार्ड, पंजीकरण प्रमाणपत्र व 2–10 किमी के दायरे में काम पाएँ।',
-            '₹250 एकवेळ सत्यापित कामगार नोंदणी पूर्ण करा आणि तुमचे डिजिटल ओळखपत्र, प्रमाणपत्र व २–१० किमी परिसरातील कामाच्या संधी मिळवा.'
+            'Complete your free Worker Registration to receive nearby job requests, see customer distance, and quote your own wages directly.',
+            'निःशुल्क कामगार पंजीकरण पूरा करें और अपने आस-पास के काम, ग्राहक की दूरी व अपनी मज़दूरी सीधे तय करें।',
+            'मोफत कामगार नोंदणी पूर्ण करा आणि तुमच्या जवळच्या कामाच्या रिक्वेस्ट, ग्राहकाचे अंतर पाहून स्वतःची मजुरी ठरवा.'
           )}
         </p>
         <button
@@ -936,6 +940,25 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
                             {getPublicJobLocationText(job, false)}
                             {distanceKm !== null ? ` (~${distanceKm} km)` : ''}
                           </span>
+                          {typeof job.lat === 'number' &&
+                            typeof job.lng === 'number' &&
+                            Number.isFinite(job.lat) &&
+                            Number.isFinite(job.lng) &&
+                            (Math.abs(job.lat) > 0.1 || Math.abs(job.lng) > 0.1) && (
+                              <a
+                                href={`https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(
+                                  `${job.lat},${job.lng}`
+                                )}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-blue-50 border border-blue-200 text-[11px] font-bold text-[#0B3B75] hover:bg-blue-100"
+                              >
+                                <ExternalLink className="w-3 h-3" />
+                                <span>
+                                  {tr(lang, 'Customer GPS Map', 'ग्राहक GPS लोकेशन', 'ग्राहकाचे GPS लोकेशन')}
+                                </span>
+                              </a>
+                            )}
                           <span className="inline-flex items-center gap-1">
                             <Clock className="w-3.5 h-3.5 text-slate-400" />
                             {job.preferredTimeType === 'later' && job.jobDate
@@ -945,13 +968,46 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
                         </div>
                       </div>
 
-                      <div className="text-right">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+                            try {
+                              window.speechSynthesis.cancel();
+                              const script = buildSmartJobVoiceScript({
+                                lang,
+                                customerName: getSafeCustomerLabelForJobOrApp({
+                                  job,
+                                  app,
+                                  viewerRole: 'worker',
+                                }),
+                                category: job.category,
+                                jobTitle: job.subService || job.title,
+                                jobDescription: job.description,
+                                approxLocationLabel: getPublicJobLocationText(job, false),
+                                distanceKm,
+                              });
+                              const utter = new SpeechSynthesisUtterance(script);
+                              utter.lang = lang === 'mr' ? 'mr-IN' : lang === 'hi' ? 'hi-IN' : 'en-IN';
+                              utter.rate = 0.95;
+                              window.speechSynthesis.speak(utter);
+                            } catch {
+                              // Ignore speech synthesis errors on unsupported browsers
+                            }
+                          }}
+                          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-amber-50 border border-amber-300 text-[11px] font-extrabold text-[#9A3412] hover:bg-amber-100 cursor-pointer"
+                          title={tr(lang, 'Listen to work request alert', 'आवाज़ में सुनें', 'आवाजात ऐका')}
+                        >
+                          <Volume2 className="w-3.5 h-3.5" />
+                          <span>{tr(lang, 'Listen', 'सुनें', 'आवाज ऐका')}</span>
+                        </button>
                         <span className="inline-block px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-200 text-[11px] font-bold text-[#15803D]">
                           {tr(
                             lang,
                             'Quote Your Rate',
                             'काम देखकर दर बताएँ',
-                            'काम व फोटो पाहून दर सांगा'
+                            'काम व अंतर पाहून मजुरी सांगा'
                           )}
                         </span>
                       </div>
@@ -1456,55 +1512,60 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
           </div>
         )}
 
-        {/* ================= TAB 5: PROFILE (WORKER REGISTRATION ID, ₹250 PAYMENT, CERTIFICATE & RECEIPT) ================= */}
+        {/* ================= TAB 5: PROFILE (VERIFICATION STATUS, DIGITAL ID & VOICE ALERTS) ================= */}
         {activeTab === 'profile' && (
           <div className="space-y-5">
-            {!isWorkerPaidBenefitsActive(workerProfile) && (
-              <div
-                className={`rounded-xl border p-4 flex flex-wrap items-center justify-between gap-3 text-xs sm:text-sm ${
-                  isWorkerPaymentPaid(workerProfile, ownPayment)
-                    ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
-                    : 'bg-amber-50 border-amber-300 text-amber-950'
+            <div
+              className={`rounded-xl border p-4 flex flex-wrap items-center justify-between gap-3 text-xs sm:text-sm ${
+                workerProfile.verificationStatus === 'verified'
+                  ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
+                  : 'bg-amber-50 border-amber-300 text-amber-950'
+              }`}
+            >
+              <div className="space-y-0.5">
+                <div className="font-extrabold text-[#0B3B75]">
+                  {workerProfile.verificationStatus === 'verified'
+                    ? tr(
+                        lang,
+                        'Admin Verified Worker Profile',
+                        'एडमिन द्वारा सत्यापित कामगार प्रोफ़ाइल',
+                        'अ‍ॅडमिन सत्यापित कामगार प्रोफाइल'
+                      )
+                    : tr(
+                        lang,
+                        'Pending Admin Approval',
+                        'एडमिन अनुमोदन लंबित',
+                        'अ‍ॅडमिन मंजुरी प्रलंबित'
+                      )}
+                </div>
+                <p className="text-xs text-slate-700">
+                  {workerProfile.verificationStatus === 'verified'
+                    ? tr(
+                        lang,
+                        'Your worker profile is verified and active for nearby customer hiring requests.',
+                        'आपकी कामगार प्रोफ़ाइल सत्यापित और सक्रिय है।',
+                        'तुमची कामगार प्रोफाइल सत्यापित व सक्रिय आहे.'
+                      )
+                    : tr(
+                        lang,
+                        'Your registration is saved and visible to customers. ROJGAR SETU Admin will verify your profile shortly.',
+                        'आपका पंजीकरण सेव है। रोजगार सेतु एडमिन शीघ्र ही आपकी प्रोफ़ाइल सत्यापित करेंगे।',
+                        'तुमची नोंदणी जतन झाली आहे. रोजगार सेतू अ‍ॅडमिन लवकरच तुमची प्रोफाइल मंजूर करतील.'
+                      )}
+                </p>
+              </div>
+              <span
+                className={`px-3 py-1 rounded-lg text-xs font-extrabold ${
+                  workerProfile.verificationStatus === 'verified'
+                    ? 'bg-[#15803D] text-white'
+                    : 'bg-[#E06D1B] text-white'
                 }`}
               >
-                <div className="space-y-0.5">
-                  <div className="font-extrabold text-[#0B3B75]">
-                    {isWorkerPaymentPaid(workerProfile, ownPayment)
-                      ? tr(
-                          lang,
-                          '₹250 Fee PAID — Sent to ROJGAR SETU Admin Dashboard for Approval',
-                          '₹250 शुल्क भुगतान पूर्ण (PAID) — रोजगार सेतु एडमिन स्वीकृति लंबित',
-                          '₹250 नोंदणी शुल्क भरले (PAID) — रोजगार सेतु अ‍ॅडमिन मंजुरी प्रलंबित'
-                        )
-                      : tr(
-                          lang,
-                          '₹250 One-Time Registration Fee Required for Worker ID Card & Certificate',
-                          'कामगार ID कार्ड और प्रमाणपत्र के लिए ₹250 पंजीकरण शुल्क आवश्यक है',
-                          'कामगार ID कार्ड व प्रमाणपत्रासाठी ₹250 नोंदणी शुल्क आवश्यक आहे'
-                        )}
-                  </div>
-                  <p className="text-xs text-slate-700">
-                    {isWorkerPaymentPaid(workerProfile, ownPayment)
-                      ? tr(
-                          lang,
-                          'Your ₹250 registration payment is PAID and verified on our server. Your Official Worker ID Card (RS-W-...) and Registration Certificate will unlock automatically once Admin approves your registration.',
-                          'आपका ₹250 भुगतान सत्यापित (PAID) हो गया है। एडमिन स्वीकृति के बाद आपका कामगार ID कार्ड और प्रमाणपत्र यहाँ खुल जाएगा।',
-                          'तुमचे ₹250 पेमेंट यशस्वी (PAID) झाले आहे. अ‍ॅडमिन मंजुरीनंतर तुमचे अधिकृत कामगार ID कार्ड व प्रमाणपत्र येथे आपोआप सुरू होईल.'
-                        )
-                      : tr(
-                          lang,
-                          'Complete your ₹250 payment below to submit your registration to ROJGAR SETU Admin for Worker ID Card & Certificate approval.',
-                          'अपना कामगार ID कार्ड और प्रमाणपत्र प्राप्त करने के लिए नीचे ₹250 भुगतान पूरा करें।',
-                          'कामगार ID कार्ड व प्रमाणपत्र मिळवण्यासाठी खाली ₹250 पेमेंट पूर्ण करा.'
-                        )}
-                  </p>
-                </div>
-                <PaymentStatusBadge
-                  status={ownPayment?.status || workerProfile.registrationPaymentStatus || 'pending'}
-                  lang={lang}
-                />
-              </div>
-            )}
+                {workerProfile.verificationStatus === 'verified'
+                  ? tr(lang, 'Verified', 'सत्यापित', 'सत्यापित')
+                  : tr(lang, 'Pending', 'लंबित', 'प्रलंबित')}
+              </span>
+            </div>
 
             {/* Upgraded Digital Worker Identity Card */}
             <WorkerDigitalIdCard
@@ -1587,38 +1648,6 @@ export const WorkerAppV2: React.FC<WorkerAppV2Props> = ({
                 )}
               </div>
             )}
-
-            {/* ₹250 Registration Payment Checkout (shown ONLY if not yet PAID — prevents duplicate payment) */}
-            {!isWorkerPaymentPaid(workerProfile, ownPayment) && !isWorkerPaidBenefitsActive(workerProfile) && (
-              <WorkerPaymentCheckoutCard
-                workerUid={user.uid}
-                workerName={workerProfile.displayName}
-                workerSkill={workerProfile.primarySkill}
-                workerLocation={`${workerProfile.cityOrVillage}, ${workerProfile.district}, ${workerProfile.state}`}
-                workerMobile={workerPrivate?.mobile || ''}
-                provisionalAppId={workerProfile.registrationId}
-                otpVerified={Boolean(workerPrivate?.mobileVerified)}
-                referredByCode={workerProfile.referredByCode}
-                referredByUid={workerProfile.referredByUid}
-                existingPayment={ownPayment}
-                preAcceptedPolicies={Boolean(workerPrivate?.refundPolicyAccepted)}
-              />
-            )}
-
-            {/* Official Worker Registration Certificate (Unlocked strictly after ₹250 verification) */}
-            <WorkerRegistrationCertificateCard
-              workerProfile={workerProfile}
-              payment={ownPayment}
-            />
-
-            {/* Registration Payment Status & History (Always visible in Worker Dashboard) */}
-            <WorkerPaymentHistoryCard
-              workerProfile={workerProfile}
-              payment={ownPayment}
-            />
-
-            {/* Official Payment Receipt (Shown whenever a payment record exists) */}
-            {ownPayment && <WorkerPaymentReceiptCard payment={ownPayment} />}
 
             {/* Notification Sound & Push Preferences */}
             <UserNotificationCenter

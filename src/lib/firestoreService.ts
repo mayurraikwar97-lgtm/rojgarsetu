@@ -1849,18 +1849,22 @@ export async function createInstantHireRequest(
     });
   const initialStageKm = normalizeRadiusKm(jobPayload.initialRadiusKm ?? 2, 2);
 
-  const approxCoords = getApproximateCoordinates(jobPayload.lat, jobPayload.lng);
+  const customerLat =
+    typeof jobPayload.lat === 'number' && Number.isFinite(jobPayload.lat) ? jobPayload.lat : jobPayload.lat;
+  const customerLng =
+    typeof jobPayload.lng === 'number' && Number.isFinite(jobPayload.lng) ? jobPayload.lng : jobPayload.lng;
 
   // Create job document first so Firestore security rule `get(/databases/.../jobs/$(jobId))`
   // resolves cleanly when creating invited applications and notifications immediately afterward.
-  // PRIVACY: Public job documents store ONLY approximate location & rounded ~1 km coordinates.
+  // Customer GPS coordinates are shared with workers for accurate distance & wage quotation;
+  // private house/flat number & landmark remain isolated in orderExactAddresses.
   const jobId = await createJobPosting(
     {
       ...jobPayload,
       workLocationLabel: approxLocLabel.slice(0, 160),
       approxLocationLabel: approxLocLabel.slice(0, 160),
-      lat: approxCoords.lat,
-      lng: approxCoords.lng,
+      lat: customerLat,
+      lng: customerLng,
       initialRadiusKm: initialStageKm,
       currentRadiusKm: normalizeRadiusKm(jobPayload.currentRadiusKm ?? initialStageKm, initialStageKm),
       dealStatus: selectedWorkers.length > 0 ? 'NOTIFIED' : 'REQUESTED',
@@ -1939,7 +1943,7 @@ export async function createInstantHireRequest(
       createdAppIds.map((entry) => {
         const w = entry.worker;
         const distKm = calculateValidDistanceKm(jobPayload.lat, jobPayload.lng, w.approxLat, w.approxLng);
-        const workerLang: Language = w.preferredLanguage || 'en';
+        const workerLang: Language = w.preferredLanguage || 'mr';
         const msg = buildSmartJobNotificationContent({
           lang: workerLang,
           customerName: jobPayload.employerName,

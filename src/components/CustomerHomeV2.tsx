@@ -19,6 +19,7 @@ import {
   HardHat,
   Loader2,
   MapPin,
+  Megaphone,
   Music,
   Paintbrush,
   Phone,
@@ -28,6 +29,7 @@ import {
   Scissors,
   Search,
   Shield,
+  ShieldCheck,
   Sparkles,
   Store,
   Sun,
@@ -77,6 +79,7 @@ import {
 import {
   DEFAULT_BATCH_ESCALATION_WINDOW_MS,
   buildApproxLocationLabel,
+  calculateValidDistanceKm,
   getNextRadiusStage,
   isJobConfirmationClosed,
 } from '../lib/smartVoiceJobAlert';
@@ -98,10 +101,10 @@ import type {
 import { BrandSloganBanner } from './BrandSloganBanner';
 import { AddProfessionModal } from './AddProfessionModal';
 import { LocationPinModal } from './LocationPinModal';
+import { SecureAvatar } from './SecureAvatar';
 import { WorkPhotoUploader } from './WorkPhotoUploader';
 import { HomeIdentityHero, HomePublicPortalSections } from './HomePublicPortalSections';
 import { ProfessionThumbnail } from './ProfessionThumbnail';
-import { SponsoredAdSlider } from './SponsoredAdSlider';
 
 interface CustomerHomeV2Props {
   workers: PublicWorkerProfile[];
@@ -250,6 +253,9 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
   const [secondsUntilNextBatch, setSecondsUntilNextBatch] = useState<number>(
     Math.ceil(DEFAULT_BATCH_ESCALATION_WINDOW_MS / 1000)
   );
+  const [targetedWorker, setTargetedWorker] = useState<PublicWorkerProfile | null>(null);
+  const [workerDirSearch, setWorkerDirSearch] = useState('');
+  const [workerDirCategory, setWorkerDirCategory] = useState('all');
 
   // Sync saved location preference once available (only if user hasn't already picked GPS/manual in this session)
   useEffect(() => {
@@ -793,7 +799,7 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
           orderKind: 'work',
           ...(workPhotoUrls.length > 0 ? { workPhotoUrls } : {}),
         },
-        [],
+        targetedWorker ? [targetedWorker] : [],
         finalDescription,
         idempotencyKey,
         workers
@@ -1304,28 +1310,105 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
     setStep('home');
     setSelectedCategory(null);
     setSelectedSubService(null);
+    setTargetedWorker(null);
     setCreatedOrder(null);
     setFormError('');
   };
 
-  const openJobsCount = useMemo(
-    () => jobs.filter((j) => j.status === 'open').length,
-    [jobs]
-  );
+  const handleHireSpecificWorker = (worker: PublicWorkerProfile) => {
+    const skillLower = (worker.primarySkill || '').toLowerCase();
+    const matchedCat: ServiceCategoryV2 =
+      allCatalogCategories.find(
+        (c) =>
+          c.canonicalCategory.toLowerCase() === skillLower ||
+          c.en.toLowerCase() === skillLower ||
+          skillLower.includes(c.en.toLowerCase()) ||
+          c.en.toLowerCase().includes(skillLower)
+      ) || {
+        id: `worker_skill_${worker.id}`,
+        en: worker.primarySkill || 'General Work',
+        hi: worker.primarySkill || 'सामान्य काम',
+        mr: worker.primarySkill || 'सामान्य काम',
+        taglineEn: 'Direct Worker Hire',
+        taglineHi: 'सीधे कामगार हायर करें',
+        taglineMr: 'थेट कामगार हायर करा',
+        canonicalCategory: worker.primarySkill || 'General Labour',
+        startingPrice: Number(String(worker.expectedWage || '').replace(/\D/g, '')) || 300,
+        accentBg: 'bg-blue-50',
+        accentBorder: 'border-blue-200',
+        accentText: 'text-[#0B3B75]',
+        subServices: [
+          {
+            id: 'general_request',
+            en: worker.primarySkill || 'General Work Request',
+            hi: worker.primarySkill || 'सामान्य कार्य अनुरोध',
+            mr: worker.primarySkill || 'सामान्य कामाची रिक्वेस्ट',
+            startingPrice: Number(String(worker.expectedWage || '').replace(/\D/g, '')) || 300,
+            estimatedDuration: 'As required',
+          },
+        ],
+      };
+    setSelectedCategory(matchedCat);
+    setSelectedSubService(matchedCat.subServices[0]);
+    setTargetedWorker(worker);
+    setFormError('');
+    setStep('order_form');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
 
   const activePincode = useMemo(
     () => location.pincode || extractSixDigitPincode(location.label),
     [location.pincode, location.label]
   );
 
+  const registeredWorkersList = useMemo(() => {
+    const active = workers.filter((w) => w.verificationStatus !== 'suspended');
+    const q = (workerDirSearch || searchQuery).trim().toLowerCase();
+    const pinFilter = activePincode.trim();
+    return active
+      .map((w) => {
+        const distKm = calculateValidDistanceKm(location.lat, location.lng, w.approxLat, w.approxLng);
+        return { worker: w, distKm };
+      })
+      .filter(({ worker: w }) => {
+        if (workerDirCategory !== 'all') {
+          const skillsBlob = `${w.primarySkill} ${(w.skills || []).join(' ')} ${w.customProfessionName || ''}`.toLowerCase();
+          if (!skillsBlob.includes(workerDirCategory.toLowerCase())) return false;
+        }
+        if (!q) return true;
+        const blob = `${w.displayName} ${w.primarySkill} ${(w.skills || []).join(' ')} ${w.customProfessionName || ''} ${w.cityOrVillage || ''} ${w.district || ''} ${w.state || ''} ${w.pincode || ''}`.toLowerCase();
+        return blob.includes(q);
+      })
+      .sort((a, b) => {
+        const pinA = pinFilter && a.worker.pincode === pinFilter ? 1 : 0;
+        const pinB = pinFilter && b.worker.pincode === pinFilter ? 1 : 0;
+        if (pinA !== pinB) return pinB - pinA;
+        const verA = a.worker.verificationStatus === 'verified' ? 1 : 0;
+        const verB = b.worker.verificationStatus === 'verified' ? 1 : 0;
+        if (verA !== verB) return verB - verA;
+        const availA = (a.worker.availabilityStatus || 'available') === 'available' ? 1 : 0;
+        const availB = (b.worker.availabilityStatus || 'available') === 'available' ? 1 : 0;
+        if (availA !== availB) return availB - availA;
+        const dA = a.distKm ?? Number.POSITIVE_INFINITY;
+        const dB = b.distKm ?? Number.POSITIVE_INFINITY;
+        return dA - dB;
+      });
+  }, [workers, workerDirSearch, searchQuery, workerDirCategory, activePincode, location.lat, location.lng]);
+
+  const openJobsCount = useMemo(
+    () => jobs.filter((j) => j.status === 'open').length,
+    [jobs]
+  );
+
   const nearbyLocalShops = useMemo(() => {
-    if (shops.length === 0) return [];
+    const verifiedShops = shops.filter((s) => s.verificationStatus === 'verified');
+    if (verifiedShops.length === 0) return [];
     const pin = activePincode.trim();
     const distLower = (location.district || '').trim().toLowerCase();
     const cityLower = (location.cityOrVillage || '').trim().toLowerCase();
 
-    const scored = shops.map((shop) => {
-      let score = shop.paidListingActive || shop.registrationPaymentStatus === 'verified' ? 4 : 0;
+    const scored = verifiedShops.map((shop) => {
+      let score = 4;
       if (pin && shop.pincode === pin) score += 10;
       else if (pin && shop.pincode.slice(0, 3) === pin.slice(0, 3)) score += 5;
       if (distLower && shop.district.toLowerCase().includes(distLower)) score += 3;
@@ -1806,16 +1889,174 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
               </div>
             )}
 
-            {/* Sponsored Local Business Advertisement Slider (Homepage Placement) */}
-            <SponsoredAdSlider
-              category="all"
-              state={location.state}
-              district={location.district}
-              city={location.cityOrVillage}
-              pincode={activePincode}
-              placement="homepage"
-              onNavigate={(r) => onNavigate(r)}
-            />
+            {/* All Registered Workers Directory (Directly visible on Hire & Home) */}
+            <section
+              aria-label="Registered Workers"
+              className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4 shadow-2xs"
+            >
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <div className="text-[11px] font-extrabold uppercase tracking-wider text-[#15803D]">
+                    {tr(lang, 'Direct Hiring · Zero Commission', 'सीधी हायरिंग · 0% कमीशन', 'थेट कामगार हायर करा · ०% कमिशन')}
+                  </div>
+                  <h2 className="font-display text-lg sm:text-xl font-extrabold text-[#0B3B75]">
+                    {tr(
+                      lang,
+                      `All Registered Workers (${registeredWorkersList.length})`,
+                      `सभी पंजीकृत कामगार (${registeredWorkersList.length})`,
+                      `वेबसाईटवरील सर्व नोंदणीकृत कामगार (${registeredWorkersList.length})`
+                    )}
+                  </h2>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="relative">
+                    <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                    <input
+                      type="text"
+                      value={workerDirSearch}
+                      onChange={(e) => setWorkerDirSearch(e.target.value)}
+                      placeholder={tr(lang, 'Name, skill, city or PIN...', 'नाम, काम, शहर या पिन...', 'नाव, काम, शहर किंवा पिन...')}
+                      className="h-9 pl-8 pr-3 rounded-lg border border-slate-300 bg-slate-50 focus:bg-white text-xs text-slate-900 focus:outline-none focus:border-[#0B3B75] w-48"
+                    />
+                  </div>
+                  <select
+                    value={workerDirCategory}
+                    onChange={(e) => setWorkerDirCategory(e.target.value)}
+                    className="h-9 px-2.5 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-700"
+                  >
+                    <option value="all">{tr(lang, 'All Skills', 'सभी कौशल', 'सर्व कामे')}</option>
+                    {SERVICE_CATALOG_V2.map((c) => (
+                      <option key={c.id} value={c.canonicalCategory}>
+                        {getServiceCategoryLabel(c, lang)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {registeredWorkersList.length === 0 ? (
+                <div className="rounded-lg bg-slate-50 border border-slate-200 p-6 text-center space-y-2">
+                  <Users className="w-7 h-7 text-slate-400 mx-auto" />
+                  <p className="text-sm font-bold text-[#0B3B75]">
+                    {tr(
+                      lang,
+                      'No registered workers match your current filter yet.',
+                      'अभी इस फ़िल्टर से कोई कामगार नहीं मिला।',
+                      'सध्या या फिल्टरनुसार कोणतेही कामगार सापडले नाहीत.'
+                    )}
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    {tr(
+                      lang,
+                      'You can still pick any category above to broadcast a work request, or register a worker account.',
+                      'आप ऊपर कोई भी श्रेणी चुनकर काम की रिक्वेस्ट भेज सकते हैं या नया कामगार पंजीकृत कर सकते हैं।',
+                      'तुम्ही वरील कोणतीही श्रेणी निवडून कामाची रिक्वेस्ट पाठवू शकता किंवा नवीन कामगार नोंदणी करू शकता.'
+                    )}
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  {registeredWorkersList.slice(0, quickHireOnly ? 30 : 9).map(({ worker: w, distKm }) => {
+                    const isVerified = w.verificationStatus === 'verified';
+                    const isAvailable = (w.availabilityStatus || 'available') === 'available';
+                    return (
+                      <div
+                        key={w.id}
+                        className="rounded-xl border border-slate-200 bg-[#F8FAFC] hover:border-[#0B3B75] p-3.5 flex flex-col justify-between gap-3 transition-colors"
+                      >
+                        <div className="flex items-start gap-3 min-w-0">
+                          <SecureAvatar
+                            name={w.displayName}
+                            photoDocId={w.photoDocId}
+                            sizeClass="w-11 h-11"
+                          />
+                          <div className="min-w-0 flex-1 space-y-1">
+                            <div className="flex items-center gap-1.5">
+                              <span className="font-display text-sm font-extrabold text-[#0B3B75] truncate">
+                                {w.displayName}
+                              </span>
+                              {isVerified && (
+                                <ShieldCheck className="w-4 h-4 text-[#15803D] shrink-0" />
+                              )}
+                            </div>
+                            <div className="text-xs font-bold text-[#C25E00] truncate">
+                              {w.customProfessionName || w.primarySkill}
+                            </div>
+                            <div className="text-[11px] text-slate-600 flex items-center gap-1 truncate">
+                              <MapPin className="w-3 h-3 text-[#E06D1B] shrink-0" />
+                              <span className="truncate">
+                                {[w.cityOrVillage, w.district].filter(Boolean).join(', ')}
+                                {w.pincode ? ` · ${w.pincode}` : ''}
+                                {distKm !== null ? ` (~${distKm} km)` : ''}
+                              </span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/80 text-[11px]">
+                          <div className="flex items-center gap-1.5">
+                            <span
+                              className={`px-2 py-0.5 rounded font-bold ${
+                                isAvailable
+                                  ? 'bg-emerald-50 text-[#15803D] border border-emerald-200'
+                                  : 'bg-slate-100 text-slate-600 border border-slate-200'
+                              }`}
+                            >
+                              {isAvailable
+                                ? tr(lang, 'Available', 'उपलब्ध', 'उपलब्ध')
+                                : tr(lang, 'Offline', 'ऑफ़लाइन', 'ऑफलाइन')}
+                            </span>
+                            {!isVerified && (
+                              <span className="px-2 py-0.5 rounded bg-amber-50 text-[#9A3412] border border-amber-200 font-bold">
+                                {tr(lang, 'Pending', 'लंबित', 'प्रलंबित')}
+                              </span>
+                            )}
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => handleHireSpecificWorker(w)}
+                            className="px-3 py-1.5 rounded-lg bg-[#E06D1B] hover:bg-[#c55b10] text-white text-xs font-extrabold cursor-pointer"
+                          >
+                            {tr(lang, 'Hire / Request', 'हायर करें', 'हायर करा')}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+
+            {/* Dedicated Local Area Advertisement Panel Link (Clean, zero homepage ad clutter) */}
+            <div className="bg-white border border-blue-200/90 rounded-xl p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-2xs">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-200 flex items-center justify-center shrink-0">
+                  <Megaphone className="w-5 h-5 text-[#0B3B75]" />
+                </div>
+                <div>
+                  <div className="text-[11px] font-extrabold uppercase tracking-wider text-[#C25E00]">
+                    {tr(lang, 'Dedicated Advertisement Panel', 'स्थानीय विज्ञापन पैनल', 'स्थानिक जाहिरात पॅनल')}
+                  </div>
+                  <h2 className="font-display text-base font-extrabold text-[#0B3B75]">
+                    {tr(
+                      lang,
+                      'View Local Area Shop Offers & Promotions',
+                      'अपने क्षेत्र की दुकानों के विज्ञापन देखें या पोस्ट करें',
+                      'तुमच्या परिसरातील दुकानांच्या जाहिराती पहा किंवा पोस्ट करा'
+                    )}
+                  </h2>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => onNavigate('advertise')}
+                className="px-4 py-2.5 rounded-lg bg-[#0B3B75] hover:bg-[#072A54] text-white text-xs sm:text-sm font-extrabold inline-flex items-center gap-1.5 shrink-0 cursor-pointer"
+              >
+                <span>{tr(lang, 'Open Ad Panel', 'विज्ञापन पैनल खोलें', 'जाहिरात पॅनल उघडा')}</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
 
             {/* Vocal for Local · स्थानिककडून सामान (Nearby Local Shops Strip) */}
             <div className="bg-white border border-amber-200/90 rounded-xl p-4 sm:p-5 space-y-4 shadow-2xs">
@@ -2012,18 +2253,6 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
               </div>
             </div>
 
-            {/* Category-Matched Sponsored Advertisement Slider (Strictly relevant to selectedCategory) */}
-            <SponsoredAdSlider
-              category={selectedCategory.id}
-              categoryLabel={getServiceCategoryLabel(selectedCategory, lang)}
-              state={location.state}
-              district={location.district}
-              city={location.cityOrVillage}
-              pincode={activePincode}
-              placement="category_selection"
-              onNavigate={(r) => onNavigate(r)}
-            />
-
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
               {selectedCategory.subServices.map((sub) => (
                 <button
@@ -2118,6 +2347,26 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
                   {tr(lang, 'Change', 'बदलें', 'बदला')}
                 </button>
               </div>
+
+              {/* Selected Worker Direct Target Notice (if hired from Registered Workers directory) */}
+              {targetedWorker && (
+                <div className="rounded-lg bg-emerald-50 border border-emerald-200 px-3.5 py-2.5 flex items-center justify-between gap-2 text-xs text-emerald-950">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <CheckCircle2 className="w-4 h-4 text-[#15803D] shrink-0" />
+                    <span className="truncate">
+                      <strong>{tr(lang, 'Direct Request To:', 'सीधा अनुरोध:', 'थेट रिक्वेस्ट:')}</strong>{' '}
+                      {targetedWorker.displayName} ({targetedWorker.primarySkill})
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setTargetedWorker(null)}
+                    className="text-[11px] font-bold text-[#0B3B75] hover:underline shrink-0 cursor-pointer"
+                  >
+                    {tr(lang, 'Send to all workers instead', 'सभी को भेजें', 'सर्व कामगारांना पाठवा')}
+                  </button>
+                </div>
+              )}
 
               {/* 1. Work Note (Optional for fast 2-tap booking) */}
               <div className="space-y-1.5">
@@ -2418,18 +2667,6 @@ export const CustomerHomeV2: React.FC<CustomerHomeV2Props> = ({
                 )}
               </button>
             </form>
-
-            {/* Non-blocking Category-Matched Sponsored Ads cleanly below the order form */}
-            <SponsoredAdSlider
-              compact
-              category={selectedCategory.id}
-              categoryLabel={getServiceCategoryLabel(selectedCategory, lang)}
-              state={location.state}
-              district={location.district}
-              city={location.cityOrVillage}
-              placement="service_form"
-              onNavigate={(r) => onNavigate(r)}
-            />
           </div>
         )}
 

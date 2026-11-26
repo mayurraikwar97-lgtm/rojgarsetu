@@ -102,7 +102,7 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
               </li>
               <li>
                 <button type="button" onClick={() => go('register-worker')} className="hover:text-amber-300 cursor-pointer">
-                  {tr(lang, 'Worker Registration (₹250)', 'कामगार पंजीकरण (₹250)', 'कामगार नोंदणी (₹250)')}
+                  {tr(lang, 'Worker Registration', 'कामगार पंजीकरण', 'कामगार नोंदणी')}
                 </button>
               </li>
               <li>
@@ -117,7 +117,7 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
               </li>
               <li>
                 <button type="button" onClick={() => go('advertise')} className="hover:text-amber-300 font-semibold text-amber-200 cursor-pointer">
-                  {tr(lang, 'Advertise With ROJGAR SETU', 'रोजगार सेतु पर विज्ञापन दें', 'रोजगार सेतुवर जाहिरात करा')}
+                  {tr(lang, 'Local Advertisement Panel', 'स्थानीय विज्ञापन पैनल', 'स्थानिक जाहिरात पॅनल')}
                 </button>
               </li>
             </ul>

@@ -14,12 +14,12 @@ import {
   Crosshair,
   ExternalLink,
   LocateFixed,
+  Lock,
   MapPin,
   Navigation,
   ShieldAlert,
   Square,
 } from 'lucide-react';
-import { calculateDistanceKm } from '../data/indiaLocations';
 import {
   classifyGeolocationErrorCode,
   detectBestGpsLocation,
@@ -43,15 +43,8 @@ const LiveCameraAdjuster: React.FC<{ points: Array<{ lat: number; lng: number }>
   const map = useMap();
   useEffect(() => {
     if (!map || points.length === 0) return;
-    if (points.length === 1) {
-      map.panTo(points[0]);
-      map.setZoom(14);
-      return;
-    }
-    const avgLat = points.reduce((s, p) => s + p.lat, 0) / points.length;
-    const avgLng = points.reduce((s, p) => s + p.lng, 0) / points.length;
-    map.panTo({ lat: avgLat, lng: avgLng });
-    map.setZoom(13);
+    map.panTo(points[0]);
+    map.setZoom(14);
   }, [map, points]);
   return null;
 };
@@ -66,39 +59,39 @@ const LiveStatusWatcher: React.FC<{ onFail: () => void }> = ({ onFail }) => {
   return null;
 };
 
-const ParticipantPin: React.FC<{
-  share: DealLocationShare;
-}> = ({ share }) => {
+const CustomerLocationPin: React.FC<{
+  lat: number;
+  lng: number;
+  label: string;
+  accuracyMeters?: number;
+}> = ({ lat, lng, label, accuracyMeters }) => {
   const [markerRef, marker] = useAdvancedMarkerRef();
   const [open, setOpen] = useState(false);
   const handleClose = useCallback(() => setOpen(false), []);
 
-  const isWorker = share.role === 'worker';
   return (
     <>
       <AdvancedMarker
         ref={markerRef}
-        position={{ lat: share.lat, lng: share.lng }}
-        title={`${isWorker ? 'Worker' : 'Customer'}: ${share.participantName}`}
+        position={{ lat, lng }}
+        title={`Customer Service Location: ${label}`}
         onClick={() => setOpen(true)}
       >
-        <Pin
-          background={isWorker ? '#15803D' : '#0B3B75'}
-          borderColor="#FFFFFF"
-          glyphColor="#FFFFFF"
-        />
+        <Pin background="#0B3B75" borderColor="#FFFFFF" glyphColor="#FFFFFF" />
       </AdvancedMarker>
       {open && marker && (
         <InfoWindow anchor={marker} onCloseClick={handleClose} maxWidth={240}>
           <div className="p-1 text-slate-900 space-y-1">
             <div className="text-[10px] font-bold uppercase tracking-wider text-[#C25E00]">
-              {isWorker ? 'Worker Live Pin' : 'Customer Live Pin'}
+              Customer Service Location
             </div>
-            <div className="text-xs font-bold text-[#0B3B75]">{share.participantName}</div>
+            <div className="text-xs font-bold text-[#0B3B75]">{label}</div>
             <div className="text-[11px] font-mono-tabular text-slate-600">
-              {share.lat.toFixed(5)}, {share.lng.toFixed(5)}
+              {lat.toFixed(5)}, {lng.toFixed(5)}
             </div>
-            <div className="text-[10px] text-slate-500">±{Math.round(share.accuracyMeters)}m accuracy</div>
+            {typeof accuracyMeters === 'number' && accuracyMeters > 0 && (
+              <div className="text-[10px] text-slate-500">±{Math.round(accuracyMeters)}m accuracy</div>
+            )}
           </div>
         </InfoWindow>
       )}
@@ -115,6 +108,11 @@ interface DealLiveLocationMapProps {
   onLocationStatusChange?: (hasActiveShare: boolean) => void;
 }
 
+/**
+ * One-Way Privacy Location Map:
+ * - Customers can share/update their service GPS location so the assigned worker can see distance & navigate.
+ * - Workers NEVER broadcast live GPS and Customers NEVER see worker GPS coordinates anywhere.
+ */
 export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
   application,
   job,
@@ -182,39 +180,58 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
     };
   }, [isUnlocked]);
 
-  const myShare = useMemo(
-    () => shares.find((s) => s.role === viewerRole && s.ownerUid === viewerUid) || null,
+  // Strictly customer-only live GPS share — worker coordinates are never read or rendered.
+  const customerShare = useMemo(
+    () =>
+      shares.find(
+        (s) =>
+          s.role === 'customer' &&
+          s.sharingActive &&
+          Number.isFinite(s.lat) &&
+          Number.isFinite(s.lng)
+      ) || null,
+    [shares]
+  );
+
+  const myCustomerShare = useMemo(
+    () =>
+      viewerRole === 'customer'
+        ? shares.find((s) => s.role === 'customer' && s.ownerUid === viewerUid) || null
+        : null,
     [shares, viewerRole, viewerUid]
   );
-  const otherRole: 'customer' | 'worker' = viewerRole === 'customer' ? 'worker' : 'customer';
-  const otherShare = useMemo(
-    () => shares.find((s) => s.role === otherRole && s.sharingActive) || null,
-    [shares, otherRole]
-  );
 
-  const activeMarkers = useMemo(() => {
-    return shares.filter((s) => s.sharingActive && Number.isFinite(s.lat) && Number.isFinite(s.lng));
-  }, [shares]);
+  const customerTarget = useMemo(() => {
+    if (customerShare) {
+      return {
+        lat: customerShare.lat,
+        lng: customerShare.lng,
+        accuracyMeters: customerShare.accuracyMeters,
+        isLive: true,
+      };
+    }
+    if (job && Number.isFinite(job.lat) && Number.isFinite(job.lng)) {
+      return {
+        lat: job.lat,
+        lng: job.lng,
+        accuracyMeters: undefined,
+        isLive: false,
+      };
+    }
+    return null;
+  }, [customerShare, job]);
 
   useEffect(() => {
-    onLocationStatusChange?.(activeMarkers.length > 0);
-  }, [activeMarkers.length, onLocationStatusChange]);
+    onLocationStatusChange?.(Boolean(customerShare));
+  }, [customerShare, onLocationStatusChange]);
 
   const markerPoints = useMemo(() => {
-    const pts = activeMarkers.map((m) => ({ lat: m.lat, lng: m.lng }));
-    if (pts.length === 0 && job && Number.isFinite(job.lat) && Number.isFinite(job.lng)) {
-      pts.push({ lat: job.lat, lng: job.lng });
-    }
-    return pts;
-  }, [activeMarkers, job]);
+    if (!customerTarget) return [];
+    return [{ lat: customerTarget.lat, lng: customerTarget.lng }];
+  }, [customerTarget]);
 
-  const distanceKm = useMemo(() => {
-    if (!myShare?.sharingActive || !otherShare?.sharingActive) return null;
-    return calculateDistanceKm(myShare.lat, myShare.lng, otherShare.lat, otherShare.lng);
-  }, [myShare, otherShare]);
-
-  const handleShareOnce = async () => {
-    if (!isUnlocked) return;
+  const handleCustomerShareOnce = async () => {
+    if (!isUnlocked || viewerRole !== 'customer') return;
     setGpsBusy(true);
     setStatusMsg('');
     try {
@@ -222,7 +239,7 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
       await updateDealLiveLocation({
         app: application,
         ownerUid: viewerUid,
-        role: viewerRole,
+        role: 'customer',
         participantName: viewerName,
         lat: geo.lat,
         lng: geo.lng,
@@ -234,15 +251,15 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
         geo.isApproximate
           ? tr(
               lang,
-              `Shared approximate location (${geo.cityOrVillage || geo.district}). Allow browser GPS for pinpoint accuracy.`,
-              `अनुमानित लोकेशन साझा की गई (${geo.cityOrVillage || geo.district})।`,
-              `अंदाजे लोकेशन शेअर केले (${geo.cityOrVillage || geo.district}).`
+              `Shared service area (${geo.cityOrVillage || geo.district}) with your worker.`,
+              `सेवा क्षेत्र (${geo.cityOrVillage || geo.district}) कामगार के साथ साझा किया गया।`,
+              `तुमचे सेवा लोकेशन (${geo.cityOrVillage || geo.district}) कामगारासोबत शेअर केले आहे.`
             )
           : tr(
               lang,
-              'Your live GPS coordinates are now shared with the other party.',
-              'आपकी लाइव GPS लोकेशन अब दूसरे पक्ष को दिखाई दे रही है।',
-              'तुमचे लाइव्ह GPS लोकेशन आता समोरच्या व्यक्तीला दिसत आहे.'
+              'Your service GPS location is now visible to the assigned worker.',
+              'आपकी सेवा GPS लोकेशन अब नियुक्त कामगार को दिखाई दे रही है।',
+              'तुमचे सेवा GPS लोकेशन आता नियुक्त कामगाराला दिसत आहे.'
             )
       );
     } catch (err) {
@@ -252,19 +269,19 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
     }
   };
 
-  const handleStartLiveWatch = () => {
-    if (!isUnlocked) return;
+  const handleCustomerStartLiveWatch = () => {
+    if (!isUnlocked || viewerRole !== 'customer') return;
     if (typeof navigator === 'undefined' || !navigator.geolocation) {
-      void handleShareOnce();
+      void handleCustomerShareOnce();
       return;
     }
     setWatching(true);
     setStatusMsg(
       tr(
         lang,
-        'Live GPS stream active — coordinates update automatically as you move.',
-        'लाइव GPS स्ट्रीम चालू है — चलते समय लोकेशन अपने आप अपडेट होगी।',
-        'लाइव्ह GPS सुरू आहे — हालचालीनुसार लोकेशन आपोआप अपडेट होईल.'
+        'Your service GPS pin is live for the assigned worker.',
+        'आपका सेवा GPS पिन कामगार के लिए लाइव है।',
+        'तुमचे सेवा GPS लोकेशन कामगारासाठी लाइव्ह सुरू आहे.'
       )
     );
     const id = navigator.geolocation.watchPosition(
@@ -272,7 +289,7 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
         void updateDealLiveLocation({
           app: application,
           ownerUid: viewerUid,
-          role: viewerRole,
+          role: 'customer',
           participantName: viewerName,
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
@@ -292,14 +309,15 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
           setStatusMsg(formatGeolocationError(geoErr, lang).message);
           return;
         }
-        void handleShareOnce();
+        void handleCustomerShareOnce();
       },
       { enableHighAccuracy: true, maximumAge: 10000, timeout: 15000 }
     );
     watchIdRef.current = id;
   };
 
-  const handleStopSharing = async () => {
+  const handleCustomerStopSharing = async () => {
+    if (viewerRole !== 'customer') return;
     if (watchIdRef.current !== null && typeof navigator !== 'undefined' && navigator.geolocation) {
       navigator.geolocation.clearWatch(watchIdRef.current);
       watchIdRef.current = null;
@@ -307,17 +325,17 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
     setWatching(false);
     setGpsBusy(true);
     try {
-      if (myShare) {
+      if (myCustomerShare) {
         await updateDealLiveLocation({
           app: application,
           ownerUid: viewerUid,
-          role: viewerRole,
+          role: 'customer',
           participantName: viewerName,
-          lat: myShare.lat,
-          lng: myShare.lng,
-          accuracyMeters: myShare.accuracyMeters,
+          lat: myCustomerShare.lat,
+          lng: myCustomerShare.lng,
+          accuracyMeters: myCustomerShare.accuracyMeters,
           sharingActive: false,
-          source: myShare.source,
+          source: myCustomerShare.source,
         });
       } else {
         await stopDealLocationSharing(application.id);
@@ -325,9 +343,9 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
       setStatusMsg(
         tr(
           lang,
-          'Live location sharing stopped.',
-          'लाइव लोकेशन साझाकरण बंद कर दिया गया है।',
-          'लाइव्ह लोकेशन शेअरिंग बंद केले आहे.'
+          'Service location sharing stopped.',
+          'लोकेशन साझाकरण बंद कर दिया गया है।',
+          'लोकेशन शेअरिंग बंद केले आहे.'
         )
       );
     } finally {
@@ -345,14 +363,14 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
         <ShieldAlert className="w-4 h-4 text-slate-500 shrink-0 mt-0.5" />
         <div>
           <strong className="text-slate-800">
-            {tr(lang, 'Live Location Sharing Stopped', 'लाइव लोकेशन साझाकरण बंद', 'लाइव्ह लोकेशन शेअरिंग बंद झाले')}
+            {tr(lang, 'Location Sharing Stopped', 'लोकेशन साझाकरण बंद', 'लोकेशन शेअरिंग बंद झाले')}
           </strong>
           <p className="mt-0.5">
             {tr(
               lang,
-              `Deal status is ${effectiveStatus}. Real-time location sharing is automatically terminated upon completion or cancellation.`,
-              `डील स्थिति ${effectiveStatus} है। कार्य पूर्ण या रद्द होने पर लाइव लोकेशन अपने आप बंद हो जाती है।`,
-              `डील स्थिती ${effectiveStatus} आहे. काम पूर्ण किंवा रद्द झाल्यावर लाइव्ह लोकेशन शेअरिंग आपोआप बंद होते.`
+              `Deal status is ${effectiveStatus}. Customer service location sharing ends automatically upon completion or cancellation.`,
+              `डील स्थिति ${effectiveStatus} है। कार्य पूर्ण या रद्द होने पर लोकेशन साझाकरण अपने आप बंद हो जाता है।`,
+              `डील स्थिती ${effectiveStatus} आहे. काम पूर्ण किंवा रद्द झाल्यावर लोकेशन शेअरिंग आपोआप बंद होते.`
             )}
           </p>
         </div>
@@ -360,11 +378,16 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
     );
   }
 
-  const navigationTarget = otherShare || (job && Number.isFinite(job.lat) && Number.isFinite(job.lng) ? { lat: job.lat, lng: job.lng } : null);
-  const directionsUrl = navigationTarget
-    ? `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(`${navigationTarget.lat},${navigationTarget.lng}`)}`
+  const directionsUrl = customerTarget
+    ? `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(
+        `${customerTarget.lat},${customerTarget.lng}`
+      )}`
     : null;
-
+  const customerDisplayLabel = getSafeCustomerLabelForJobOrApp({
+    job,
+    app: application,
+    viewerRole,
+  });
   const defaultCenter = markerPoints[0] || { lat: 21.1458, lng: 79.0882 };
 
   return (
@@ -374,88 +397,105 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
           <LocateFixed className="w-4 h-4 text-[#15803D] shrink-0" />
           <div>
             <div className="text-xs font-bold text-[#0B3B75]">
-              {tr(
-                lang,
-                'Two-Way Live Location & Navigation Map',
-                'दो-तरफ़ा लाइव लोकेशन व नेविगेशन मानचित्र',
-                'दोन-मार्ग लाइव्ह लोकेशन व नेव्हिगेशन नकाशा'
-              )}
-            </div>
-            <div className="text-[11px] text-slate-600">
-              {otherShare
-                ? `${otherRole === 'worker' ? 'Worker' : 'Customer'} (${otherShare.participantName}) is live · ±${Math.round(otherShare.accuracyMeters)}m${
-                    distanceKm !== null ? ` · ${distanceKm.toFixed(1)} km away` : ''
-                  }`
+              {viewerRole === 'worker'
+                ? tr(
+                    lang,
+                    'Customer Worksite Location & Navigation',
+                    'ग्राहक कार्यस्थल लोकेशन व रास्ता',
+                    'ग्राहकाचे कामाचे लोकेशन व Google Maps रास्ता'
+                  )
                 : tr(
                     lang,
-                    `Waiting for ${otherRole === 'worker' ? 'worker' : 'customer'} to share live GPS.`,
-                    `दूसरे पक्ष (${otherRole === 'worker' ? 'कामगार' : 'ग्राहक'}) की लाइव लोकेशन की प्रतीक्षा।`,
-                    `समोरच्या (${otherRole === 'worker' ? 'कामगार' : 'ग्राहक'}) लाइव्ह लोकेशनची प्रतीक्षा आहे.`
+                    'Your Service Location (Shared With Assigned Worker)',
+                    'आपकी सेवा लोकेशन (केवल नियुक्त कामगार के लिए)',
+                    'तुमचे सेवा लोकेशन (फक्त नियुक्त कामगारासाठी)'
+                  )}
+            </div>
+            <div className="text-[11px] text-slate-600">
+              {viewerRole === 'worker'
+                ? customerTarget
+                  ? tr(
+                      lang,
+                      `Customer (${customerDisplayLabel}) worksite pin available for navigation. Your live GPS is never shared with customers.`,
+                      `ग्राहक (${customerDisplayLabel}) की कार्यस्थल लोकेशन उपलब्ध है। आपकी लाइव GPS ग्राहक को नहीं दिखाई जाती।`,
+                      `ग्राहक (${customerDisplayLabel}) चे कामाचे लोकेशन उपलब्ध आहे. तुमचे लाइव्ह GPS ग्राहकाला कधीही दाखवले जात नाही.`
+                    )
+                  : tr(
+                      lang,
+                      'Waiting for customer to share GPS worksite pin.',
+                      'ग्राहक द्वारा GPS लोकेशन साझा करने की प्रतीक्षा है।',
+                      'ग्राहकाने GPS लोकेशन शेअर करण्याची प्रतीक्षा आहे.'
+                    )
+                : tr(
+                    lang,
+                    'Share your worksite GPS so your worker can reach you easily. For worker privacy, worker live GPS is never displayed.',
+                    'कामगार आसानी से पहुँच सके इसके लिए अपनी लोकेशन साझा करें। कामगार की निजता के लिए उनकी लाइव GPS नहीं दिखाई जाती।',
+                    'कामगाराला तुमच्यापर्यंत सहज पोहोचण्यासाठी तुमचे लोकेशन शेअर करा. कामगाराच्या सुरक्षेसाठी त्यांचे लाइव्ह GPS दाखवले जात नाही.'
                   )}
             </div>
           </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          {!watching ? (
-            <button
-              type="button"
-              disabled={gpsBusy}
-              onClick={handleStartLiveWatch}
-              className="min-h-[42px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md bg-[#15803D] text-white text-xs font-extrabold hover:bg-emerald-800 cursor-pointer disabled:opacity-60 shadow-sm"
-            >
-              <Navigation className="w-4 h-4" />
-              {viewerRole === 'customer'
-                ? myShare?.sharingActive
-                  ? tr(lang, 'UPDATE LOCATION', 'लोकेशन अपडेट करें', 'लोकेशन अपडेट करा')
-                  : tr(lang, 'SHARE LOCATION', 'लोकेशन साझा करें (SHARE LOCATION)', 'लोकेशन शेअर करा (SHARE LOCATION)')
-                : myShare?.sharingActive
-                ? tr(lang, 'UPDATE LOCATION', 'लाइव लोकेशन अपडेट करें', 'लाइव्ह लोकेशन अपडेट करा')
-                : tr(lang, 'SHARE LOCATION', 'लोकेशन साझा करें', 'लोकेशन शेअर करा')}
-            </button>
-          ) : (
-            <button
-              type="button"
-              disabled={gpsBusy}
-              onClick={handleStopSharing}
-              className="min-h-[42px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md bg-red-700 text-white text-xs font-extrabold hover:bg-red-800 cursor-pointer shadow-sm"
-            >
-              <Square className="w-3.5 h-3.5" />
-              {tr(lang, 'Stop Location Sharing', 'लोकेशन साझाकरण बंद करें', 'लोकेशन शेअरिंग बंद करा')}
-            </button>
+          {viewerRole === 'customer' && (
+            <>
+              {!watching ? (
+                <button
+                  type="button"
+                  disabled={gpsBusy}
+                  onClick={handleCustomerStartLiveWatch}
+                  className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md bg-[#15803D] text-white text-xs font-extrabold hover:bg-emerald-800 cursor-pointer disabled:opacity-60 shadow-sm"
+                >
+                  <Navigation className="w-4 h-4" />
+                  {myCustomerShare?.sharingActive
+                    ? tr(lang, 'Update Service Location', 'लोकेशन अपडेट करें', 'लोकेशन अपडेट करा')
+                    : tr(lang, 'Share Service Location', 'लोकेशन साझा करें', 'माझे लोकेशन शेअर करा')}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  disabled={gpsBusy}
+                  onClick={handleCustomerStopSharing}
+                  className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md bg-red-700 text-white text-xs font-extrabold hover:bg-red-800 cursor-pointer shadow-sm"
+                >
+                  <Square className="w-3.5 h-3.5" />
+                  {tr(lang, 'Stop Sharing', 'साझाकरण बंद करें', 'शेअरिंग बंद करा')}
+                </button>
+              )}
+
+              <button
+                type="button"
+                disabled={gpsBusy}
+                onClick={handleCustomerShareOnce}
+                className="min-h-[40px] inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-slate-300 bg-white text-[#0B3B75] text-xs font-bold hover:bg-slate-50 cursor-pointer"
+              >
+                <Crosshair className="w-3.5 h-3.5" />
+                {tr(lang, 'Pin Once', 'एक बार पिन करें', 'एकदा पिन करा')}
+              </button>
+
+              {myCustomerShare?.sharingActive && !watching && (
+                <button
+                  type="button"
+                  disabled={gpsBusy}
+                  onClick={handleCustomerStopSharing}
+                  className="min-h-[40px] inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-red-300 bg-white text-red-700 text-xs font-bold hover:bg-red-50 cursor-pointer"
+                >
+                  <Square className="w-3 h-3" />
+                  {tr(lang, 'Stop Sharing', 'बंद करें', 'बंद करा')}
+                </button>
+              )}
+            </>
           )}
 
-          <button
-            type="button"
-            disabled={gpsBusy}
-            onClick={handleShareOnce}
-            className="min-h-[40px] inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-slate-300 bg-white text-[#0B3B75] text-xs font-bold hover:bg-slate-50 cursor-pointer"
-          >
-            <Crosshair className="w-3.5 h-3.5" />
-            {tr(lang, 'Pin Once', 'एक बार पिन करें', 'एकदा पिन करा')}
-          </button>
-
-          {myShare?.sharingActive && !watching && (
-            <button
-              type="button"
-              disabled={gpsBusy}
-              onClick={handleStopSharing}
-              className="min-h-[40px] inline-flex items-center gap-1 px-3 py-1.5 rounded-md border border-red-300 bg-white text-red-700 text-xs font-bold hover:bg-red-50 cursor-pointer"
-            >
-              <Square className="w-3 h-3" />
-              {tr(lang, 'Stop Location Sharing', 'लोकेशन बंद करें', 'लोकेशन शेअरिंग बंद करा')}
-            </button>
-          )}
-
-          {directionsUrl && (
+          {viewerRole === 'worker' && directionsUrl && (
             <a
               href={directionsUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="min-h-[42px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md bg-[#0B3B75] text-white text-xs font-extrabold hover:bg-slate-800 shadow-sm"
+              className="min-h-[40px] inline-flex items-center gap-1.5 px-3.5 py-2 rounded-md bg-[#0B3B75] text-white text-xs font-extrabold hover:bg-slate-800 shadow-sm"
             >
               <ExternalLink className="w-4 h-4" />
-              {tr(lang, 'Open in Google Maps', 'Google Maps में खोलें', 'Google Maps मध्ये उघडा')}
+              {tr(lang, 'Open Customer Location in Google Maps', 'ग्राहक लोकेशन Google Maps में खोलें', 'ग्राहकाचे लोकेशन Google Maps वर पहा')}
             </a>
           )}
         </div>
@@ -467,63 +507,61 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
         </div>
       )}
 
-      {/* Participant Live Coordinate Cards */}
+      {/* Privacy & Customer Pin Summary */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
         <div
-          className={`p-2 rounded border ${
-            myShare?.sharingActive ? 'bg-white border-emerald-300' : 'bg-white/70 border-slate-200'
+          className={`p-2.5 rounded border ${
+            customerTarget ? 'bg-white border-emerald-300' : 'bg-white/70 border-slate-200'
           }`}
         >
           <div className="font-bold text-[#0B3B75] flex items-center justify-between">
             <span>
-              {viewerRole === 'worker' ? 'You (Worker)' : 'You (Customer)'}: {viewerName}
+              {tr(lang, 'Customer Worksite', 'ग्राहक कार्यस्थल', 'ग्राहकाचे कामाचे ठिकाण')}: {customerDisplayLabel}
             </span>
-            <span className={myShare?.sharingActive ? 'text-[#15803D]' : 'text-slate-400'}>
-              {myShare?.sharingActive ? '● LIVE' : 'OFF'}
+            <span className={customerTarget?.isLive ? 'text-[#15803D]' : 'text-amber-700'}>
+              {customerTarget?.isLive ? '● LIVE GPS' : customerTarget ? '● PINNED' : 'WAITING'}
             </span>
           </div>
           <div className="font-mono-tabular text-slate-600 mt-0.5">
-            {myShare?.sharingActive
-              ? `${myShare.lat.toFixed(5)}, ${myShare.lng.toFixed(5)} (±${Math.round(myShare.accuracyMeters)}m)`
-              : tr(lang, 'Click "Share My Live Location" to pin your GPS', 'साझा करने के लिए ऊपर बटन दबाएं', 'शेअर करण्यासाठी वरील बटण दाबा')}
+            {customerTarget
+              ? `${customerTarget.lat.toFixed(5)}, ${customerTarget.lng.toFixed(5)}${
+                  customerTarget.accuracyMeters ? ` (±${Math.round(customerTarget.accuracyMeters)}m)` : ''
+                }`
+              : tr(
+                  lang,
+                  'No GPS coordinates shared yet.',
+                  'अभी GPS निर्देशांक साझा नहीं किए गए।',
+                  'अद्याप GPS लोकेशन शेअर केलेले नाही.'
+                )}
           </div>
         </div>
 
-        <div
-          className={`p-2 rounded border ${
-            otherShare?.sharingActive ? 'bg-white border-blue-300' : 'bg-white/70 border-slate-200'
-          }`}
-        >
-          <div className="font-bold text-[#0B3B75] flex items-center justify-between">
+        <div className="p-2.5 rounded border bg-slate-50 border-slate-200">
+          <div className="font-bold text-slate-800 flex items-center gap-1.5">
+            <Lock className="w-3.5 h-3.5 text-[#15803D]" />
             <span>
-              {otherRole === 'worker'
-                ? `Worker: ${application.workerName}`
-                : `Customer: ${getSafeCustomerLabelForJobOrApp({
-                    job,
-                    app: application,
-                    viewerRole,
-                  })}`}
-            </span>
-            <span className={otherShare?.sharingActive ? 'text-[#15803D]' : 'text-slate-400'}>
-              {otherShare?.sharingActive ? '● LIVE' : 'WAITING'}
+              {tr(lang, 'Worker Privacy Protected', 'कामगार निजता सुरक्षित', 'कामगार गोपनीयता सुरक्षित')}
             </span>
           </div>
-          <div className="font-mono-tabular text-slate-600 mt-0.5">
-            {otherShare?.sharingActive
-              ? `${otherShare.lat.toFixed(5)}, ${otherShare.lng.toFixed(5)} (±${Math.round(otherShare.accuracyMeters)}m)`
-              : tr(lang, 'Waiting for live coordinate update', 'लाइव लोकेशन की प्रतीक्षा', 'लाइव्ह लोकेशनची प्रतीक्षा')}
+          <div className="text-slate-600 mt-0.5">
+            {tr(
+              lang,
+              'Worker live GPS is private and never shown to customers. Coordinate arrival via call or chat.',
+              'कामगार की लाइव GPS ग्राहक को नहीं दिखाई जाती। समय के लिए कॉल या चैट से संपर्क करें।',
+              'कामगाराचे लाइव्ह GPS ग्राहकाला कधीही दाखवले जात नाही. वेळेसाठी कॉल किंवा चॅटद्वारे संपर्क साधा.'
+            )}
           </div>
         </div>
       </div>
 
-      {/* Interactive Google Map */}
-      {apiKey && !mapFailed ? (
+      {/* Interactive Google Map showing ONLY Customer Worksite Pin */}
+      {customerTarget && apiKey && !mapFailed ? (
         <div className="h-56 w-full rounded-md overflow-hidden border border-slate-300 bg-slate-100">
           <APIProvider apiKey={apiKey}>
             <LiveStatusWatcher onFail={() => setMapFailed(true)} />
             <GoogleMap
               defaultCenter={defaultCenter}
-              defaultZoom={13}
+              defaultZoom={14}
               mapId="DEMO_MAP_ID"
               internalUsageAttributionIds={['gmp_mcp_codeassist_v1_aistudio']}
               gestureHandling="greedy"
@@ -531,35 +569,30 @@ export const DealLiveLocationMap: React.FC<DealLiveLocationMapProps> = ({
               className="w-full h-full"
             >
               <LiveCameraAdjuster points={markerPoints} />
-              {activeMarkers.map((s) => (
-                <ParticipantPin key={s.id} share={s} />
-              ))}
-              {activeMarkers.length === 0 && job && Number.isFinite(job.lat) && Number.isFinite(job.lng) && (
-                <AdvancedMarker
-                  position={{ lat: job.lat, lng: job.lng }}
-                  title={job.approxLocationLabel || job.district}
-                >
-                  <Pin background="#E06D1B" borderColor="#FFFFFF" glyphColor="#FFFFFF" />
-                </AdvancedMarker>
-              )}
+              <CustomerLocationPin
+                lat={customerTarget.lat}
+                lng={customerTarget.lng}
+                label={customerDisplayLabel}
+                accuracyMeters={customerTarget.accuracyMeters}
+              />
             </GoogleMap>
           </APIProvider>
         </div>
-      ) : (
+      ) : customerTarget ? (
         <div className="rounded-md border border-slate-200 bg-white p-3 text-xs text-slate-600 flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <MapPin className="w-4 h-4 text-[#E06D1B] shrink-0" />
             <span>
               {tr(
                 lang,
-                `Live coordinate sharing active (${activeMarkers.length} active pin(s)). Use "Open Directions" for turn-by-turn navigation.`,
-                `लाइव निर्देशांक सक्रिय (${activeMarkers.length} पिन)। नेविगेशन के लिए "रास्ता देखें" खोलें।`,
-                `लाइव्ह लोकेशन सक्रिय (${activeMarkers.length} पिन). नेव्हिगेशनसाठी Google Maps दिशा पहा.`
+                `Customer worksite coordinates pinned (${customerTarget.lat.toFixed(4)}, ${customerTarget.lng.toFixed(4)}).`,
+                `ग्राहक कार्यस्थल पिन किया गया (${customerTarget.lat.toFixed(4)}, ${customerTarget.lng.toFixed(4)})।`,
+                `ग्राहकाचे कामाचे ठिकाण पिन केले आहे (${customerTarget.lat.toFixed(4)}, ${customerTarget.lng.toFixed(4)}).`
               )}
             </span>
           </div>
         </div>
-      )}
+      ) : null}
     </div>
   );
 };

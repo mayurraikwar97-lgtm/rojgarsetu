@@ -4267,10 +4267,10 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h2 className="font-display text-lg font-bold text-[#0B3B75]">
-                ROJGAR SETU — Registered Workers
+                ROJGAR SETU — Registered Workers ({workers.length})
               </h2>
               <p className="text-xs text-slate-500">
-                Review ₹250 Razorpay payment status and approve registrations to generate Worker ID Card &amp; Registration Certificate.
+                Approve pending workers in one click so they appear verified to customers, or suspend/restore accounts.
               </p>
             </div>
             <button
@@ -4278,22 +4278,17 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
               onClick={() =>
                 downloadCsv(
                   'rojgar-setu-workers.csv',
-                  ['Registration ID', 'Name', 'Primary Skill', 'State', 'District', 'Wage', '₹250 Payment Status', 'Payment ID', 'Approval Status'],
-                  workers.map((w) => {
-                    const pay = paymentByWorkerUid[w.id];
-                    const payStatus = pay?.status || w.registrationPaymentStatus || 'pending';
-                    return [
-                      w.registrationId,
-                      w.displayName,
-                      w.primarySkill,
-                      w.state,
-                      w.district,
-                      w.expectedWage,
-                      payStatus === 'verified' ? 'PAID' : payStatus.toUpperCase(),
-                      pay?.gatewayPaymentId || pay?.utrOrGatewayRef || '',
-                      w.verificationStatus,
-                    ];
-                  })
+                  ['Registration ID', 'Name', 'Primary Skill', 'State', 'District', 'Wage', 'Availability', 'Approval Status'],
+                  workers.map((w) => [
+                    w.registrationId,
+                    w.displayName,
+                    w.primarySkill,
+                    w.state,
+                    w.district,
+                    w.expectedWage,
+                    w.availabilityStatus || 'available',
+                    w.verificationStatus,
+                  ])
                 )
               }
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded border border-slate-300 text-xs font-semibold text-slate-700 hover:bg-slate-50 cursor-pointer"
@@ -4324,8 +4319,7 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
                     <th className="py-2 pr-4">ID</th>
                     <th className="py-2 pr-4">Name</th>
                     <th className="py-2 pr-4">Primary Skill</th>
-                    <th className="py-2 pr-4">District</th>
-                    <th className="py-2 pr-4">₹250 Fee Status</th>
+                    <th className="py-2 pr-4">Location</th>
                     <th className="py-2 pr-4">Availability</th>
                     <th className="py-2 pr-4">Approval Status</th>
                     <th className="py-2">Actions</th>
@@ -4335,11 +4329,7 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
                   {workers.map((w) => {
                     const isAvailable = (w.availabilityStatus || 'available') !== 'offline';
                     const pay = paymentByWorkerUid[w.id];
-                    const effectivePayStatus = pay?.status || w.registrationPaymentStatus || 'pending';
-                    const paymentIdRef = pay?.gatewayPaymentId || pay?.utrOrGatewayRef || '';
-                    const isPaidAwaitingAdmin =
-                      effectivePayStatus === 'verified' &&
-                      (w.verificationStatus !== 'verified' || !w.paidBenefitsActive);
+                    const isPaidAwaitingAdmin = false;
                     return (
                     <tr key={w.id}>
                       <td className="py-3 pr-4 font-mono-tabular text-xs">{w.registrationId}</td>
@@ -4366,16 +4356,6 @@ export const AdminDashboardView: React.FC<AdminDashboardProps> = ({
                             {formatCoordinatesLabel(w.approxLat, w.approxLng)}
                           </div>
                         )}
-                      </td>
-                      <td className="py-3 pr-4">
-                        <div className="flex flex-col items-start gap-1">
-                          <PaymentStatusBadge status={effectivePayStatus} />
-                          {paymentIdRef && (
-                            <span className="font-mono-tabular text-[10px] text-slate-500">
-                              {paymentIdRef}
-                            </span>
-                          )}
-                        </div>
                       </td>
                       <td className="py-3 pr-4">
                         <span

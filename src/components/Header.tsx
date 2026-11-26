@@ -84,82 +84,55 @@ export const Header: React.FC<HeaderProps> = ({
       fullTitle: tr(lang, 'Home', 'मुख्य पृष्ठ', 'मुख्य पृष्ठ'),
     },
     {
-      id: 'about',
-      label: tr(lang, 'About Us', 'हमारे बारे में', 'आमच्याबद्दल'),
-      fullTitle: tr(lang, 'About Us', 'हमारे बारे में', 'आमच्याबद्दल'),
+      id: 'hire',
+      label: tr(lang, 'Hire', 'हायर करें', 'हायर करा'),
+      fullTitle: tr(lang, 'Hire Workers & Send Request', 'कामगार हायर करें व रिक्वेस्ट भेजें', 'कामगार हायर करा व रिक्वेस्ट पाठवा'),
     },
     {
-      id: 'find-work',
-      label: tr(lang, 'Find Work', 'काम खोजें', 'काम शोधा'),
-      fullTitle: tr(lang, 'Find Work', 'काम खोजें', 'काम शोधा'),
-    },
-    {
-      id: 'find-workers',
-      label: tr(lang, 'Find Workers', 'कामगार खोजें', 'कामगार शोधा'),
-      fullTitle: tr(lang, 'Find Workers', 'कामगार खोजें', 'कामगार शोधा'),
+      id: 'worker-dashboard',
+      label: tr(lang, 'Worker App', 'कामगार ऐप', 'कामगार अ‍ॅप'),
+      fullTitle: tr(lang, 'Worker App & Requests', 'कामगार ऐप और रिक्वेस्ट', 'कामगार अ‍ॅप व कामाच्या रिक्वेस्ट'),
     },
     {
       id: 'local-shops',
       label: tr(lang, 'Local Shops', 'स्थानीय दुकानें', 'स्थानिक दुकाने'),
       fullTitle: tr(
         lang,
-        'Vocal for Local · Local Shops',
-        'वोकल फॉर लोकल · स्थानीय दुकानें',
-        'व्होकल फॉर लोकल · स्थानिक दुकाने'
+        'Local Shops (Vocal for Local)',
+        'स्थानीय दुकानें (वोकल फॉर लोकल)',
+        'स्थानिक दुकाने (व्होकल फॉर लोकल)'
       ),
     },
     {
-      id: 'skills-training',
-      label: tr(lang, 'Skills & Training', 'कौशल एवं प्रशिक्षण', 'कौशल्य व प्रशिक्षण'),
-      fullTitle: tr(lang, 'Skills & Training', 'कौशल एवं प्रशिक्षण', 'कौशल्य व प्रशिक्षण'),
-    },
-    {
-      id: 'partnerships',
-      label: tr(lang, 'Partnerships', 'संस्थागत साझेदारी', 'संस्थागत भागीदारी'),
+      id: 'advertise',
+      label: tr(lang, 'Ad Panel', 'विज्ञापन पैनल', 'जाहिरात पॅनल'),
       fullTitle: tr(
         lang,
-        'Government & Institutional Partnerships',
-        'सरकारी एवं संस्थागत साझेदारी',
-        'सरकारी व संस्थात्मक भागीदारी'
+        'Local Area Advertisement Panel',
+        'स्थानीय क्षेत्र विज्ञापन पैनल',
+        'स्थानिक परिसर जाहिरात पॅनल'
       ),
     },
     {
-      id: 'govt-schemes',
-      label: tr(lang, 'Govt Schemes', 'सरकारी योजनाएं', 'सरकारी योजना'),
-      fullTitle: tr(lang, 'Government Schemes', 'सरकारी योजनाएं', 'सरकारी योजना'),
+      id: 'employer-dashboard',
+      label: tr(lang, 'My Orders', 'मेरे ऑर्डर', 'माझे ऑर्डर'),
+      fullTitle: tr(lang, 'My Orders & Requests', 'मेरे ऑर्डर और रिक्वेस्ट', 'माझे ऑर्डर व रिक्वेस्ट'),
     },
-    {
-      id: 'for-unemployed',
-      label: tr(lang, 'For Unemployed', 'बेरोजगारों के लिए', 'बेरोजगारांसाठी'),
-      fullTitle: tr(lang, 'For Unemployed', 'बेरोजगारों के लिए', 'बेरोजगारांसाठी'),
-    },
-    {
-      id: 'for-entrepreneurs',
-      label: tr(lang, 'Entrepreneurs', 'उद्योजकों के लिए', 'उद्योजकांसाठी'),
-      fullTitle: tr(lang, 'For Entrepreneurs', 'उद्योजकों के लिए', 'उद्योजकांसाठी'),
-    },
+    ...(isAdmin
+      ? [
+          {
+            id: 'admin' as PageRoute,
+            label: tr(lang, 'Admin', 'एडमिन', 'अ‍ॅडमिन'),
+            fullTitle: t.nav.adminPanel,
+          },
+        ]
+      : []),
   ];
 
   const moreDropdownItems: { id: PageRoute; label: string }[] = [
     {
-      id: 'hire',
-      label: tr(lang, 'Instant Service Booking (Hire)', 'तुरंत सेवा बुक करें (Hire)', 'तात्काळ सेवा बुक करा (Hire)'),
-    },
-    {
-      id: 'employer-dashboard',
-      label: tr(lang, 'My Orders (Customer Tracker)', 'मेरे ऑर्डर (ग्राहक ट्रैकर)', 'माझे ऑर्डर (ग्राहक ट्रॅकर)'),
-    },
-    {
-      id: 'worker-dashboard',
-      label: tr(lang, 'Worker Dashboard', 'कामगार डैशबोर्ड', 'कामगार डॅशबोर्ड'),
-    },
-    {
-      id: 'transport',
-      label: tr(lang, 'Bike Rider & Local Transport', 'बाइक राइडर व लोकल ट्रांसपोर्ट', 'बाईक रायडर व लोकल ट्रान्सपोर्ट'),
-    },
-    {
       id: 'register-worker',
-      label: tr(lang, 'Worker Registration (₹250)', 'कामगार पंजीकरण (₹250)', 'कामगार नोंदणी (₹250)'),
+      label: tr(lang, 'Worker Registration', 'कामगार पंजीकरण', 'कामगार नोंदणी'),
     },
     {
       id: 'register-shopkeeper',
@@ -178,22 +151,33 @@ export const Header: React.FC<HeaderProps> = ({
       label: tr(lang, 'Post a Job Opening', 'काम / नौकरी पोस्ट करें', 'कामाची जाहिरात टाका'),
     },
     {
-      id: 'advertise',
-      label: tr(lang, 'Advertise With Rojgar Setu', 'रोजगार सेतु पर विज्ञापन दें', 'रोजगार सेतुवर जाहिरात करा'),
+      id: 'find-work',
+      label: tr(lang, 'Find Work / Jobs', 'काम खोजें', 'काम शोधा'),
     },
     {
-      id: 'pricing',
-      label: tr(lang, 'Pricing & Transparency', 'शुल्क एवं पारदर्शिता', 'दर व पारदर्शकता'),
+      id: 'find-workers',
+      label: tr(lang, 'Find Workers Directory', 'कामगार डायरेक्टरी', 'कामगार यादी'),
     },
     {
-      id: 'trust-safety',
-      label: tr(lang, 'Trust, Safety & Grievance Desk', 'सुरक्षा एवं शिकायत निवारण', 'सुरक्षा व तक्रार निवारण'),
+      id: 'transport',
+      label: tr(lang, 'Bike Rider & Local Transport', 'बाइक राइडर व लोकल ट्रांसपोर्ट', 'बाईक रायडर व लोकल ट्रान्सपोर्ट'),
+    },
+    {
+      id: 'govt-schemes',
+      label: tr(lang, 'Govt Schemes', 'सरकारी योजनाएं', 'सरकारी योजना'),
+    },
+    {
+      id: 'skills-training',
+      label: tr(lang, 'Skills & Training', 'कौशल एवं प्रशिक्षण', 'कौशल्य व प्रशिक्षण'),
+    },
+    {
+      id: 'about',
+      label: tr(lang, 'About Us', 'हमारे बारे में', 'आमच्याबद्दल'),
     },
     {
       id: 'contact',
       label: tr(lang, 'Contact & Helpdesk', 'संपर्क एवं सहायता', 'संपर्क व मदत कक्ष'),
     },
-    ...(isAdmin ? [{ id: 'admin' as PageRoute, label: t.nav.adminPanel }] : []),
   ];
 
   return (
@@ -376,25 +360,23 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* 3. Sticky Full-Width Deep Navy Navigation Strip (All 10 Original Portal Sections) */}
+      {/* 3. Sticky Full-Width Deep Navy Navigation Strip (Clean Core Navigation) */}
       <header className="sticky top-0 z-40 bg-[#0B3B75] text-white shadow-sm border-b-2 border-[#E06D1B]">
         <div className="max-w-7xl mx-auto px-2 sm:px-4 lg:px-6 h-12 flex items-center justify-between gap-2">
-          {/* Desktop 10-Item Public-Service Navigation */}
+          {/* Desktop Core Public-Service Navigation */}
           <nav
-            className="hidden xl:flex items-center gap-0.5 text-[12px] font-semibold min-w-0"
+            className="hidden xl:flex items-center gap-1 text-[13px] font-semibold min-w-0"
             aria-label="Primary Navigation"
           >
             {primaryNavItems.map((item) => {
-              const isActive =
-                currentRoute === item.id ||
-                (item.id === 'home' && currentRoute === 'hire');
+              const isActive = currentRoute === item.id;
               return (
                 <button
                   key={item.id}
                   type="button"
                   title={item.fullTitle}
                   onClick={() => handleNav(item.id)}
-                  className={`px-2 py-3 border-b-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                  className={`px-3 py-3 border-b-2 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
                     isActive
                       ? 'bg-[#072A54] border-amber-400 text-amber-300'
                       : 'border-transparent text-white/95 hover:bg-[#072A54]/70 hover:text-white'
@@ -405,7 +387,7 @@ export const Header: React.FC<HeaderProps> = ({
               );
             })}
 
-            {/* 10. अन्य / More Dropdown */}
+            {/* More Dropdown */}
             <div className="relative">
               <button
                 type="button"

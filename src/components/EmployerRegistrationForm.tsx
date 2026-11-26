@@ -22,7 +22,6 @@ import type {
   VerificationMethod,
 } from '../types/domain';
 import { NotificationOptInButton } from './NotificationOptInButton';
-import { OtpVerificationBox } from './OtpVerificationBox';
 import { ProfilePhotoUploader, type SelectedProfilePhoto } from './ProfilePhotoUploader';
 import { PWAInstallButton } from './PWAControls';
 import { SecureAvatar } from './SecureAvatar';
@@ -152,12 +151,6 @@ export const EmployerRegistrationForm: React.FC<EmployerRegistrationFormProps> =
     }
     if (!/^[6-9]\d{9}$/.test(mobile.trim())) {
       failValidation('Please enter a valid 10-digit Indian mobile number starting with 6–9.');
-      return;
-    }
-    if (!mobileVerified) {
-      failValidation(
-        'Please complete mobile OTP verification before submitting. (If live SMS is unavailable, use authorized Demo Registration Mode for pre-launch testing.)'
-      );
       return;
     }
     if (email.trim().length < 3 || !email.includes('@')) {
@@ -566,25 +559,34 @@ export const EmployerRegistrationForm: React.FC<EmployerRegistrationFormProps> =
             <label className="block text-xs font-semibold text-slate-700 mb-1">
               {t.employerForm.mobile} *
             </label>
-            <OtpVerificationBox
-              mobile={mobile}
-              allowTestPinFallback={false}
-              onOpenDemoMode={() => onNavigate('demo-testing')}
-              onMobileChange={(v) => {
-                setMobile(v);
-                setMobileVerified(false);
-                setVerificationMethod(undefined);
-                setTestPinHash('');
-              }}
-              verified={mobileVerified}
-              verifiedMethod={verificationMethod}
-              onVerified={(m, meta) => {
-                setMobile(m);
-                setMobileVerified(true);
-                setVerificationMethod(meta?.method);
-                setTestPinHash(meta?.testPinHash || '');
-              }}
-            />
+            <div className="relative">
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-mono-tabular font-semibold text-slate-500">
+                +91
+              </span>
+              <input
+                type="tel"
+                inputMode="numeric"
+                autoComplete="tel-national"
+                maxLength={10}
+                value={mobile}
+                onChange={(e) => {
+                  const digits = e.target.value.replace(/\D/g, '').slice(0, 10);
+                  setMobile(digits);
+                  setMobileVerified(false);
+                  setVerificationMethod(undefined);
+                  setTestPinHash('');
+                }}
+                placeholder="98XXXXXXXX"
+                className="w-full pl-11 pr-3 py-2 text-sm border border-slate-300 rounded-md focus:border-[#0B3B75] focus:outline-none font-mono-tabular"
+              />
+            </div>
+            <p className="mt-1 text-[11px] text-slate-500">
+              {lang === 'mr'
+                ? 'ओटीपी आवश्यक नाही — गुगल खात्याने थेट नोंदणी पूर्ण होते.'
+                : lang === 'hi'
+                ? 'OTP आवश्यक नहीं है — गूगल खाते से सीधे पंजीकरण पूरा होता है।'
+                : 'No OTP required — verified directly with your Google Sign-In.'}
+            </p>
           </div>
 
           <div>

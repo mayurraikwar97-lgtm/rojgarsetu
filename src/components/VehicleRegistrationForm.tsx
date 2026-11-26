@@ -16,11 +16,9 @@ import {
 } from '../lib/locationService';
 import {
   getOtpFraudWarningLocalized,
-  isVehicleRegistrationOtpEnabled,
 } from '../lib/otpFeatureFlags';
-import type { Language, PageRoute, VehicleType, VerificationMethod } from '../types/domain';
+import type { Language, PageRoute, VehicleType } from '../types/domain';
 import { LocationPinModal } from './LocationPinModal';
-import { OtpVerificationBox } from './OtpVerificationBox';
 
 interface VehicleRegistrationFormProps {
   onNavigate: (route: PageRoute) => void;
@@ -35,7 +33,6 @@ const VEHICLE_TYPE_OPTIONS = VEHICLE_TYPE_CATALOG;
 export const VehicleRegistrationForm: React.FC<VehicleRegistrationFormProps> = ({ onNavigate }) => {
   const { lang, t } = useLanguage();
   const { user, authError, clearAuthError, signInWithGoogle } = useAuth();
-  const vehicleOtpRequired = isVehicleRegistrationOtpEnabled();
   const fraudWarning = getOtpFraudWarningLocalized(lang);
 
   const [ownerDisplayName, setOwnerDisplayName] = useState(user?.displayName || '');
@@ -64,9 +61,6 @@ export const VehicleRegistrationForm: React.FC<VehicleRegistrationFormProps> = (
   const [rcOrLicenseNotes, setRcOrLicenseNotes] = useState('');
 
   const [mobile, setMobile] = useState('');
-  const [mobileVerified, setMobileVerified] = useState(false);
-  const [verificationMethod, setVerificationMethod] = useState<VerificationMethod | undefined>(undefined);
-  const [testPinHash, setTestPinHash] = useState('');
   const [privacyConsent, setPrivacyConsent] = useState(false);
 
   const [submitting, setSubmitting] = useState(false);
@@ -193,17 +187,6 @@ export const VehicleRegistrationForm: React.FC<VehicleRegistrationFormProps> = (
       );
       return;
     }
-    if (vehicleOtpRequired && !mobileVerified) {
-      setErrorMsg(
-        tr(
-          lang,
-          'Please verify your mobile number via OTP first.',
-          'कृपया पहले OTP द्वारा मोबाइल नंबर सत्यापित करें।',
-          'कृपया आधी OTP द्वारे मोबाईल नंबर तपासून घ्या.'
-        )
-      );
-      return;
-    }
     if (!privacyConsent) {
       setErrorMsg(t.workerForm.privacyConsent);
       return;
@@ -241,9 +224,7 @@ export const VehicleRegistrationForm: React.FC<VehicleRegistrationFormProps> = (
           ownerUid: user.uid,
           ownerName: ownerDisplayName.trim(),
           mobile: mobile.trim(),
-          mobileVerified: vehicleOtpRequired ? mobileVerified : false,
-          ...(vehicleOtpRequired && verificationMethod ? { verificationMethod } : {}),
-          ...(vehicleOtpRequired && testPinHash ? { testPinHash } : {}),
+          mobileVerified: false,
           ...(user.email ? { email: user.email } : {}),
           ...(rcOrLicenseNotes.trim() ? { rcOrLicenseNotes: rcOrLicenseNotes.trim() } : {}),
         }
@@ -699,37 +680,9 @@ export const VehicleRegistrationForm: React.FC<VehicleRegistrationFormProps> = (
 
           <div className="space-y-1.5">
             <label className="block text-xs font-bold text-slate-700">
-              {vehicleOtpRequired
-                ? tr(
-                    lang,
-                    'Mobile Number & OTP Verification *',
-                    'मोबाइल नंबर एवं OTP सत्यापन *',
-                    'मोबाईल नंबर व OTP पडताळणी *'
-                  )
-                : tr(lang, 'Mobile Number *', 'मोबाइल नंबर *', 'मोबाईल नंबर *')}
+              {tr(lang, 'Mobile Number *', 'मोबाइल नंबर *', 'मोबाईल नंबर *')}
             </label>
-            {vehicleOtpRequired ? (
-              <OtpVerificationBox
-                mobile={mobile}
-                allowTestPinFallback={false}
-                onOpenDemoMode={() => onNavigate('demo-testing')}
-                onMobileChange={(val) => {
-                  setMobile(val);
-                  setMobileVerified(false);
-                  setVerificationMethod(undefined);
-                  setTestPinHash('');
-                }}
-                verified={mobileVerified}
-                verifiedMethod={verificationMethod}
-                onVerified={(m, meta) => {
-                  setMobile(m);
-                  setMobileVerified(true);
-                  setVerificationMethod(meta?.method);
-                  setTestPinHash(meta?.testPinHash || '');
-                }}
-              />
-            ) : (
-              <div className="space-y-1.5">
+            <div className="space-y-1.5">
                 <div className="relative">
                   <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-mono-tabular font-semibold text-slate-500">
                     +91
@@ -758,7 +711,6 @@ export const VehicleRegistrationForm: React.FC<VehicleRegistrationFormProps> = (
                   )}
                 </p>
               </div>
-            )}
           </div>
 
           <label className="flex items-start gap-2.5 text-xs text-slate-700 cursor-pointer pt-1">

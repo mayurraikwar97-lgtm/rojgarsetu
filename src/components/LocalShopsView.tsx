@@ -11,6 +11,7 @@ import {
   Store,
   Users,
 } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 import { INDIA_STATES_DISTRICTS } from '../data/indiaLocations';
 import { SHOP_CATEGORY_CATALOG, getShopCategoryLabel } from '../data/shopCategories';
 import { useLanguage } from '../i18n/LanguageContext';
@@ -43,6 +44,7 @@ export const LocalShopsView: React.FC<LocalShopsViewProps> = ({
   onNavigate,
 }) => {
   const { lang } = useLanguage();
+  const { user, isAdmin } = useAuth();
   const [searchQuery, setSearchQuery] = useState('');
   const [pincodeOrArea, setPincodeOrArea] = useState(initialPincodeOrArea);
   const [stateFilter, setStateFilter] = useState('');
@@ -51,8 +53,13 @@ export const LocalShopsView: React.FC<LocalShopsViewProps> = ({
   const [purposeFilter, setPurposeFilter] = useState<'all' | ShopkeeperPurpose>('all');
 
   const visibleShops = useMemo(
-    () => shops.filter((s) => s.verificationStatus !== 'suspended'),
-    [shops]
+    () =>
+      shops.filter(
+        (s) =>
+          s.verificationStatus === 'verified' ||
+          (s.verificationStatus === 'pending' && (isAdmin || (user && s.ownerUid === user.uid)))
+      ),
+    [shops, isAdmin, user]
   );
 
   // Merge standard categories + any custom shop categories created by shopkeepers

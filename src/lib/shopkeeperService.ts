@@ -178,7 +178,7 @@ export async function saveShopkeeperProfile(params: {
       ownerUid: shopId,
       registrationId,
       ...editableFields,
-      registrationFeeInr: SHOPKEEPER_REGISTRATION_FEE_INR,
+      registrationFeeInr: 0,
       registrationPaymentStatus: 'unpaid',
       paidListingActive: false,
       verificationStatus: 'pending',
@@ -548,5 +548,25 @@ export async function adminRejectShopkeeperPayment(params: {
     await batch.commit();
   } catch (err) {
     handleFirestoreError(err, OperationType.WRITE, `shopkeeperPayments/${params.payment.id}`);
+  }
+}
+
+export async function adminUpdateShopVerification(params: {
+  shopId: string;
+  status: 'verified' | 'pending' | 'suspended';
+  adminUid: string;
+  adminEmail: string;
+}): Promise<void> {
+  const shopRef = doc(db, 'shopkeeperListings', params.shopId);
+  const nowIso = new Date().toISOString();
+  try {
+    await updateDoc(shopRef, {
+      verificationStatus: params.status,
+      paidListingActive: params.status === 'verified',
+      ...(params.status === 'verified' ? { verifiedAtIso: nowIso } : {}),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (err) {
+    handleFirestoreError(err, OperationType.UPDATE, `shopkeeperListings/${params.shopId}`);
   }
 }

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Briefcase, ClipboardList, Home, Landmark, Shield, Truck } from 'lucide-react';
+import { Briefcase, Home, Megaphone, Shield, Store, Users } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { useLanguage } from '../i18n/LanguageContext';
 import type { Language, PageRoute } from '../types/domain';
@@ -18,7 +18,6 @@ function tr(lang: Language, en: string, hi: string, mr: string): string {
 export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
   currentRoute,
   onNavigate,
-  activeCustomerOrdersCount = 0,
   activeWorkerAlertsCount = 0,
 }) => {
   const { lang } = useLanguage();
@@ -37,40 +36,41 @@ export const MobileBottomNav: React.FC<MobileBottomNavProps> = ({
       route: 'home',
       label: tr(lang, 'Home', 'मुख्य', 'मुख्य'),
       icon: Home,
-      activeMatch: (r) => r === 'home' || r === 'hire',
+      activeMatch: (r) => r === 'home',
     },
     {
-      key: 'orders',
-      route: 'employer-dashboard',
-      label: tr(lang, 'Orders', 'ऑर्डर', 'ऑर्डर्स'),
-      icon: ClipboardList,
-      badge: activeCustomerOrdersCount,
-      activeMatch: (r) => r === 'employer-dashboard',
+      key: 'hire',
+      route: 'hire',
+      label: tr(lang, 'Hire', 'हायर', 'हायर करा'),
+      icon: Users,
+      activeMatch: (r) => r === 'hire' || r === 'find-workers',
     },
     {
-      key: 'worker',
-      route: workerProfile ? 'worker-dashboard' : 'find-work',
-      label: tr(lang, 'Worker', 'कामगार', 'कामगार'),
-      icon: Briefcase,
-      badge: activeWorkerAlertsCount,
-      activeMatch: (r) => r === 'worker-dashboard' || r === 'find-work' || r === 'register-worker',
+      key: 'shops',
+      route: 'local-shops',
+      label: tr(lang, 'Shops', 'दुकानें', 'दुकाने'),
+      icon: Store,
+      activeMatch: (r) => r === 'local-shops' || r === 'register-shopkeeper',
     },
     {
-      key: 'schemes',
-      route: 'govt-schemes',
-      label: tr(lang, 'Schemes', 'योजनाएं', 'योजना'),
-      icon: Landmark,
-      activeMatch: (r) =>
-        r === 'govt-schemes' || r === 'for-unemployed' || r === 'for-entrepreneurs',
+      key: 'ads',
+      route: 'advertise',
+      label: tr(lang, 'Ads', 'विज्ञापन', 'जाहिरात'),
+      icon: Megaphone,
+      activeMatch: (r) => r === 'advertise',
     },
     {
-      key: 'transport',
-      route: isAdmin ? 'admin' : 'transport',
+      key: 'worker_or_admin',
+      route: isAdmin ? 'admin' : workerProfile ? 'worker-dashboard' : 'register-worker',
       label: isAdmin
         ? tr(lang, 'Admin', 'एडमिन', 'अॅडमिन')
-        : tr(lang, 'Transport', 'गाड़ी', 'वाहन'),
-      icon: isAdmin ? Shield : Truck,
-      activeMatch: (r) => (isAdmin ? r === 'admin' : r === 'transport' || r === 'register-vehicle'),
+        : tr(lang, 'Worker', 'कामगार', 'कामगार'),
+      icon: isAdmin ? Shield : Briefcase,
+      badge: isAdmin ? undefined : activeWorkerAlertsCount,
+      activeMatch: (r) =>
+        isAdmin
+          ? r === 'admin'
+          : r === 'worker-dashboard' || r === 'find-work' || r === 'register-worker',
     },
   ];
 

@@ -360,17 +360,6 @@ export const ShopkeeperRegistrationForm: React.FC<ShopkeeperRegistrationFormProp
       );
       return null;
     }
-    if (!shopTermsAccepted) {
-      setErrorMsg(
-        tr(
-          lang,
-          'Please confirm the ₹500 Shopkeeper Registration Fee disclosure before continuing.',
-          'आगे बढ़ने से पहले कृपया ₹500 दुकानदार पंजीकरण शुल्क की सहमति पर टिक करें।',
-          'पुढे जाण्यापूर्वी कृपया ₹500 दुकानदार नोंदणी शुल्काच्या अटी मान्य करा.'
-        )
-      );
-      return null;
-    }
 
     const coords = gpsCoords || getDistrictCoordinates(stateName, districtName);
     setSavingProfile(true);
@@ -418,7 +407,7 @@ export const ShopkeeperRegistrationForm: React.FC<ShopkeeperRegistrationFormProp
     const saved = await validateAndSaveProfile();
     if (!saved || !user) return;
 
-    if (isPaymentVerified) {
+    if (existingShop?.verificationStatus === 'verified') {
       setStatusMessage(
         tr(
           lang,
@@ -430,148 +419,14 @@ export const ShopkeeperRegistrationForm: React.FC<ShopkeeperRegistrationFormProp
       return;
     }
 
-    setPaying(true);
-    setErrorMsg('');
-    try {
-      const order = await createServerShopkeeperOrder({
-        registrationId: saved.registrationId,
-        shopName: shopName.trim(),
-      });
-      setActiveOrder(order);
-
-      if (order.mode === 'gateway' && order.razorpayKeyId && order.gatewayOrderId) {
-        const scriptReady = await loadRazorpayCheckoutScript();
-        if (!scriptReady) {
-          throw new Error(
-            tr(
-              lang,
-              'Could not load Razorpay Checkout script. Please check your internet connection or use UPI QR below.',
-              'Razorpay Checkout लोड नहीं हो सका। कृपया नीचे UPI विकल्प का उपयोग करें।',
-              'Razorpay Checkout लोड होऊ शकले नाही. कृपया खालील UPI पर्याय वापरा.'
-            )
-          );
-        }
-
-        const RazorpayCtor = (
-          window as unknown as {
-            Razorpay: new (opts: Record<string, unknown>) => {
-              open: () => void;
-              on: (ev: string, fn: (resp: { error?: { description?: string } }) => void) => void;
-            };
-          }
-        ).Razorpay;
-
-        const shopLocText = [cityOrVillage.trim() || districtName, districtName, pincode.trim()]
-          .filter(Boolean)
-          .join(', ');
-
-        const rzp = new RazorpayCtor({
-          key: order.razorpayKeyId,
-          amount: SHOPKEEPER_REGISTRATION_FEE_INR * 100,
-          currency: 'INR',
-          name: 'ROJGAR SETU · Vocal for Local',
-          description: `दुकानदार नोंदणी शुल्क ₹${SHOPKEEPER_REGISTRATION_FEE_INR} (${shopName.trim()})`,
-          order_id: order.gatewayOrderId,
-          prefill: {
-            name: ownerName.trim(),
-            email: user.email || '',
-            contact: contactPhone.trim(),
-          },
-          notes: {
-            paymentType: 'shopkeeper_registration',
-            registrationId: saved.registrationId,
-            shopName: shopName.trim(),
-          },
-          theme: { color: '#0B3B75' },
-          handler: async (resp: {
-            razorpay_order_id: string;
-            razorpay_payment_id: string;
-            razorpay_signature: string;
-          }) => {
-            setPaying(true);
-            setErrorMsg('');
-            try {
-              const verifyRes = await verifyShopkeeperGatewayPayment({
-                razorpayOrderId: resp.razorpay_order_id,
-                razorpayPaymentId: resp.razorpay_payment_id,
-                razorpaySignature: resp.razorpay_signature,
-                orderRef: order.orderRef,
-                registrationId: saved.registrationId,
-                shopName: shopName.trim(),
-                ownerName: ownerName.trim(),
-                shopCategory: resolvedCategoryValue,
-                shopLocation: shopLocText,
-                contactPhoneMasked: maskMobileNumber(contactPhone.trim()),
-              });
-              setStatusMessage(
-                tr(
-                  lang,
-                  `₹500 Shopkeeper Registration Fee PAID! Receipt ${verifyRes.receiptNo || ''}. Your Vocal for Local shop profile is now live.`,
-                  `₹500 दुकानदार पंजीकरण शुल्क भुगतान सफल! रसीद ${verifyRes.receiptNo || ''}। आपकी दुकान अब लोकल दुकाने सूची में लाइव है।`,
-                  `₹500 दुकानदार नोंदणी शुल्क यशस्वीरित्या भरले गेले! पावती ${verifyRes.receiptNo || ''}. तुमचे दुकान आता स्थानिक दुकाने यादीत लाईव्ह झाले आहे.`
-                )
-              );
-            } catch (verErr) {
-              setErrorMsg(
-                formatUiError(
-                  verErr,
-                  tr(lang, 'Payment signature verification failed.', 'भुगतान सत्यापन विफल रहा।', 'पेमेंट पडताळणी अयशस्वी झाली.'),
-                  lang
-                )
-              );
-            } finally {
-              setPaying(false);
-            }
-          },
-          modal: {
-            ondismiss: () => {
-              void recordShopkeeperGatewayAttempt({
-                outcome: 'cancelled',
-                gatewayOrderId: order.gatewayOrderId,
-                orderRef: order.orderRef,
-                reason: 'Shopkeeper closed Razorpay checkout before completion.',
-              });
-              setPaying(false);
-            },
-          },
-        });
-
-        rzp.on('payment.failed', (failResp) => {
-          const failMsg = failResp?.error?.description || 'Razorpay payment failed.';
-          void recordShopkeeperGatewayAttempt({
-            outcome: 'failed',
-            gatewayOrderId: order.gatewayOrderId,
-            orderRef: order.orderRef,
-            reason: failMsg,
-          });
-          setErrorMsg(failMsg);
-          setPaying(false);
-        });
-
-        rzp.open();
-        return;
-      }
-
-      // UPI fallback mode when Razorpay keys are not configured
-      setStatusMessage(
-        tr(
-          lang,
-          'Shop profile saved! Complete the ₹500 Shopkeeper Registration Fee via UPI below and enter your 12-digit UTR to activate.',
-          'दुकान प्रोफ़ाइल सेव हो गई! नीचे ₹500 दुकानदार पंजीकरण शुल्क UPI द्वारा भुगतान करें और UTR नंबर दर्ज करें।',
-          'तुमची दुकान प्रोफाइल सेव्ह झाली! खालील UPI द्वारे ₹500 दुकानदार नोंदणी शुल्क भरा आणि UTR क्रमांक सबमिट करा.'
-        )
-      );
-    } catch (err) {
-      setErrorMsg(
-        formatUiError(
-          err,
-          tr(lang, 'Unable to initiate ₹500 shopkeeper payment.', '₹500 दुकानदार भुगतान शुरू नहीं हो सका।', '₹500 दुकानदार पेमेंट सुरू करता आले नाही.'),
-          lang
-        )
-      );
-    } finally {
-      setPaying(false);
-    }
+    setStatusMessage(
+      tr(
+        lang,
+        `Shop registration submitted (ID: ${saved.registrationId})! Once ROJGAR SETU Admin approves it, your shop will go live in Local Shops.`,
+        `दुकान पंजीकरण सबमिट हो गया (ID: ${saved.registrationId})! एडमिन अनुमोदन के बाद आपकी दुकान "स्थानीय दुकानें" सूची में लाइव हो जाएगी।`,
+        `दुकान नोंदणी यशस्वी (ID: ${saved.registrationId})! अ‍ॅडमिन मंजुरीनंतर तुमचे दुकान "स्थानिक दुकाने" यादीत लाईव्ह दिसेल.`
+      )
+    );
   };
 
   const handleSubmitUpiProof = async () => {
@@ -1324,49 +1179,6 @@ export const ShopkeeperRegistrationForm: React.FC<ShopkeeperRegistrationFormProp
             </div>
           </div>
 
-          {/* Final Step: Clear ₹500 Shopkeeper Registration Fee Summary (at the end of form before payment) */}
-          <div className="rounded-xl border-2 border-emerald-200 bg-emerald-50/75 p-4 sm:p-5 space-y-2.5">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="space-y-0.5">
-                <p className="text-[11px] font-bold uppercase tracking-wide text-[#15803D] flex items-center gap-1.5">
-                  <ShieldCheck className="w-4 h-4 shrink-0" />
-                  <span>
-                    {tr(
-                      lang,
-                      'Final Step · Shopkeeper Registration Fee',
-                      'अंतिम चरण · दुकानदार पंजीकरण शुल्क',
-                      'अंतिम टप्पा · दुकानदार नोंदणी शुल्क'
-                    )}
-                  </span>
-                </p>
-                <h2 className="font-display text-base sm:text-lg font-extrabold text-[#0B3B75]">
-                  {tr(
-                    lang,
-                    `Shopkeeper Registration Fee: ₹${SHOPKEEPER_REGISTRATION_FEE_INR}`,
-                    `दुकानदार पंजीकरण शुल्क: ₹${SHOPKEEPER_REGISTRATION_FEE_INR}`,
-                    `दुकानदार नोंदणी शुल्क ₹${SHOPKEEPER_REGISTRATION_FEE_INR}`
-                  )}
-                </h2>
-              </div>
-              <div className="inline-flex items-baseline gap-1.5 px-3.5 py-2 rounded-lg bg-white border border-emerald-300 shrink-0 self-start sm:self-auto">
-                <span className="font-mono-tabular text-xl font-extrabold text-[#15803D]">
-                  ₹{SHOPKEEPER_REGISTRATION_FEE_INR}
-                </span>
-                <span className="text-[11px] font-semibold text-slate-600">
-                  {tr(lang, 'One-time', 'एकमुश्त', 'एकवेळ')}
-                </span>
-              </div>
-            </div>
-            <p className="text-xs text-slate-700 leading-relaxed">
-              {tr(
-                lang,
-                'This ₹500 fee is specifically a Shopkeeper Registration Fee for publishing your local shop profile, Vocal for Local badge, pincode/area visibility to nearby buyers, and direct staff hiring access — kept distinct from individual worker registration terms (₹250).',
-                'यह ₹500 शुल्क विशेष रूप से दुकानदार पंजीकरण शुल्क है — आपकी दुकान प्रोफ़ाइल, "वोकल फॉर लोकल" बैज, पिनकोड-आधारित स्थानीय दृश्यता और सीधे कर्मचारी हायरिंग के लिए (कामगार पंजीकरण ₹250 की शर्तों से अलग)।',
-                'हे ₹500 शुल्क फक्त दुकानदार नोंदणी शुल्क आहे — तुमच्या दुकानाची प्रोफाइल, "व्होकल फॉर लोकल" ओळख, पिनकोडनुसार जवळच्या ग्राहकांना दुकानाची दृश्यता आणि थेट कामगार भरतीसाठी (कामगार नोंदणी ₹250 अटींपेक्षा पूर्णपणे वेगळे).'
-              )}
-            </p>
-          </div>
-
           {/* Short Fraud Warning Notice (consistent with platform safety notice) */}
           <div
             role="note"
@@ -1383,7 +1195,6 @@ export const ShopkeeperRegistrationForm: React.FC<ShopkeeperRegistrationFormProp
             </div>
           </div>
 
-          {/* Vocal for Local Pledge & ₹500 Shopkeeper Terms Checkboxes */}
           <div className="space-y-2.5 pt-1">
             <label className="flex items-start gap-2.5 text-xs text-slate-700 cursor-pointer">
               <input
@@ -1409,24 +1220,19 @@ export const ShopkeeperRegistrationForm: React.FC<ShopkeeperRegistrationFormProp
                 )}
               </span>
             </label>
-
-            <label className="flex items-start gap-2.5 text-xs text-slate-700 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={shopTermsAccepted}
-                onChange={(e) => setShopTermsAccepted(e.target.checked)}
-                className="mt-0.5 rounded border-slate-300"
-              />
-              <span>
-                {tr(
-                  lang,
-                  'I understand the ₹500 fee is a one-time Shopkeeper Registration Fee for my shop profile and local visibility on Rojgar Setu (separate from worker registration fees), and I consent to display my shop business contact publicly for customers.',
-                  'मैं समझता/समझती हूँ कि ₹500 एकमुश्त दुकानदार पंजीकरण शुल्क मेरी दुकान प्रोफ़ाइल व स्थानीय दृश्यता के लिए है (कामगार पंजीकरण से अलग), और मैं ग्राहकों के लिए अपनी दुकान का संपर्क नंबर प्रदर्शित करने की सहमति देता/देती हूँ।',
-                  'मला मान्य आहे की ₹500 हे एकवेळचे दुकानदार नोंदणी शुल्क माझ्या दुकानाची प्रोफाइल व स्थानिक दृश्यतेसाठी आहे (कामगार नोंदणी शुल्कापेक्षा वेगळे), आणि ग्राहकांसाठी दुकानाचा संपर्क क्रमांक प्रदर्शित करण्यास माझी संमती आहे.'
-                )}
-              </span>
-            </label>
           </div>
+
+          <p className="text-xs text-slate-600 flex items-start gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5">
+            <ShieldCheck className="w-4 h-4 text-[#15803D] shrink-0 mt-0.5" />
+            <span>
+              {tr(
+                lang,
+                'Shopkeeper registration is currently free and direct (no OTP or payment required). Your shop will go live in Local Shops as soon as Admin approves it.',
+                'दुकानदार पंजीकरण अभी निःशुल्क और सीधा है (कोई OTP या भुगतान नहीं)। एडमिन अनुमोदन के बाद आपकी दुकान स्थानीय दुकानों में लाइव दिखेगी।',
+                'सध्या दुकानदार नोंदणी पूर्णपणे मोफत व सोपी आहे (कोणताही OTP किंवा पेमेंट नाही). अ‍ॅडमिन मंजुरी देताच तुमचे दुकान स्थानिक दुकाने यादीत लाईव्ह दिसेल.'
+              )}
+            </span>
+          </p>
 
           {errorMsg && (
             <div className="rounded-lg bg-red-50 border border-red-200 px-3.5 py-2.5 text-xs font-semibold text-red-700 flex items-start gap-2">
@@ -1442,39 +1248,26 @@ export const ShopkeeperRegistrationForm: React.FC<ShopkeeperRegistrationFormProp
             </div>
           )}
 
-          {/* Primary Submit / ₹500 Payment CTA */}
           <div className="flex flex-col sm:flex-row gap-3 pt-1">
             <button
               type="submit"
-              disabled={savingProfile || paying}
+              disabled={savingProfile}
               className="flex-1 py-3.5 px-5 rounded-lg bg-[#E06D1B] hover:bg-[#c55b10] disabled:opacity-60 text-white font-display text-sm sm:text-base font-extrabold inline-flex items-center justify-center gap-2 shadow-sm cursor-pointer"
             >
-              {savingProfile || paying ? (
+              {savingProfile ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
                   <span>
-                    {savingProfile
-                      ? tr(lang, 'Saving Shop Profile...', 'दुकान प्रोफ़ाइल सेव हो रही है...', 'दुकान प्रोफाइल सेव्ह होत आहे...')
-                      : tr(lang, 'Opening ₹500 Payment...', '₹500 भुगतान खुल रहा है...', '₹500 पेमेंट सुरू होत आहे...')}
-                  </span>
-                </>
-              ) : isPaymentVerified ? (
-                <>
-                  <CheckCircle2 className="w-4 h-4" />
-                  <span>
-                    {tr(lang, 'Update Shop Profile', 'दुकान प्रोफ़ाइल अपडेट करें', 'दुकान प्रोफाइल अपडेट करा')}
+                    {tr(lang, 'Saving Shop Profile...', 'दुकान प्रोफ़ाइल सेव हो रही है...', 'दुकान प्रोफाइल सेव्ह होत आहे...')}
                   </span>
                 </>
               ) : (
                 <>
-                  <CreditCard className="w-4 h-4" />
+                  <CheckCircle2 className="w-4 h-4" />
                   <span>
-                    {tr(
-                      lang,
-                      `Save Shop & Pay ₹${SHOPKEEPER_REGISTRATION_FEE_INR} Registration Fee`,
-                      `दुकान सेव करें व ₹${SHOPKEEPER_REGISTRATION_FEE_INR} दुकानदार शुल्क भरें`,
-                      `दुकान सेव्ह करा व ₹${SHOPKEEPER_REGISTRATION_FEE_INR} दुकानदार नोंदणी शुल्क भरा`
-                    )}
+                    {existingShop
+                      ? tr(lang, 'Update Shop Profile', 'दुकान प्रोफ़ाइल अपडेट करें', 'दुकान प्रोफाइल अपडेट करा')
+                      : tr(lang, 'Submit Shop for Admin Approval', 'दुकान पंजीकरण सबमिट करें', 'दुकान नोंदणी पूर्ण करा')}
                   </span>
                 </>
               )}
@@ -1489,97 +1282,6 @@ export const ShopkeeperRegistrationForm: React.FC<ShopkeeperRegistrationFormProp
             </button>
           </div>
         </form>
-
-        {/* UPI Fallback Payment Box (shown only when Razorpay checkout is unconfigured in preview/test and user initiated ₹500 order) */}
-        {!isPaymentVerified && activeOrder && activeOrder.mode === 'upi_qr' && (
-          <div className="mx-6 mb-6 rounded-xl bg-blue-50/70 border-2 border-[#0B3B75]/30 p-5 space-y-4">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2">
-                <QrCode className="w-5 h-5 text-[#0B3B75]" />
-                <h3 className="font-display text-sm sm:text-base font-extrabold text-[#0B3B75]">
-                  {tr(
-                    lang,
-                    `Complete ₹${SHOPKEEPER_REGISTRATION_FEE_INR} Shopkeeper Registration Fee via Official UPI`,
-                    `आधिकारिक UPI से ₹${SHOPKEEPER_REGISTRATION_FEE_INR} दुकानदार पंजीकरण शुल्क भरें`,
-                    `अधिकृत UPI द्वारे ₹${SHOPKEEPER_REGISTRATION_FEE_INR} दुकानदार नोंदणी शुल्क भरा`
-                  )}
-                </h3>
-              </div>
-              <span className="font-mono-tabular text-xs font-bold px-2.5 py-1 rounded bg-white border border-blue-200 text-[#0B3B75]">
-                Ref: {activeOrder.orderRef}
-              </span>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs bg-white rounded-lg border border-blue-100 p-3.5">
-              <div>
-                <p className="text-slate-500 font-semibold">Official UPI ID</p>
-                <p className="font-mono-tabular text-sm font-extrabold text-[#0B3B75] mt-0.5">
-                  {activeOrder.officialUpiId || paymentConfig?.officialUpiId || 'rojgarsetu@upi'}
-                </p>
-                <p className="text-[11px] text-slate-600 mt-0.5">
-                  {activeOrder.officialUpiPayeeName || 'Rojgar Setu'} · ₹{SHOPKEEPER_REGISTRATION_FEE_INR}
-                </p>
-              </div>
-              <div className="flex items-center sm:justify-end">
-                <a
-                  href={activeOrder.upiUri}
-                  className="px-4 py-2 rounded-lg bg-[#15803D] hover:bg-[#116931] text-white text-xs font-bold inline-flex items-center gap-1.5"
-                >
-                  <Phone className="w-3.5 h-3.5" />
-                  <span>
-                    {tr(lang, 'Pay ₹500 in UPI App', 'UPI ऐप में ₹500 भरें', 'UPI अ‍ॅपमधून ₹500 भरा')}
-                  </span>
-                </a>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  {tr(lang, '12-Digit UPI UTR / Reference No. *', '12 अंकों का UPI UTR / रेफरेंस नंबर *', '१२ अंकी UPI UTR / संदर्भ क्रमांक *')}
-                </label>
-                <input
-                  type="text"
-                  maxLength={36}
-                  value={upiUtrInput}
-                  onChange={(e) => setUpiUtrInput(e.target.value)}
-                  placeholder="e.g., 421987654321"
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-md text-sm font-mono-tabular"
-                />
-              </div>
-              <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">
-                  {tr(lang, 'Payer Name / UPI Handle (Optional)', 'भुगतानकर्ता का नाम / UPI (वैकल्पिक)', 'पैसे भरणार्‍याचे नाव / UPI (ऐच्छिक)')}
-                </label>
-                <input
-                  type="text"
-                  maxLength={120}
-                  value={payerNameInput}
-                  onChange={(e) => setPayerNameInput(e.target.value)}
-                  placeholder={ownerName || 'Shopkeeper Name'}
-                  className="w-full px-3 py-2 bg-white border border-slate-300 rounded-md text-sm"
-                />
-              </div>
-            </div>
-
-            <button
-              type="button"
-              disabled={submittingUtr}
-              onClick={handleSubmitUpiProof}
-              className="px-5 py-2.5 rounded-lg bg-[#0B3B75] hover:bg-[#072A54] disabled:opacity-60 text-white text-xs sm:text-sm font-bold inline-flex items-center gap-2 cursor-pointer"
-            >
-              {submittingUtr ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-              <span>
-                {tr(
-                  lang,
-                  'Submit ₹500 UTR Reference for Verification',
-                  '₹500 UTR सत्यापन के लिए सबमिट करें',
-                  '₹500 UTR पडताळणीसाठी सबमिट करा'
-                )}
-              </span>
-            </button>
-          </div>
-        )}
       </div>
     </div>
   );

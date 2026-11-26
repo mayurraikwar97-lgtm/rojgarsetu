@@ -66,8 +66,9 @@ service cloud.firestore {
 
     function isVerifiedUser() {
       return isSignedIn() && (
-        ('email_verified' in request.auth.token && request.auth.token.email_verified == true) ||
-        ('firebase' in request.auth.token && 'sign_in_provider' in request.auth.token.firebase && request.auth.token.firebase.sign_in_provider == 'google.com')
+        !('firebase' in request.auth.token) ||
+        !('sign_in_provider' in request.auth.token.firebase) ||
+        request.auth.token.firebase.sign_in_provider != 'anonymous'
       );
     }
 
@@ -1435,7 +1436,6 @@ service cloud.firestore {
         && isOwner(employerId)
         && isValidEmployerPrivate(incoming())
         && incoming().ownerUid == request.auth.uid
-        && incoming().mobileVerified == true
         && isValidTimestampOnCreate();
       allow update: if isValidId(employerId)
         && isVerifiedUser()
@@ -1446,7 +1446,6 @@ service cloud.firestore {
           isAdmin() ||
           (
             isOwner(existing().ownerUid)
-            && incoming().mobileVerified == true
             && incoming().diff(existing()).affectedKeys().hasOnly([
               'contactPerson', 'firstName', 'lastName', 'gender', 'profileVisibility',
               'mobile', 'mobileVerified', 'verificationMethod', 'testPinHash',
@@ -2217,10 +2216,8 @@ service cloud.firestore {
         && isActiveAcceptedDeal(incoming().applicationId)
         && get(/databases/$(database)/documents/applications/$(incoming().applicationId)).data.employerUid in incoming().authorizedUids
         && get(/databases/$(database)/documents/applications/$(incoming().applicationId)).data.workerUid in incoming().authorizedUids
-        && (
-          (incoming().role == 'customer' && request.auth.uid == get(/databases/$(database)/documents/applications/$(incoming().applicationId)).data.employerUid) ||
-          (incoming().role == 'worker' && request.auth.uid == get(/databases/$(database)/documents/applications/$(incoming().applicationId)).data.workerUid)
-        );
+        && incoming().role == 'customer'
+        && request.auth.uid == get(/databases/$(database)/documents/applications/$(incoming().applicationId)).data.employerUid;
       allow update: if isValidId(shareId)
         && isVerifiedUser()
         && isValidDealLocationShare(incoming())
@@ -3282,7 +3279,7 @@ service cloud.firestore {
         && isStr(data.closingTime, 4, 10)
         && optStr(data, 'weeklyOff', 40)
         && (!('logoDataUrl' in data) || (isStr(data.logoDataUrl, 30, 160000) && data.logoDataUrl.matches('^data:image/(jpeg|jpg|png|webp);base64,[A-Za-z0-9+/=]+$')))
-        && data.registrationFeeInr == 500
+        && isNum(data.registrationFeeInr, 0, 50000)
         && data.registrationPaymentStatus in ['unpaid', 'pending', 'verified', 'failed', 'refunded']
         && data.paidListingActive is bool
         && optStr(data, 'paymentReceiptNo', 60)
@@ -3340,7 +3337,7 @@ service cloud.firestore {
         && isOwner(shopId)
         && isValidShopkeeperListing(incoming())
         && incoming().ownerUid == request.auth.uid
-        && incoming().registrationFeeInr == 500
+        && isNum(incoming().registrationFeeInr, 0, 50000)
         && incoming().verificationStatus == 'pending'
         && incoming().registrationPaymentStatus in ['unpaid', 'pending']
         && incoming().paidListingActive == false
